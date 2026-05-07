@@ -1,0 +1,40 @@
+{
+  "hot": {
+    "protagonist_level": "感债者",
+    "protagonist_level_num": 1,
+    "protagonist_points": 150,
+    "inventory": [],
+    "character_states": {
+      "陆承": "觉醒状态"
+    },
+    "active_threads": [
+      "人情债觉醒"
+    ],
+    "last_chapter_ending": "系统通知未滑掉",
+    "recent_summaries": [
+      {
+        "chapter": 1,
+        "summary": "陆承觉醒人情感知"
+      }
+    ],
+    "scene_location": "",
+    "time_context": "",
+    "recent_events": "陆承觉醒人情感知"
+  },
+  "cold": {
+    "compressed_history": "",
+    "closed_threads": [],
+    "resolved_foreshadowing": [],
+    "world_events": []
+  },
+  "constraints": {
+    "forbidden_constraints": [],
+    "established_facts": [],
+    "foreshadowing_planted": []
+  },
+  "meta": {
+    "novel_id": "test_tracker",
+    "last_updated_chapter": 1,
+    "total_chapters_tracked": 1
+  }
+}

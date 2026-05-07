@@ -1,0 +1,43 @@
+{
+  "platform": "fanqie",
+  "version": "2026-04",
+  "last_updated": "2026-04-01",
+  "changelog": [
+    {"date": "2025-11", "change": "灵异题材部分开放，需标注"},
+    {"date": "2026-02", "change": "权贵碾压类需配正向结局"}
+  ],
+  "hard_reject": [
+    {"id": "HR-01", "desc": "现实政治人物或党政机构的可识别影射"},
+    {"id": "HR-02", "desc": "超过2句的血腥器官详细描写"},
+    {"id": "HR-03", "desc": "宗教邪教组织的正面崇拜描写"},
+    {"id": "HR-04", "desc": "未成年人的任何性暗示内容"},
+    {"id": "HR-05", "desc": "真实地名+犯罪的直接组合（如XX市连环杀人）"}
+  ],
+  "warn": [
+    {"id": "W-01", "desc": "未成年人欺辱场景超过合理尺度，需人工确认"},
+    {"id": "W-02", "desc": "全章无正义伸张/无出口感，需确认后续有反转"},
+    {"id": "W-03", "desc": "灵异内容超过500字，需标注题材"},
+    {"id": "W-04", "desc": "涉及自杀/自伤的描写超过2句，需提示处理方式"},
+    {"id": "W-05", "desc": "权贵碾压场景缺乏后续正向结局伏笔"}
+  ],
+  "genre_specific": {
+    "都市": {
+      "allowed": true,
+      "notes": "系统流/人情债类都市文无特殊限制，金手指类需保持世界观内逻辑自洽"
+    },
+    "灵异": {
+      "allowed": true,
+      "notes": "需在书名/简介标注含灵异元素"
+    }
+  },
+  "ai_detection_risk": {
+    "same_sentence_pattern_threshold": 4,
+    "paragraph_similarity_threshold": 0.85
+  },
+  "allowed_genres": ["都市", "玄幻", "武侠", "萌宝", "甜宠", "悬疑（轻度）", "系统流"],
+  "chapter_requirements": {
+    "min_words": 1800,
+    "max_words": 3800,
+    "chapter_ending": "必须有明确钩子，禁止感悟升华结尾"
+  }
+}
