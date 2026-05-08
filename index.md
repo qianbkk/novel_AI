@@ -37,6 +37,9 @@
 | `config/novel_config.json` | 项目配置 | 小说基础信息、目标字数、预算上限、默认模型配置 | 无 |
 | `config/compliance_rules_fanqie.json` | 合规规则 | 番茄小说平台的硬拒绝规则、警告规则及章节字数要求 | 无 |
 | `config/prompt_templates.py` | 提示词库 | 七种章末钩子定义、爽点类型、三题材专属写作指令、通用写作铁律 | 无 |
+| `config/power_levels.py` | 共享常量 | 境界等级定义（阈值、等级号）及默认主角境界 | 无 |
+| `config/paths.py` | 共享常量 | 项目目录路径常量（BASE_DIR、OUTPUT_DIR等） | 无 |
+| `utils/__init__.py` | 共享工具 | LLM响应解析、环境变量加载工具函数 | 无 |
 
 ---
 

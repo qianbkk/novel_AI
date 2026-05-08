@@ -13,7 +13,7 @@ tools/calibrate_checker.py — Checker基线校准工具（V3方案5.3节）
 """
 import os, sys, json
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api_client import call_llm
+from utils import parse_llm_json_response
 
 BASE_DIR   = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CALIB_DIR  = os.path.join(BASE_DIR, "calibration")
@@ -93,12 +93,8 @@ def score_sample(text: str, agent: str) -> tuple[float, str, float]:
         max_tokens=200,
         temperature=0.1,
     )
-    resp = resp.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-    try:
-        data = json.loads(resp)
-        return float(data["score"]), data.get("reason", ""), cost
-    except:
-        return 6.0, "解析失败", cost
+    data = parse_llm_json_response(resp, {"score": 6.0, "reason": "解析失败"})
+    return float(data["score"]), data.get("reason", ""), cost
 
 
 # ─────────────────────────────────────────────

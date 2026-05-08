@@ -4,7 +4,7 @@ Tracker Agent V2 — 叙事状态追踪
 """
 import json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api_client import call_llm
+from utils import parse_llm_json_response
 from memory.memory_manager import get_l2, save_l2, empty_l2, expire_constraints, maybe_compress_hot_to_cold
 
 # 兼容旧接口
@@ -61,13 +61,8 @@ def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: s
         max_tokens=1200,
         temperature=0.1,
     )
-    resp = resp.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-    try:
-        updates = json.loads(resp)
-    except:
-        updates = {}
-
-    # 先清理过期约束
+    updates = parse_llm_json_response(resp, {})
+    return updates, cost
     current_memory, expired = expire_constraints(current_memory, task["chapter_number"])
 
     # 更新热层

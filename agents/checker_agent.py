@@ -5,7 +5,7 @@ Checker Agent — 三模型质检评分
 """
 import json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api_client import call_llm
+from utils import parse_llm_json_response
 
 CHECKER_SYSTEM = """你是一位经验丰富的网络文学质量评审，专注于都市系统流类型。
 你的任务是对提交的章节进行多维度评分。
@@ -45,17 +45,14 @@ def score_chapter(text: str, task: dict, agent_name: str = "checker_main") -> tu
         temperature=0.2,
     )
     resp = resp.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-    try:
-        result = json.loads(resp)
-    except:
-        # 解析失败给个中等分避免整章重来
-        result = {
-            "dimensions": {"hook_power":6,"shuang_density":6,"character_voice":6,"plot_logic":7,"writing_naturalness":6},
-            "overall_score": 6.2,
-            "strongest_point": "解析失败，默认评分",
-            "weakest_point": "",
-            "specific_feedback": ""
-        }
+    default = {
+        "dimensions": {"hook_power":6,"shuang_density":6,"character_voice":6,"plot_logic":7,"writing_naturalness":6},
+        "overall_score": 6.2,
+        "strongest_point": "解析失败，默认评分",
+        "weakest_point": "",
+        "specific_feedback": ""
+    }
+    result = parse_llm_json_response(resp, default)
     return result, cost
 
 

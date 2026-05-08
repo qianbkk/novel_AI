@@ -13,7 +13,7 @@ tools/chapter_checker.py — 跨章节一致性检查
 """
 import os, sys, json, re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api_client import call_llm
+from utils import parse_llm_json_response
 
 BASE_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CHAPTERS_DIR = os.path.join(BASE_DIR, "output", "chapters")
@@ -26,14 +26,7 @@ os.makedirs(REPORTS_DIR, exist_ok=True)
 # ─────────────────────────────────────────────
 # 规则一致性：本地检查（无需LLM）
 # ─────────────────────────────────────────────
-POWER_LEVELS = {
-    "感债者": (1, 0),
-    "识债者": (2, 500),
-    "接债者": (3, 2000),
-    "理债者": (4, 8000),
-    "断债者": (5, 30000),
-    "债主": (6, 100000),
-}
+from config.power_levels import POWER_LEVELS
 
 def check_point_logic(chapter_num: int, text: str, prev_points: int) -> list:
     """检查本章点数变化是否合理"""
@@ -119,11 +112,7 @@ def llm_consistency_check(chapter_text: str, known_facts: dict) -> tuple[dict, f
         max_tokens=800,
         temperature=0.1,
     )
-    resp = resp.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-    try:
-        result = json.loads(resp)
-    except:
-        result = {"has_issues": False, "issues": [], "score": 8}
+    result = parse_llm_json_response(resp, {"has_issues": False, "issues": [], "score": 8})
     return result, cost
 
 

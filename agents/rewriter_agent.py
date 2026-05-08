@@ -4,7 +4,7 @@ P0自检清单实现V3方案8.2节全部5项
 """
 import os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from api_client import call_llm
+from utils import parse_llm_json_response
 
 # ── P0自检清单系统提示（V3方案8.2节）──
 P0_CHECKLIST_SYSTEM = """你是一位严格的网文编辑，对章节草稿做重写前的自检分析。
@@ -42,11 +42,7 @@ def run_p0_checklist(text: str, task: dict, memory: dict) -> tuple[dict, float]:
         max_tokens=800,
         temperature=0.1,
     )
-    resp = resp.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-    try:
-        result = __import__('json').loads(resp)
-    except:
-        result = {"rewrite_priority": ["JSON解析失败，基于原始反馈重写"], "hook_strength": "弱", "shuang_present": False}
+    result = parse_llm_json_response(resp, {"rewrite_priority": ["JSON解析失败，基于原始反馈重写"], "hook_strength": "弱", "shuang_present": False})
     return result, cost
 
 # ── P2：轻度润色 ──

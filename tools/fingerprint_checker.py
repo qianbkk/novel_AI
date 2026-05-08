@@ -18,6 +18,7 @@ V3方案5.4/5.5节：不依赖AI主观判断，用统计方法检测AI腔
 """
 import os, sys, re, json
 from collections import Counter
+from agents.normalizer_agent import AI_WORDS as ALL_AI_WORDS
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
@@ -89,8 +90,7 @@ def analyze_fingerprint(text: str) -> dict:
         flags.append(f"省略号过多（{ellipses}次），可能过度依赖省略号")
 
     # ── 5. AI高危词汇检测 ──
-    AI_WORDS = ["此刻","蓦然","不禁","心中一动","深吸一口气","不由得","莫名",
-                "涌上心头","眼眸","嘴角微扬","眸子","倏地","霎时","骤然"]
+    AI_WORDS = list(ALL_AI_WORDS.keys())
     found_ai_words = [w for w in AI_WORDS if w in text]
     details["ai_words_found"] = found_ai_words
     if found_ai_words:

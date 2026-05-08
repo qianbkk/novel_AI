@@ -16,6 +16,7 @@ AC-5: 人物弧光一致性
 """
 import os, sys, json, re
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from config.power_levels import POWER_LEVELS
 
 BASE_DIR     = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SETTING_PATH = os.path.join(BASE_DIR, "output", "setting_package.json")
@@ -272,7 +273,7 @@ def ac5_character_arcs():
         issues.append(f"主角等级「{protagonist_level}」不在标准体系中")
 
     # 检查点数与等级匹配
-    level_thresholds = {"感债者":0,"识债者":500,"接债者":2000,"理债者":8000,"断债者":30000,"债主":100000}
+    level_thresholds = {k: v[1] for k, v in POWER_LEVELS.items()}
     points = hot.get("protagonist_points", 0)
     level_num = hot.get("protagonist_level_num", 1)
     if protagonist_level in level_thresholds:

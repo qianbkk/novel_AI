@@ -6,22 +6,9 @@ Summarizer Agent — 摘要生成（L5长期记忆层）
 import json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from api_client import call_llm
+from memory.memory_manager import get_l5, save_l5
 
 L2_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "memory", "l2")
-L5_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "memory", "l5")
-
-def load_l5(novel_id: str) -> dict:
-    os.makedirs(L5_DIR, exist_ok=True)
-    path = os.path.join(L5_DIR, f"{novel_id}_l5.json")
-    if os.path.exists(path):
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
-    return {"arc_summaries": [], "character_arcs": {}, "major_revelations": [], "compressed_history": ""}
-
-def save_l5(novel_id: str, l5: dict):
-    path = os.path.join(L5_DIR, f"{novel_id}_l5.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(l5, f, ensure_ascii=False, indent=2)
 
 ARC_SUMMARY_SYSTEM = """你是网文编辑，负责对已完成的弧进行档案整理。
 输出严格JSON格式，不加任何说明：
@@ -68,10 +55,9 @@ def summarize_arc(
         max_tokens=1000,
         temperature=0.3,
     )
-    resp = resp.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
-    try:
-        arc_summary = json.loads(resp)
-    except:
+    from utils import parse_llm_json_response
+    arc_summary = parse_llm_json_response(resp, None)
+    if arc_summary is None:
         arc_summary = {
             "arc_id": arc["arc_id"],
             "arc_name": arc["arc_name"],
@@ -81,7 +67,7 @@ def summarize_arc(
         }
 
     # 更新L5
-    l5 = load_l5(novel_id)
+    l5 = get_l5(novel_id)
     l5["arc_summaries"].append(arc_summary)
     save_l5(novel_id, l5)
 
@@ -109,7 +95,7 @@ def compress_history(chapter_summaries: list, novel_id: str) -> tuple[str, float
     )
 
     # 更新L5
-    l5 = load_l5(novel_id)
+    l5 = get_l5(novel_id)
     l5["compressed_history"] = compressed
     save_l5(novel_id, l5)
 
@@ -126,7 +112,7 @@ def run_summarizer(
     total_cost = 0.0
     result = {}
 
-    chapter_summaries = memory.get("chapter_summaries", [])
+    chapter_summaries = memory.get("hot", {}).get("recent_summaries", [])
 
     if trigger == "arc_end":
         arc_summary, cost = summarize_arc(arc, chapter_summaries, memory, novel_id)
