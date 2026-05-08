@@ -47,6 +47,20 @@
 |------|----------|------|------|
 | 2026-05-05 | V1（17项） | 17/17 通过 | 初始版本 |
 | 2026-05-05 | V2（20项） | 20/20 通过 | 新增memory_manager/fingerprint/acceptance测试 |
+| 2026-05-08 | V3（代码质量修复） | 语法检查通过 | 含simplify两轮修复 |
+
+---
+
+## 代码质量修复记录（Simplify）
+
+| 日期 | 修复内容 | 影响 |
+|------|----------|------|
+| 2026-05-08 | 提取 shared utilities: parse_llm_json_response / config/power_levels / config/paths | 消除6处JSON解析重复、2处POWER_LEVELS重复 |
+| 2026-05-08 | 修复tracker_agent死代码（run_tracker提前return） | L2记忆持久化首次生效 |
+| 2026-05-08 | 添加utils/__init__.py缺失的`import os` | load_env()不再崩溃 |
+| 2026-05-08 | memory_manager硬编码"感债者"改用DEFAULT_POWER_LEVEL | 统一默认值 |
+| 2026-05-08 | orchestrator._setting()添加模块级缓存 | 消除每章3次JSON重复解析 |
+| 2026-05-08 | api_client._get_client()连接池 | 消除每API调用新建TCP/TLS握手 |
 
 ---
 

@@ -72,3 +72,13 @@
 - **根因**：`records_available=False` 时 return 早退，未添加 `alerts` 键
 - **修复方式**：测试改为检查 `budget_used_pct` 是否为 float，而非检查 `alerts` 键；或在快速路径也加 `alerts: []`
 - **预防规则**：API 返回 dict 时，所有键应在所有代码路径下都存在（即使值为空列表/None）
+
+---
+
+### [LESS-007] tracker_agent.py 死代码 — run_tracker 提前返回导致内存从不持久化
+- **发现时间**：2026-05-08
+- **触发场景**：使用 `/simplify` 第二次审查时，三组 agent 均独立发现
+- **错误现象**：`run_tracker()` 在第 65 行 `return updates, cost` 后所有代码不可达，L2 记忆从不被更新和保存
+- **根因**：编辑错误，第 65 行的 `return` 语句在 `parse_llm_json_response` 之后，导致后续所有内存更新逻辑（expire_constraints、更新 hot/cold/constraints、save_l2）成为死代码
+- **修复方式**：删除第 65 行的 `return updates, cost`，让函数继续执行内存更新逻辑并返回 `(current_memory, cost)`
+- **预防规则**：使用 early return 后务必验证后续代码可达；审查任何 `return` 语句时检查是否有后续逻辑被跳过

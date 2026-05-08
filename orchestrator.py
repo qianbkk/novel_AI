@@ -28,10 +28,15 @@ PASS_SCORE    = 6.5
 BUDGET_WARN   = 0.80   # 80%发警告
 BUDGET_HARD   = 0.95   # 95%硬停
 
+# 模块级缓存（避免每章重复解析JSON）
+_setting_cache = None
 
 def _setting():
-    with open(os.path.join(OUTPUT_DIR, "setting_package.json"), encoding="utf-8") as f:
-        return json.load(f)
+    global _setting_cache
+    if _setting_cache is None:
+        with open(os.path.join(OUTPUT_DIR, "setting_package.json"), encoding="utf-8") as f:
+            _setting_cache = json.load(f)
+    return _setting_cache
 
 def _config():
     with open(os.path.join(BASE_DIR, "config", "novel_config.json"), encoding="utf-8") as f:

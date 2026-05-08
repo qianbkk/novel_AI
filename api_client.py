@@ -52,7 +52,13 @@ TOKEN_BUDGET = {
     "summarizer":     (600,  2000, 1000),
 }
 
-# ── 调用统计（进程内累计）──
+# ── HTTP 连接池（按 timeout 复用）──
+_http_clients = {}
+
+def _get_client(timeout=120) -> httpx.Client:
+    if timeout not in _http_clients:
+        _http_clients[timeout] = httpx.Client(timeout=timeout, limits=httpx.Limits(max_connections=10, max_keepalive_connections=5))
+    return _http_clients[timeout]
 _stats = {"total_calls": 0, "total_cost_usd": 0.0, "by_agent": {}}
 
 def get_stats() -> dict:
@@ -165,7 +171,7 @@ def _deepseek(agent, system_prompt, user_prompt, model, max_tokens, temperature)
         ],
         "max_tokens": max_tokens, "temperature": temperature,
     }
-    with httpx.Client(timeout=120) as c:
+    with _get_client(120) as c:
         r = c.post("https://api.deepseek.com/chat/completions", headers=headers, json=payload)
         r.raise_for_status()
         data = r.json()
@@ -191,7 +197,7 @@ def _gemini(agent, system_prompt, user_prompt, model, max_tokens, temperature):
         "contents": [{"parts": [{"text": user_prompt}]}],
         "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature},
     }
-    with httpx.Client(timeout=180) as c:
+    with _get_client(180) as c:
         r = c.post(url, json=payload)
         r.raise_for_status()
         data = r.json()
@@ -215,7 +221,7 @@ def _kimi(agent, system_prompt, user_prompt, model, max_tokens, temperature):
         ],
         "max_tokens": max_tokens, "temperature": temperature,
     }
-    with httpx.Client(timeout=120) as c:
+    with _get_client(120) as c:
         r = c.post("https://api.moonshot.cn/v1/chat/completions", headers=headers, json=payload)
         r.raise_for_status()
         data = r.json()
@@ -259,7 +265,7 @@ def _minimax(agent, system_prompt, user_prompt, model, max_tokens, temperature):
             }
         ],
     }
-    with httpx.Client(timeout=120) as c:
+    with _get_client(120) as c:
         r = c.post(url, headers=headers, json=payload)
         r.raise_for_status()
         data = r.json()
@@ -320,7 +326,7 @@ def _custom(agent, system_prompt, user_prompt, model, max_tokens, temperature):
     base = CUSTOM_API_BASE.rstrip("/")
     endpoint = f"{base}/chat/completions"
 
-    with httpx.Client(timeout=180) as c:
+    with _get_client(180) as c:
         r = c.post(endpoint, headers=headers, json=payload)
         r.raise_for_status()
         data = r.json()
