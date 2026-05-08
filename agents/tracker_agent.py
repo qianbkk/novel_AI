@@ -62,7 +62,7 @@ def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: s
         temperature=0.1,
     )
     updates = parse_llm_json_response(resp, {})
-    return updates, cost
+    # === 内存更新逻辑（之前因return语句从未执行）===
     current_memory, expired = expire_constraints(current_memory, task["chapter_number"])
 
     # 更新热层

@@ -10,6 +10,7 @@ L2_DIR     = os.path.join(BASE_DIR, "memory", "l2")
 L5_DIR     = os.path.join(BASE_DIR, "memory", "l5")
 STYLE_DIR  = os.path.join(BASE_DIR, "style_samples")
 CHAPTERS_DIR = os.path.join(BASE_DIR, "output", "chapters")
+from config.power_levels import DEFAULT_POWER_LEVEL
 
 STYLE_SWITCH_THRESHOLD = 20
 STYLE_UPDATE_INTERVAL  = 30
@@ -18,7 +19,7 @@ INTERNAL_MIN_SCORE     = 7.5
 def empty_l2() -> dict:
     return {
         "hot": {
-            "protagonist_level": "感债者",
+            "protagonist_level": DEFAULT_POWER_LEVEL,
             "protagonist_level_num": 1,
             "protagonist_points": 0,
             "inventory": [],

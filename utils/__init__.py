@@ -1,5 +1,5 @@
 """Shared utility functions for LLM response parsing."""
-import json, re
+import json, re, os
 
 def parse_llm_json_response(resp: str, default: dict = None) -> dict:
     """Strip markdown code fences and parse LLM JSON response."""
