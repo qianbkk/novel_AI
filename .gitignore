@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+vite.config.js
+vite.config.d.ts
+
+# Local env / secrets
+.env
+*.env
+!.env.example
+!.env.template
+
+# Local data and runtime output
+backend/data/
+novel-assistant/backend/data/
+novel_AI/logs/
+novel_AI/output/
+novel_AI/memory/l2/
+novel_AI/.omc/
+
+# Local reference projects; keep on disk, do not publish in this repo
+novel-assistant/
+novel_AI/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
