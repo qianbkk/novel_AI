@@ -29,8 +29,8 @@ novel_AI/memory/l2/
 novel_AI/.omc/
 
 # Local reference projects; keep on disk, do not publish in this repo
-novel-assistant/
 novel_AI/
+novel-assistant/
 
 # OS / editor
 .DS_Store

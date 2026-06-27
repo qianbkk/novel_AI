@@ -23,17 +23,8 @@ def _ensure_import_path():
 
 def build_project_graph(project_id: str) -> Any:
     """Build and compile the LangGraph StateGraph with SqliteSaver checkpointing.
-
-    1. Installs DB-backed LLM router into api_client globals
-    2. Modifies novel_AI's build_graph() to accept a checkpointer
-    3. Returns compiled graph ready for astream()
-
-    Usage:
-        graph = build_project_graph(project_id)
-        config = {"configurable": {"thread_id": project_id}}
-        async for event in graph.astream(state, config):
-            ...
-    """
+    ponytail: monkey-patches orchestrator's build_graph to pass checkpointer,
+    keeping novel_AI/ untouched (gitignored reference)."""
     from langgraph.checkpoint.sqlite import SqliteSaver
     from backend.engine.llm_router import LLMRouter, set_active_router
 
@@ -44,18 +35,34 @@ def build_project_graph(project_id: str) -> Any:
     router.install()
     set_active_router(router)
 
-    # 2. Build graph with SqliteSaver checkpointer
+    # 2. Monkey-patch orchestrator.build_graph with SqliteSaver
     checkpointer = SqliteSaver.from_conn_string("checkpoints.sqlite")
+    import orchestrator as _orch
+    from langgraph.graph import StateGraph, END
 
-    from orchestrator import build_graph
-    graph = build_graph(checkpointer=checkpointer)
-    return graph
+    def _build_with_checkpoint():
+        g = StateGraph(_orch.OrchestratorState)
+        for name in ("load_arc_tasks","get_next_task","write_pipeline",
+                      "rewrite","save_and_track","human_escalation"):
+            g.add_node(name, getattr(_orch, f"node_{name}"))
+        g.set_entry_point("load_arc_tasks")
+        g.add_edge("load_arc_tasks","get_next_task")
+        g.add_edge("get_next_task","write_pipeline")
+        g.add_conditional_edges("write_pipeline", _orch.route_after_pipeline,
+            {"save":"save_and_track","rewrite":"rewrite",
+             "escalate":"human_escalation","budget_stop":END})
+        g.add_conditional_edges("rewrite", _orch.route_after_rewrite,
+            {"save":"save_and_track","rewrite":"rewrite","escalate":"human_escalation"})
+        g.add_conditional_edges("save_and_track", _orch.route_after_save,
+            {"next_task":"load_arc_tasks","done":END})
+        g.add_edge("human_escalation", END)
+        return g.compile(checkpointer=checkpointer)
 
-
+    _orch.build_graph = _build_with_checkpoint
+    return _build_with_checkpoint()
 def load_state_for_project(project_id: str) -> dict:
     """Load state from SqliteSaver checkpoint, or create initial state.
     Falls back to JSON file for backward compat."""
-    from langgraph.checkpoint.sqlite import SqliteSaver
 
     checkpointer = SqliteSaver.from_conn_string("checkpoints.sqlite")
     config = {"configurable": {"thread_id": project_id}}
@@ -167,7 +174,7 @@ async def run_graph_task(
             chapters = int(args[0]) if args else 10
             from orchestrator import run_orchestrator
             with redirect_stdout(capture):
-                state = run_orchestrator(state, max_chapters=chapters, graph=graph)
+                state = run_orchestrator(state, max_chapters=chapters)
             exit_code = 0
 
         elif command == "status":
