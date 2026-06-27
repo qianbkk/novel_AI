@@ -37,3 +37,8 @@ novel_AI/
 Thumbs.db
 .idea/
 .vscode/
+
+# Playwright test artifacts
+.playwright-cli/
+test_output/
+.test_project_id

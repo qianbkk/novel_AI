@@ -8,8 +8,8 @@ from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
 from ..bridge.chapter_import import import_chapters_from_novel_ai
-from ..bridge.env_writer import collect_assigned_providers, write_provider_env
-from ..bridge.invoke import invoke_novel_ai
+# ponytail: runtime provider config via LLMRouter, no .env file needed
+from engine.graph import run_graph_task
 from ..bridge.reports import apply_review, read_budget_log, read_pending, read_status
 from ..bridge.setting_sync import pull_setting_package, push_setting_concept
 from ..database import SessionLocal, get_db
@@ -79,10 +79,6 @@ def run_bridge(
     if running:
         raise HTTPException(409, "bridge run already running for this project")
 
-    role_overrides, assigned_provider_ids = _build_role_overrides(db)
-    providers = collect_assigned_providers(db, assigned_provider_ids)
-    write_provider_env(binding.novel_ai_dir, providers)
-
     bridge_run = BridgeRun(
         project_id=project_id,
         command=command,
@@ -93,7 +89,11 @@ def run_bridge(
     db.commit()
     db.refresh(bridge_run)
 
-    background_tasks.add_task(_run_bridge_background, bridge_run.id, role_overrides)
+    # ponytail: run in-process via asyncio.create_task, no subprocess
+    import asyncio
+    from engine.graph import run_graph_task
+    queue = get_run_queue(bridge_run.id)
+    asyncio.create_task(_run_bridge_async(bridge_run.id, project_id, command, payload.args or [], queue))
     return bridge_run
 
 
@@ -173,61 +173,50 @@ def review(project_id: str, payload: ReviewRequest, db: Session = Depends(get_db
         raise HTTPException(400, str(exc)) from exc
 
 
-def _run_bridge_background(run_id: str, role_overrides: dict[str, tuple[str, str]]) -> None:
+async def _run_bridge_async(run_id: str, project_id: str, command: str, args: list[str], queue):
+    """Run graph command in-process. Called via asyncio.create_task from the endpoint."""
+    from engine.graph import run_graph_task
+    from datetime import datetime
     db = SessionLocal()
-    queue = get_run_queue(run_id)
     try:
         bridge_run = db.get(BridgeRun, run_id)
         if not bridge_run:
             return
-        binding = db.query(NovelAIBinding).filter_by(project_id=bridge_run.project_id).first()
-        if not binding:
-            bridge_run.status = "failed"
-            bridge_run.stdout_text = "NovelAIBinding not found"
-            bridge_run.finished_at = datetime.utcnow()
-            db.commit()
-            queue.put({"event": "error", "message": bridge_run.stdout_text})
-            queue.put({"event": "done", "status": bridge_run.status})
-            return
-
         bridge_run.status = "running"
         db.commit()
-        queue.put({"event": "start", "run_id": run_id, "command": bridge_run.command})
+        queue.put({"event": "start", "run_id": run_id, "command": command})
 
-        async def on_line(line: str) -> None:
-            queue.put({"event": "log", "line": line})
+        exit_code, stdout_text = await run_graph_task(
+            project_id, command, args, run_id, queue
+        )
 
-        exit_code, stdout_text = asyncio.run(invoke_novel_ai(
-            binding.novel_ai_dir,
-            bridge_run.command,
-            bridge_run.args_json or [],
-            role_overrides,
-            on_line,
-        ))
         bridge_run.exit_code = exit_code
         bridge_run.stdout_text = stdout_text
         bridge_run.finished_at = datetime.utcnow()
         bridge_run.status = "done" if exit_code == 0 else "failed"
         db.commit()
 
-        if exit_code == 0 and bridge_run.command == "planner":
+        if exit_code == 0 and command == "planner":
             queue.put({"event": "auto_pull_setting_start"})
-            asyncio.run(pull_setting_package(bridge_run.project_id, binding.novel_ai_dir, db))
-            queue.put({"event": "auto_pull_setting_done"})
-        if exit_code == 0 and bridge_run.command in {"run", "resume"}:
+            binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
+            if binding:
+                await pull_setting_package(project_id, binding.novel_ai_dir, db)
+                queue.put({"event": "auto_pull_setting_done"})
+        if exit_code == 0 and command in {"run", "resume"}:
             queue.put({"event": "auto_import_chapters_start"})
-            imported = asyncio.run(import_chapters_from_novel_ai(bridge_run.project_id, binding.novel_ai_dir, db))
-            queue.put({"event": "auto_import_chapters_done", "imported": imported})
+            binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
+            if binding:
+                imported = await import_chapters_from_novel_ai(project_id, binding.novel_ai_dir, db)
+                queue.put({"event": "auto_import_chapters_done", "imported": imported})
 
         queue.put({"event": "complete", "status": bridge_run.status, "exit_code": exit_code})
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
+        queue.put({"event": "error", "message": str(exc)})
         bridge_run = db.get(BridgeRun, run_id)
         if bridge_run:
             bridge_run.status = "failed"
-            bridge_run.stdout_text = ((bridge_run.stdout_text or "") + f"\n{exc}").strip()
             bridge_run.finished_at = datetime.utcnow()
             db.commit()
-        queue.put({"event": "error", "message": str(exc)})
     finally:
         queue.put({"event": "done"})
         db.close()
@@ -255,14 +244,4 @@ def _worldbuild_done(project_id: str, project: Project, db: Session) -> bool:
     return bool(latest and latest.status == "done")
 
 
-def _build_role_overrides(db: Session) -> tuple[dict[str, tuple[str, str]], list[str]]:
-    rows = db.query(RoleAssignment, Provider).join(Provider, RoleAssignment.provider_id == Provider.id).all()
-    role_overrides = {}
-    provider_ids = []
-    for assignment, provider in rows:
-        provider_ids.append(provider.id)
-        role_overrides[assignment.role_key] = (
-            provider.provider_type,
-            assignment.model_override or provider.default_model,
-        )
-    return role_overrides, provider_ids
+
