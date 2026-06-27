@@ -40,7 +40,7 @@ export default function BridgeConsole() {
         setNovelId(binding.novel_id);
       })
       .catch(() => {
-        setNovelAiDir("D:\\AI\\Codex_workspace\\Novel_AI\\novel_AI");
+        setNovelAiDir("");
       });
     return () => eventSourceRef.current?.close();
   }, [projectId]);
@@ -79,8 +79,10 @@ export default function BridgeConsole() {
       };
 
       es.addEventListener("log", (e) => handleEvent("log", e as MessageEvent));
-      es.addEventListener("auto_pull_setting", (e) => handleEvent("auto_pull_setting", e as MessageEvent));
-      es.addEventListener("auto_import_chapters", (e) => handleEvent("auto_import_chapters", e as MessageEvent));
+      es.addEventListener("auto_pull_setting_start", (e) => handleEvent("auto_pull_setting_start", e as MessageEvent));
+      es.addEventListener("auto_pull_setting_done", (e) => handleEvent("auto_pull_setting_done", e as MessageEvent));
+      es.addEventListener("auto_import_chapters_start", (e) => handleEvent("auto_import_chapters_start", e as MessageEvent));
+      es.addEventListener("auto_import_chapters_done", (e) => handleEvent("auto_import_chapters_done", e as MessageEvent));
       es.addEventListener("auto_chain_error", (e) => handleEvent("auto_chain_error", e as MessageEvent));
       es.addEventListener("done", (e) => {
         const payload: BridgeLogLine = JSON.parse((e as MessageEvent).data);

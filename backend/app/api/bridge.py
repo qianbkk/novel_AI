@@ -19,6 +19,7 @@ from ..schemas import BridgeRunOut, BridgeRunRequest, NovelAIBindingOut, NovelAI
 router = APIRouter(prefix="/projects/{project_id}/bridge", tags=["bridge"])
 
 _run_queues: dict[str, Queue] = {}
+_project_locks: dict[str, asyncio.Lock] = {}
 WRITE_COMMANDS = {"planner", "bootstrap", "run", "resume", "init_arc"}
 
 
@@ -26,6 +27,12 @@ def get_run_queue(run_id: str) -> Queue:
     if run_id not in _run_queues:
         _run_queues[run_id] = Queue()
     return _run_queues[run_id]
+
+
+def _get_project_lock(project_id: str) -> asyncio.Lock:
+    if project_id not in _project_locks:
+        _project_locks[project_id] = asyncio.Lock()
+    return _project_locks[project_id]
 
 
 @router.get("/binding", response_model=NovelAIBindingOut)
@@ -65,7 +72,7 @@ def upsert_binding(project_id: str, payload: NovelAIBindingUpsert, db: Session =
 
 
 @router.post("/run", response_model=BridgeRunOut)
-def run_bridge(
+async def run_bridge(
     project_id: str,
     payload: BridgeRunRequest,
     background_tasks: BackgroundTasks,
@@ -75,6 +82,8 @@ def run_bridge(
     command = payload.command.lower().strip()
     if command in WRITE_COMMANDS and not _worldbuild_done(project_id, project, db):
         raise HTTPException(400, "worldbuild must be completed before running write commands")
+    if _get_project_lock(project_id).locked():
+        raise HTTPException(409, "该项目正在生成中，请勿重复触发")
     running = db.query(BridgeRun).filter_by(project_id=project_id, status="running").first()
     if running:
         raise HTTPException(409, "bridge run already running for this project")
@@ -89,11 +98,9 @@ def run_bridge(
     db.commit()
     db.refresh(bridge_run)
 
-    # ponytail: run in-process via asyncio.create_task, no subprocess
-    import asyncio
-    from engine.graph import run_graph_task
+    # ponytail: run in-process via BackgroundTasks (uvicorn + TestClient 都能正确跟踪)
     queue = get_run_queue(bridge_run.id)
-    asyncio.create_task(_run_bridge_async(bridge_run.id, project_id, command, payload.args or [], queue))
+    background_tasks.add_task(_run_bridge_async, bridge_run.id, project_id, command, payload.args or [], queue)
     return bridge_run
 
 
@@ -177,49 +184,56 @@ async def _run_bridge_async(run_id: str, project_id: str, command: str, args: li
     """Run graph command in-process. Called via asyncio.create_task from the endpoint."""
     from engine.graph import run_graph_task
     from datetime import datetime
-    db = SessionLocal()
-    try:
-        bridge_run = db.get(BridgeRun, run_id)
-        if not bridge_run:
-            return
-        bridge_run.status = "running"
-        db.commit()
-        queue.put({"event": "start", "run_id": run_id, "command": command})
-
-        exit_code, stdout_text = await run_graph_task(
-            project_id, command, args, run_id, queue
-        )
-
-        bridge_run.exit_code = exit_code
-        bridge_run.stdout_text = stdout_text
-        bridge_run.finished_at = datetime.utcnow()
-        bridge_run.status = "done" if exit_code == 0 else "failed"
-        db.commit()
-
-        if exit_code == 0 and command == "planner":
-            queue.put({"event": "auto_pull_setting_start"})
-            binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
-            if binding:
-                await pull_setting_package(project_id, binding.novel_ai_dir, db)
-                queue.put({"event": "auto_pull_setting_done"})
-        if exit_code == 0 and command in {"run", "resume"}:
-            queue.put({"event": "auto_import_chapters_start"})
-            binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
-            if binding:
-                imported = await import_chapters_from_novel_ai(project_id, binding.novel_ai_dir, db)
-                queue.put({"event": "auto_import_chapters_done", "imported": imported})
-
-        queue.put({"event": "complete", "status": bridge_run.status, "exit_code": exit_code})
-    except Exception as exc:
-        queue.put({"event": "error", "message": str(exc)})
-        bridge_run = db.get(BridgeRun, run_id)
-        if bridge_run:
-            bridge_run.status = "failed"
-            bridge_run.finished_at = datetime.utcnow()
+    lock = _get_project_lock(project_id)
+    async with lock:
+        db = SessionLocal()
+        try:
+            bridge_run = db.get(BridgeRun, run_id)
+            if not bridge_run:
+                return
+            bridge_run.status = "running"
             db.commit()
-    finally:
-        queue.put({"event": "done"})
-        db.close()
+            queue.put({"event": "start", "run_id": run_id, "command": command})
+
+            exit_code, stdout_text = await asyncio.to_thread(
+                run_graph_task, project_id, command, args, run_id, queue
+            )
+
+            bridge_run.exit_code = exit_code
+            bridge_run.stdout_text = stdout_text
+            bridge_run.finished_at = datetime.utcnow()
+            bridge_run.status = "done" if exit_code == 0 else "failed"
+            db.commit()
+
+            if exit_code == 0 and command == "planner":
+                queue.put({"event": "auto_pull_setting_start"})
+                binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
+                if binding:
+                    await pull_setting_package(project_id, binding.novel_ai_dir, db)
+                    queue.put({"event": "auto_pull_setting_done"})
+            if exit_code == 0 and command in {"run", "resume"}:
+                queue.put({"event": "auto_import_chapters_start"})
+                binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
+                if binding:
+                    imported = await import_chapters_from_novel_ai(project_id, binding.novel_ai_dir, db)
+                    queue.put({"event": "auto_import_chapters_done", "imported": imported})
+
+            queue.put({"event": "complete", "status": bridge_run.status, "exit_code": exit_code})
+        except Exception as exc:
+            import traceback
+            tb = traceback.format_exc()
+            queue.put({"event": "error", "message": str(exc), "traceback": tb[-1000:]})
+            bridge_run = db.get(BridgeRun, run_id)
+            if bridge_run:
+                bridge_run.status = "failed"
+                bridge_run.finished_at = datetime.utcnow()
+                db.commit()
+        finally:
+            done_payload = {"event": "done"}
+            if "exit_code" in locals():
+                done_payload["exit_code"] = exit_code
+            queue.put(done_payload)
+            db.close()
 
 
 def _get_project_and_binding(project_id: str, db: Session) -> tuple[Project, NovelAIBinding]:

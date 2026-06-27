@@ -146,7 +146,10 @@ export interface BridgeRun {
 }
 
 export interface BridgeLogLine {
-  event: "log" | "done" | "error" | "auto_pull_setting" | "auto_import_chapters" | "auto_chain_error";
+  event: "log" | "done" | "error"
+       | "auto_pull_setting_start" | "auto_pull_setting_done"
+       | "auto_import_chapters_start" | "auto_import_chapters_done"
+       | "auto_chain_error";
   line?: string;
   message?: string;
   exit_code?: number;

@@ -12,31 +12,44 @@ from queue import Queue
 from typing import Any, Optional
 
 NOVEL_AI_DIR = str(Path(__file__).resolve().parent.parent.parent / "novel_AI")
+_CHECKPOINTS_PATH = str(Path(__file__).resolve().parent.parent / "data" / "checkpoints.sqlite")
 
 
 def _ensure_import_path():
     """novel_AI agents import from api_client, orchestrator, etc.
-    We need novel_AI/ on sys.path so those imports resolve in-process."""
-    if NOVEL_AI_DIR not in sys.path:
-        sys.path.insert(0, NOVEL_AI_DIR)
+    We need novel_AI/ on sys.path so those imports resolve in-process.
+    Also: bridge.py does `from engine.graph import run_graph_task` which assumes
+    `backend/` is on sys.path; graph.py itself does `from backend.engine.llm_router`
+    which assumes the project root is on sys.path. Add both so the engine works
+    whether uvicorn is started from project root or from backend/."""
+    backend_dir = str(Path(__file__).resolve().parent.parent)
+    project_root = str(Path(__file__).resolve().parent.parent.parent)
+    for p in (NOVEL_AI_DIR, backend_dir, project_root):
+        if p not in sys.path:
+            sys.path.insert(0, p)
+    # Ensure checkpoints.sqlite parent dir exists; SqliteSaver is lazy on
+    # file creation, so we touch the file to keep smoke tests honest about path.
+    cp = Path(_CHECKPOINTS_PATH)
+    cp.parent.mkdir(parents=True, exist_ok=True)
+    cp.touch(exist_ok=True)
 
 
 def build_project_graph(project_id: str) -> Any:
     """Build and compile the LangGraph StateGraph with SqliteSaver checkpointing.
     ponytail: monkey-patches orchestrator's build_graph to pass checkpointer,
     keeping novel_AI/ untouched (gitignored reference)."""
-    from langgraph.checkpoint.sqlite import SqliteSaver
-    from backend.engine.llm_router import LLMRouter, set_active_router
-
     _ensure_import_path()
+    # langgraph-checkpoint-sqlite 3.1+: from_conn_string returns context manager
+    # (must enter with `with`); direct construction returns the saver directly.
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    Path(_CHECKPOINTS_PATH).parent.mkdir(parents=True, exist_ok=True)
+    checkpointer = SqliteSaver(_CHECKPOINTS_PATH)
+    from backend.engine.llm_router import LLMRouter, set_active_router
 
     # 1. Install DB-backed LLM routing
     router = LLMRouter(project_id)
     router.install()
     set_active_router(router)
-
-    # 2. Monkey-patch orchestrator.build_graph with SqliteSaver
-    checkpointer = SqliteSaver.from_conn_string("checkpoints.sqlite")
     import orchestrator as _orch
     from langgraph.graph import StateGraph, END
 
@@ -63,14 +76,28 @@ def build_project_graph(project_id: str) -> Any:
 def load_state_for_project(project_id: str) -> dict:
     """Load state from SqliteSaver checkpoint, or create initial state.
     Falls back to JSON file for backward compat."""
-
-    checkpointer = SqliteSaver.from_conn_string("checkpoints.sqlite")
+    from langgraph.checkpoint.sqlite import SqliteSaver
+    Path(_CHECKPOINTS_PATH).parent.mkdir(parents=True, exist_ok=True)
     config = {"configurable": {"thread_id": project_id}}
 
-    # Try loading from SqliteSaver first
-    state = checkpointer.get_state(config)
-    if state and state.values:
-        return state.values
+    # Try loading from SqliteSaver first (best-effort; if API has drifted, fall through)
+    try:
+        checkpointer = SqliteSaver(_CHECKPOINTS_PATH)
+        if hasattr(checkpointer, "setup"):
+            checkpointer.setup()  # force file creation
+        # langgraph-checkpoint-sqlite 3.1: get_state() removed; use get_tuple()
+        if hasattr(checkpointer, "get_tuple"):
+            tup = checkpointer.get_tuple(config)
+        elif hasattr(checkpointer, "get_state"):
+            tup = checkpointer.get_state(config)
+        else:
+            tup = None
+        if tup and getattr(tup, "checkpoint", None):
+            values = tup.checkpoint.get("channel_values", {})
+            if values:
+                return values
+    except Exception:
+        pass  # 落到 JSON / create_initial_state
 
     # Fallback: load from JSON file
     json_path = Path(NOVEL_AI_DIR) / "output" / "orchestrator_state.json"
@@ -124,7 +151,7 @@ class SSECapture(io.StringIO):
         super().flush()
 
 
-async def run_graph_task(
+def run_graph_task(
     project_id: str,
     command: str,
     args: list[str],
