@@ -44,6 +44,27 @@ pip install langgraph anthropic httpx jieba
 4. 在写作引擎控制台绑定 `novel_AI` 目录。
 5. 推送设定、生成设定包、运行章节写作，并导入章节。
 
+## 一键 MVP 脚本（CLI）
+
+替代手动点 4 个按钮，用 `backend/scripts/run_mvp.py` 顺序跑：push-concept → planner → pull-setting → bootstrap → select → run N → import-chapters。
+
+```bash
+cd backend
+# 1. 启动后端（另一个终端）
+uvicorn app.main:app --reload --port 8000
+
+# 2. 在 frontend 新建项目 + 完成 worldbuild（10 阶段），记下 project_id
+# 3. 跑 MVP（默认写 1 章，选版本 A）
+python -m scripts.run_mvp <project_id>
+# 或：python -m scripts.run_mvp <project_id> --chapters 3 --select B
+```
+
+流式打印 SSE 日志 + node 事件，结束给摘要 + 列落盘章节。
+
+## novel_AI Bug 修复
+
+`novel_AI/` 在 `.gitignore`，跨机器需手动 apply。详见 `patches/2026-06-28-novel_ai-mvp-fixes.md`（修复 HTTP 连接池、node_rewrite 漏 compliance、预算阈值、网络重试）。
+
 ## 注意
 
 `.env`、运行日志、数据库、构建产物和缓存不会提交到仓库。
