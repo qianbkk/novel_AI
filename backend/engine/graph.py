@@ -15,6 +15,22 @@ NOVEL_AI_DIR = str(Path(__file__).resolve().parent.parent.parent / "novel_AI")
 _CHECKPOINTS_PATH = str(Path(__file__).resolve().parent.parent / "data" / "checkpoints.sqlite")
 
 
+class _NodeWrapper:
+    """Wrap a LangGraph node fn to emit node_start/node_end events to the queue.
+    ponytail: synchronous, safe inside asyncio.to_thread (queue.Queue is thread-safe)."""
+    def __init__(self, name: str, fn, queue: Queue):
+        self.name = name
+        self.fn = fn
+        self.queue = queue
+
+    def __call__(self, state):
+        self.queue.put({"event": "node_start", "node": self.name})
+        try:
+            return self.fn(state)
+        finally:
+            self.queue.put({"event": "node_end", "node": self.name})
+
+
 def _ensure_import_path():
     """novel_AI agents import from api_client, orchestrator, etc.
     We need novel_AI/ on sys.path so those imports resolve in-process.
@@ -34,10 +50,11 @@ def _ensure_import_path():
     cp.touch(exist_ok=True)
 
 
-def build_project_graph(project_id: str) -> Any:
+def build_project_graph(project_id: str, queue: Queue | None = None) -> Any:
     """Build and compile the LangGraph StateGraph with SqliteSaver checkpointing.
     ponytail: monkey-patches orchestrator's build_graph to pass checkpointer,
-    keeping novel_AI/ untouched (gitignored reference)."""
+    keeping novel_AI/ untouched (gitignored reference).
+    Spec C: if `queue` is provided, wrap each node to emit node_start/node_end."""
     _ensure_import_path()
     # langgraph-checkpoint-sqlite 3.1+: from_conn_string returns context manager
     # (must enter with `with`); direct construction returns the saver directly.
@@ -57,7 +74,10 @@ def build_project_graph(project_id: str) -> Any:
         g = StateGraph(_orch.OrchestratorState)
         for name in ("load_arc_tasks","get_next_task","write_pipeline",
                       "rewrite","save_and_track","human_escalation"):
-            g.add_node(name, getattr(_orch, f"node_{name}"))
+            node_fn = getattr(_orch, f"node_{name}")
+            if queue is not None:
+                node_fn = _NodeWrapper(name, node_fn, queue)
+            g.add_node(name, node_fn)
         g.set_entry_point("load_arc_tasks")
         g.add_edge("load_arc_tasks","get_next_task")
         g.add_edge("get_next_task","write_pipeline")
@@ -173,7 +193,7 @@ def run_graph_task(
 
     try:
         # Build graph with SqliteSaver (idempotent on second call within same process)
-        graph = build_project_graph(project_id)
+        graph = build_project_graph(project_id, queue)
         state = load_state_for_project(project_id)
         config = {
             "configurable": {
