@@ -487,159 +487,82 @@ function routing(){show('routing')}
 
 // ===== FILE TREE DATA =====
 const FILES=[
-  {type:'file',name:'README.md',color:'amber',role:'项目入门',detail:'顶层说明：本地运行步骤（后端 uvicorn + 前端 npm run dev + novel_AI 依赖）、使用顺序、CLI 一键 MVP 入口。说明 novel_AI/ 和 novel-assistant/ 是参考目录，不修改也不 push。'},
-  {type:'dir',name:'backend/',color:'blue',children:[
-    {type:'file',name:'app/main.py',color:'blue',role:'FastAPI 入口',detail:'app 启动 + CORS + 注册 6 个 router（projects/worldbuild/chapters/providers/role_assignments/bridge）+ startup 时 seed 15 行 role_assignments。32 个路由。'},
-    {type:'file',name:'app/config.py',color:'gray',role:'配置（pydantic-settings）',detail:'从环境变量读 ANTHROPIC_API_KEY、DEEPSEEK_API_KEY 等。'},
-    {type:'file',name:'app/database.py',color:'blue',role:'SQLAlchemy + SQLite',detail:'engine = create_engine("sqlite:///./data/novel.db")，SessionLocal + Base + get_db 依赖。'},
-    {type:'file',name:'app/models.py',color:'purple',role:'15 张表的 ORM 定义',detail:'业务表：Project, WorldSetting, Character, Faction, PowerSystem, MapNode, Foreshadowing, Currency, EntityRelation, Chapter, ChapterCharacter, EmbeddingChunk, GenerationJob。融合表：Provider, RoleAssignment, BridgeRun, NovelAIBinding。'},
-    {type:'file',name:'app/schemas.py',color:'blue',role:'Pydantic V2 schemas',detail:'API 请求/响应类型：ProjectOut/ProviderCreate/RoleAssignmentOut/BridgeRunRequest/ReviewRequest 等。'},
-    {type:'file',name:'app/llm_router.py',color:'gray',role:'3 角色 legacy 路由',detail:'novel-assistant 自有的 3 个角色（structured_logic / creative_detail / consistency_check）→ ProviderConfig 解析。Provider 删除时不影响角色。'},
-    {type:'dir',name:'app/api/',color:'purple',children:[
-      {type:'file',name:'bridge.py (261 行)',color:'purple',role:'★ 核心 SSE bridge',detail:'9 个端点：GET/PUT /binding, POST /run, GET /stream, POST /push-concept, /pull-setting, /import-chapters, GET /status, /pending, /budget, POST /review。Phase 1.5 改造：run_bridge 改 async def + BackgroundTasks 替代 asyncio.create_task + asyncio.to_thread 包装 run_graph_task + per-project asyncio.Lock。'},
-      {type:'file',name:'projects.py',color:'gray',role:'项目 CRUD',detail:'GET/POST/DELETE /projects。'},
-      {type:'file',name:'chapters.py',color:'gray',role:'章节 CRUD + 语义检索',detail:'GET/POST /projects/{id}/chapters，GET /chapters/search?q=...&character_id=...。'},
-      {type:'file',name:'providers.py',color:'gray',role:'Provider CRUD',detail:'GET/POST/PUT/DELETE /providers。删除前把引用此 provider 的 role_assignments.provider_id 置空。'},
-      {type:'file',name:'role_assignments.py',color:'gray',role:'15 角色绑定',detail:'GET /role-assignments 返回 15 行 + provider 联表信息；PUT /role-assignments/{role_key} 改绑定。'},
-      {type:'file',name:'worldbuild.py',color:'gray',role:'10 阶段世界构建',detail:'POST /projects/{id}/worldbuild/start 异步任务；GET /result + SSE /stream 看进度。'},
-    ]},
-    {type:'dir',name:'app/bridge/',color:'gray',children:[
-      {type:'file',name:'setting_sync.py',color:'gray',role:'双向桥：设定包',detail:'push_setting_concept（novel-assistant 世界构建 → novel_AI config/novel_config.json 的 setting_concept 字段）；pull_setting_package（planner 跑完后回灌 title_candidates/arc_outline/characters 到 DB）。'},
-      {type:'file',name:'reports.py',color:'gray',role:'控制面 reports',detail:'read_status（读 orchestrator_state.json）/read_pending（human_pending 列表）/read_budget_log（jsonl）/apply_review（人工审核 accept/reject/edit）。'},
-      {type:'file',name:'role_registry.py',color:'gray',role:'15 角色注册表',detail:'ROLE_REGISTRY 列表，namespace="novel_assistant" 3 个 + namespace="novel_ai" 12 个。'},
-      {type:'file',name:'chapter_import.py',color:'gray',role:'章节导入',detail:'扫 novel_AI/output/chapters/ch_*.txt 导入为 Chapter 行 + 自动 embed。'},
-    ]},
-    {type:'dir',name:'app/worldbuild/',color:'gray',children:[
-      {type:'file',name:'orchestrator.py',color:'gray',role:'10 阶段协调',detail:'run_worldbuild_job 调度 10 个 stage，每步写 GenerationJob 行（status + progress_percent + current_stage）。'},
-      {type:'file',name:'stages.py',color:'gray',role:'10 个 LLM 阶段',detail:'STAGES 列表：concept → world_view → characters → factions → power_system → map → foreshadowing → currency → core_conflict → summary。每步调 LLM 拿结果落 DB。'},
-    ]},
-    {type:'dir',name:'app/rag/',color:'gray',children:[
-      {type:'file',name:'embedding.py',color:'gray',role:'n-gram embedding',detail:'简单 n-gram 向量化（不上 sqlite-vec 这种扩展）。'},
-      {type:'file',name:'retrieval.py',color:'gray',role:'按角色过滤的语义检索',detail:'query + character_id 过滤候选 chapter，cosine similarity top_k。'},
-    ]},
-  ]},
-  {type:'dir',name:'backend/engine/',color:'amber',children:[
-    {type:'file',name:'graph.py (341 行)',color:'amber',role:'★ 引擎核心',detail:'★ Phase 1.5 改写为进程内 LangGraph。build_project_graph(project_id, queue) 装配 StateGraph + SqliteSaver + 7 节点（load_arc_tasks / get_next_task / write_pipeline / rewrite / save_and_track / human_escalation）+ _NodeWrapper emit node_start/node_end。run_graph_task 是 sync def（不是 async）+ asyncio.to_thread 包装。_ensure_import_path 把 novel_AI/ 和项目根加到 sys.path。Phase 1.5 修的 3 个 bug：run_bridge 改 async def + BackgroundTasks 替代 asyncio.create_task（TestClient 兼容）；from backend.engine.llm_router 改函数内 lazy import（uvicorn 从 backend/ 启动不挂）；SqliteSaver(path) 直接构造不用 from_conn_string（langgraph-checkpoint-sqlite 3.1+ API 变化）。'},
-    {type:'file',name:'llm_router.py (153 行)',color:'amber',role:'★ DB-driven LLM 路由',detail:'LLMRouter(project_id)：load_routes() 从 DB 读 RoleAssignment × Provider join；install() 把 routes 写进 api_client 模块全局（ac.MODEL_ROUTES[role_key] = (type, model) + ac.ANTHROPIC_API_KEY = key 等）。set_active_router 全局单例，api_client.call_llm 走 router。'},
-  ]},
-  {type:'dir',name:'backend/scripts/',color:'green',children:[
-    {type:'file',name:'run_mvp.py (203 行)',color:'green',role:'CLI 一键 MVP',detail:'python -m scripts.run_mvp <project_id> [--chapters 1] [--select A] [--skip-bootstrap]。串行跑 push-concept → planner → pull-setting → bootstrap → select → run N → import-chapters。流式打印 SSE 日志 + node 事件。select_bootstrap_version 直接 import tools.bootstrap.select_version 传 project_id（绕过 CLI 的 novel_id 限制）。'},
-  ]},
-  {type:'dir',name:'backend/tests/',color:'teal',children:[
-    {type:'file',name:'test_phase1_5_smoke.py',color:'teal',role:'10 项 smoke 测试',detail:'核心 5 项：cold-start / SSE / concurrency / checkpoints path / frontend build。Deep 3 项（--with-deep flag）：dashboard / budget / scan。NodeWrapper / run_mvp 各 1 项。TestClient 模式下 deep smoke 会撞 sse_starlette AppStatus 跨 stream event loop 问题（uvicorn 持久 loop 无此问题）。'},
-    {type:'file',name:'__init__.py',color:'gray',role:'让 tests/ 成 package',detail:'让 `python -m tests.test_phase1_5_smoke` 能 resolve。'},
-  ]},
-  {type:'file',name:'backend/requirements.txt',color:'gray',role:'依赖列表',detail:'fastapi==0.115, uvicorn[standard], sqlalchemy==2.0, pydantic==2.9, httpx==0.27, sse-starlette==2.1, langgraph-checkpoint-sqlite>=3.0。注意：tenacity 也在 env（修 api_client 重试用），但 novel_AI/ 自身没 requirements.txt。'},
-  ]},
-  {type:'dir',name:'frontend/',color:'blue',children:[
-    {type:'file',name:'package.json',color:'gray',role:'前端依赖',detail:'React 18 + react-router-dom 6 + Vite 5。dev / build / preview 三个 script。'},
-    {type:'file',name:'vite.config.ts',color:'gray',role:'Vite 配置',detail:'build target。'},
-    {type:'file',name:'index.html',color:'gray',role:'Vite 入口 HTML',detail:'root div + main.tsx。'},
-    {type:'dir',name:'src/',color:'blue',children:[
-      {type:'file',name:'App.tsx',color:'blue',role:'★ 路由配置',detail:'7 个路由：/ /new /settings/providers /settings/roles /projects/:id/worldbuild /projects/:id/chapters /projects/:id/bridge。顶部 nav 三入口：项目 / Provider / 角色配置。'},
-      {type:'file',name:'main.tsx',color:'gray',role:'React 入口',detail:'createRoot 挂载 App。'},
-      {type:'file',name:'types.ts',color:'gray',role:'★ TS 类型',detail:'Project, JobStatus, Character, Faction, Provider, RoleAssignment, BridgeRun, BridgeLogLine（含 Spec C 加的 node_start/node_end 字面量）, BridgeStatus, BridgePendingItem, NovelAIBinding, StageEvent 等。'},
-      {type:'file',name:'styles.css',color:'gray',role:'全局样式',detail:'深色主题（app-shell / card / btn / nav / banner / form-grid / log-console / entity-card）。'},
-      {type:'dir',name:'api/',color:'blue',children:[
-        {type:'file',name:'client.ts',color:'blue',role:'★ 后端 HTTP 客户端',detail:'基于 fetch 包装。listProjects / getProject / createProject / startWorldbuild / getWorldbuildResult / worldbuildStreamUrl / listChapters / createChapter / searchChapters / listProviders / createProvider / updateProvider / deleteProvider / listRoleAssignments / updateRoleAssignment / triggerBridge / bridgeStreamUrl / getNovelAIBinding / updateNovelAIBinding / pushConcept / pullSetting / importChapters / getBridgeStatus / getBridgePending / getBridgeBudget / submitReview。API_BASE 从 import.meta.env.VITE_API_BASE。'},
-      ]},
-      {type:'dir',name:'pages/',color:'purple',children:[
-        {type:'file',name:'Dashboard.tsx',color:'blue',role:'项目列表',detail:'GET /projects 列表 + New Project 按钮。'},
-        {type:'file',name:'NewProject.tsx',color:'blue',role:'创建项目',detail:'POST /projects，title + genre + audience + config_json。'},
-        {type:'file',name:'WorldBuild.tsx',color:'purple',role:'★ 10 阶段世界构建',detail:'启动 worldbuild job + SSE 流订阅 10 阶段进度 + 展示结果（WorldSetting/Character/Faction 等）。'},
-        {type:'file',name:'Chapters.tsx',color:'blue',role:'章节列表 + 检索',detail:'GET /chapters + 搜索 + 按 character_id 过滤。'},
-        {type:'file',name:'Providers.tsx',color:'blue',role:'Provider CRUD UI',detail:'新增/编辑 6 种类型的 provider。'},
-        {type:'file',name:'RoleAssignments.tsx',color:'blue',role:'15 角色绑定 UI',detail:'表格 + Provider 下拉 + model_override 输入。'},
-        {type:'file',name:'BridgeConsole.tsx',color:'amber',role:'★ 写作引擎控制台',detail:'按钮组（推送设定/生成设定包/黄金三章/写N章/状态/看板/预算/待审核）+ 滚动日志 <pre> + 当前节点状态条（Spec C: activeNode state）+ 人工审核卡片（accept/reject/edit）。EventSource 监听：log / auto_pull_setting_start/done / auto_import_chapters_start/done / auto_chain_error / node_start / node_end / done。'},
-      ]},
-    ]},
-  ]},
-  {type:'dir',name:'novel_AI/',color:'red',children:[
-    {type:'file',name:'CLAUDE.md',color:'red',role:'★ 行为宪法（5 元文件体系）',detail:'本仓库（novel_AI 子仓库）的元文件：CLAUDE.md（行为规则）/ README.md（架构）/ index.md（文件索引）/ PROJECT_LOG.md（进度+决策）/ .claude/lessons.md（坑）。约束：改 agents/ 必须先读、改完跑 system_test、novel_AI/ 在 fusion 仓库 gitignored。'},
-    {type:'file',name:'run.py',color:'amber',role:'★ 统一命令入口',detail:'python run.py [planner|bootstrap|run N|resume|status|dashboard|show N|pending|review|export|stats|budget|scan|style|fingerprint|ac|test|memory]。解析命令行后 dispatch。.env 加载在 import api_client 之前。'},
-    {type:'file',name:'orchestrator.py (700+ 行)',color:'purple',role:'★ 总控制器（最重）',detail:'LangGraph 7 节点状态机：load_arc_tasks / get_next_task / write_pipeline / rewrite / save_and_track / human_escalation。write_pipeline 内部跑 writer → normalizer → compliance → checker（×3 模型）。route_after_pipeline / route_after_rewrite / route_after_save 决策。Phase 1.5 patch：node_rewrite 在 run_normalizer 之后补 run_compliance（防重写后绕开合规检查）；BUDGET_WARN 0.80→1.00，BUDGET_HARD 0.95→1.50（MVP 放宽）。'},
-    {type:'file',name:'orchestrator_state.py',color:'purple',role:'OrchestratorState TypedDict',detail:'全系统数据总线：current_phase / current_arc / current_chapter / chapter_task_queue / current_task / quality_history / budget_used_usd / human_pending / etc。所有节点读 / 写。'},
-    {type:'file',name:'api_client.py (370+ 行)',color:'teal',role:'★ 6 provider LLM 客户端',detail:'MODEL_ROUTES（12 agent → provider/model 映射）+ TOKEN_BUDGET（每 agent max_tokens 上限）+ _http_clients 连接池 + call_llm 统一入口。Phase 1.5 patch：5 处 `with _get_client as c` 替换为裸调用（修 Bug 1：with 退出关连接池）+ tenacity _post_with_retry helper（5xx + 网络错误重试 3 次，4xx 不重试）。'},
-    {type:'dir',name:'agents/',color:'purple',children:[
-      {type:'file',name:'planner_agent.py',color:'purple',role:'设定包生成',detail:'run_planner(config, output_dir) → output/setting_package.json（含 title_candidates/arc_outline/characters/power_system 等）。一次调用生成完整设定包。'},
-      {type:'file',name:'outline_agent.py',color:'teal',role:'弧任务拆解',detail:'run_outline(arc, start_chapter, setting, memory) → 每章详细大纲（场景/人物/对话/情节节点/结尾钩子）。'},
-      {type:'file',name:'writer_agent.py',color:'purple',role:'★ 章节正文生成',detail:'run_writer → 2000-3000 字章节正文，注入记忆上下文 + 风格指南 + 章节大纲。最贵的调用。'},
-      {type:'file',name:'normalizer_agent.py',color:'blue',role:'文风净化',detail:'去 AI 腔，规则替换 + second_pass_llm 二次处理（fingerprint ≥60 触发）。'},
-      {type:'file',name:'compliance_agent.py',color:'red',role:'合规检测',detail:'二分类：番茄平台是否违规？返回 pass/fail + 原因。'},
-      {type:'file',name:'checker_agent.py',color:'red',role:'★ 质量评审（×3）',detail:'3 个不同厂商的模型从不同角度打分（文学质量/情节/读者体验），平均 ≥ 6.5 通过。'},
-      {type:'file',name:'rewriter_agent.py',color:'purple',role:'针对性重写',detail:'run_rewriter(draft, level, feedback) → 修改后章节。最多 3 次，超过则 escalate。'},
-      {type:'file',name:'summarizer_agent.py',color:'teal',role:'弧摘要',detail:'run_summarizer(arc_id) → L5 弧摘要（500-800 字），完成弧时触发。'},
-      {type:'file',name:'tracker_agent.py',color:'teal',role:'故事元素追踪',detail:'提取人物状态/关系变化/伏笔兑现，更新结构化故事数据库。'},
-    ]},
-    {type:'dir',name:'tools/',color:'blue',children:[
-      {type:'file',name:'bootstrap.py',color:'blue',role:'黄金三章生成 + 选版',detail:'run_bootstrap() 生成 ch1 A/B/C 三版；select_version(chapter, version, novel_id) 把选定版落 ch_NNNN.txt。run_mvp 直接 import select_version。'},
-      {type:'file',name:'budget_manager.py',color:'gray',role:'预算报告',detail:'print_report() 汇总 budget_log.jsonl + state.json 算总成本/已用/警告。注意：早返回路径缺 total_chapters_planned 字段，Phase 1.5 已知 bug。'},
-      {type:'file',name:'chapter_checker.py',color:'gray',role:'一致性扫描',detail:'scan_all_chapters(novel_id) 跨章节一致性问题。'},
-      {type:'file',name:'fingerprint_checker.py',color:'gray',role:'AI 痕迹检测',detail:'cmd_scan() 全书 AI 嫌疑分；cmd_check(N) 单章。'},
-      {type:'file',name:'exporter.py',color:'gray',role:'导出 TXT',detail:'export_chapters(start, end, filename) 合并章节。'},
-      {type:'file',name:'system_test.py',color:'gray',role:'20 项集成测试',detail:'run_all_tests() 用 Mock LLM 跑核心流程，验证不依赖真 API Key 也能跑通。'},
-      {type:'file',name:'human_review.py',color:'gray',role:'交互式审核',detail:'run_review() CLI 跑人工审核界面。'},
-      {type:'file',name:'style_manager.py',color:'gray',role:'风格样本管理',detail:'cmd_list/add/preview 管理写作风格示例。'},
-      {type:'file',name:'accept_tests.py / calibrate_checker.py',color:'gray',role:'验收 + 校准',detail:'AC1-5 验收测试 + Checker 基线校准。'},
-    ]},
-    {type:'file',name:'config/novel_config.json',color:'amber',role:'novel_id/platform/genre/setting_concept 落点',detail:'phase 1.5 push_setting_concept 写入这里。'},
-    {type:'dir',name:'memory/',color:'gray',children:[
-      {type:'file',name:'memory_manager.py',color:'gray',role:'L2/L5 memory 注入',detail:'get_l2/get_writer_context/load_memory/save_memory 约 1500 token 限额。'},
-    ]},
-  ]},
-  {type:'dir',name:'novel-assistant/',color:'red',children:[
-    {type:'file',name:'README.md (16K 字符)',color:'red',role:'原参考项目',detail:'早期 FastAPI + React 框架代码。现已被 fusion 仓库替代，仅供对照参考。gitignored，不修改。'},
-  ]},
-  {type:'dir',name:'docs/',color:'teal',children:[
-    {type:'dir',name:'superpowers/',color:'teal',children:[
-      {type:'dir',name:'specs/',color:'teal',children:[
-        {type:'file',name:'2026-06-27-phase1-5-fusion-debugs-design.md',color:'teal',role:'★ Phase 1.5 设计',detail:'排雷设计：并发模型、_NodeWrapper、asyncio.to_thread 整合、checkpoints 绝对路径、SqliteSaver 新 API。self-review 后定稿。'},
-        {type:'file',name:'2026-06-28-spec-c-node-events-design.md',color:'teal',role:'★ Spec C 设计',detail:'节点事件设计：_NodeWrapper 包装 node_* 同步 emit node_start/node_end，保留 print 捕获，0 async 改造。'},
-      ]},
-      {type:'dir',name:'plans/',color:'teal',children:[
-        {type:'file',name:'2026-06-26-novel-assistant-fusion.md',color:'teal',role:'★ 原始融合 plan',detail:'FUSION_BUILD_SPEC.md 拆解的 15-task 实施计划。全部 task 已勾选 [x] 完成，末尾追加 Phase 1.5 收尾段。'},
-        {type:'file',name:'2026-06-27-phase1-5-fusion-debugs.md',color:'teal',role:'★ Phase 1.5 plan',detail:'12 个 task 排雷 plan。'},
-      ]},
-    ]},
-    {type:'file',name:'novel_ai_fusion_guide.html',color:'green',role:'★ 本文件（项目自解释）',detail:'基于真实代码分析的可视化页面，7 个 tab：项目全景 / 文件地图 / 工作流程 / 九大 Agent / 记忆系统 / 模型路由 / API 与命令。单文件 HTML 无外部依赖。'},
-  ]},
-  {type:'dir',name:'patches/',color:'amber',children:[
-    {type:'file',name:'2026-06-28-novel_ai-mvp-fixes.md',color:'amber',role:'novel_AI/ 修复 apply 指南',detail:'4 个 fix 的具体改动详情：HTTP 连接池 (Bug 1) / node_rewrite 补 compliance (Bug 2) / 预算阈值放宽 / tenacity 网络重试。novel_AI/ 在 .gitignore，跨机需手动 apply。'},
-  ]},
+  {type:'file',name:'README.md',color:'amber',role:'项目入门',detail:'顶层说明：本地运行步骤、使用顺序、CLI 一键 MVP 入口。说明 novel_AI/ 和 novel-assistant/ 是参考目录。'},
+  {type:'file',name:'backend/requirements.txt',color:'gray',role:'依赖列表',detail:'fastapi/sqlalchemy/pydantic/httpx/sse-starlette/langgraph-checkpoint-sqlite + tenacity。'},
+  {type:'file',name:'backend/app/main.py',color:'blue',role:'FastAPI 入口',detail:'app 启动 + CORS + 6 个 router + seed 15 行 role_assignments。32 个路由。'},
+  {type:'file',name:'backend/app/config.py',color:'gray',role:'pydantic-settings 配置',detail:'从环境变量读 API keys。'},
+  {type:'file',name:'backend/app/database.py',color:'blue',role:'SQLAlchemy + SQLite',detail:'engine + SessionLocal + Base + get_db。'},
+  {type:'file',name:'backend/app/models.py',color:'purple',role:'15 张表 ORM',detail:'业务表 + 融合表（Provider/RoleAssignment/BridgeRun/NovelAIBinding）。'},
+  {type:'file',name:'backend/app/schemas.py',color:'blue',role:'Pydantic V2 schemas',detail:'API 请求/响应类型。'},
+  {type:'file',name:'backend/app/llm_router.py',color:'gray',role:'3 角色 legacy 路由',detail:'novel-assistant 自有的 3 个角色 → ProviderConfig。'},
+  {type:'file',name:'backend/app/api/bridge.py',color:'purple',role:'★ 核心 SSE bridge (261 行)',detail:'9 个端点。Phase 1.5 改造：async def + BackgroundTasks + asyncio.to_thread + per-project asyncio.Lock。'},
+  {type:'file',name:'backend/app/api/projects.py',color:'gray',role:'项目 CRUD',detail:'GET/POST/DELETE /projects。'},
+  {type:'file',name:'backend/app/api/chapters.py',color:'gray',role:'章节 CRUD + 检索',detail:'GET/POST + 语义搜索。'},
+  {type:'file',name:'backend/app/api/providers.py',color:'gray',role:'Provider CRUD',detail:'GET/POST/PUT/DELETE。删除前级联清空 role_assignments。'},
+  {type:'file',name:'backend/app/api/role_assignments.py',color:'gray',role:'15 角色绑定',detail:'GET + PUT。'},
+  {type:'file',name:'backend/app/api/worldbuild.py',color:'gray',role:'10 阶段世界构建',detail:'POST /start 异步 + SSE /stream。'},
+  {type:'file',name:'backend/app/bridge/setting_sync.py',color:'gray',role:'双向桥：设定包',detail:'push/pull setting package。'},
+  {type:'file',name:'backend/app/bridge/reports.py',color:'gray',role:'控制面 reports',detail:'read_status/pending/budget_log + apply_review。'},
+  {type:'file',name:'backend/app/bridge/role_registry.py',color:'gray',role:'15 角色注册表',detail:'ROLE_REGISTRY 常量。'},
+  {type:'file',name:'backend/app/bridge/chapter_import.py',color:'gray',role:'章节导入',detail:'扫 novel_AI/output/chapters/ 入库。'},
+  {type:'file',name:'backend/app/worldbuild/orchestrator.py',color:'gray',role:'10 阶段协调',detail:'run_worldbuild_job + GenerationJob 进度。'},
+  {type:'file',name:'backend/app/worldbuild/stages.py',color:'gray',role:'10 个 LLM 阶段',detail:'STAGES 列表。'},
+  {type:'file',name:'backend/app/rag/embedding.py',color:'gray',role:'n-gram embedding',detail:'简单 n-gram 向量化。'},
+  {type:'file',name:'backend/app/rag/retrieval.py',color:'gray',role:'按角色过滤的语义检索',detail:'cosine top_k。'},
+  {type:'file',name:'backend/engine/graph.py',color:'amber',role:'★ 引擎核心 (341 行)',detail:'Phase 1.5 改写为进程内 LangGraph。build_project_graph + SqliteSaver + 7 节点 + _NodeWrapper。修 3 个 bug。'},
+  {type:'file',name:'backend/engine/llm_router.py',color:'amber',role:'★ DB-driven LLM 路由 (153 行)',detail:'LLMRouter(project_id)：从 DB 读 RoleAssignment × Provider，写进 api_client 模块全局。'},
+  {type:'file',name:'backend/scripts/run_mvp.py',color:'green',role:'CLI 一键 MVP (203 行)',detail:'python -m scripts.run_mvp <project_id>。串行 push-concept → planner → bootstrap → select → run → import。'},
+  {type:'file',name:'backend/tests/test_phase1_5_smoke.py',color:'teal',role:'10 项 smoke 测试',detail:'核心 5 + deep 3 + NodeWrapper + run_mvp importable。'},
+  {type:'file',name:'backend/tests/__init__.py',color:'gray',role:'让 tests/ 成 package',detail:'让 -m resolve。'},
+  {type:'file',name:'frontend/package.json',color:'gray',role:'前端依赖',detail:'React 18 + react-router-dom 6 + Vite 5。'},
+  {type:'file',name:'frontend/vite.config.ts',color:'gray',role:'Vite 配置',detail:'build target。'},
+  {type:'file',name:'frontend/index.html',color:'gray',role:'Vite 入口',detail:'root div + main.tsx。'},
+  {type:'file',name:'frontend/src/App.tsx',color:'blue',role:'★ 路由配置',detail:'7 个路由。'},
+  {type:'file',name:'frontend/src/main.tsx',color:'gray',role:'React 入口',detail:'createRoot 挂载。'},
+  {type:'file',name:'frontend/src/types.ts',color:'gray',role:'★ TS 类型',detail:'BridgeLogLine 含 Spec C node_start/node_end 字面量。'},
+  {type:'file',name:'frontend/src/styles.css',color:'gray',role:'全局样式',detail:'深色主题。'},
+  {type:'file',name:'frontend/src/api/client.ts',color:'blue',role:'★ 后端 HTTP 客户端',detail:'基于 fetch 包装所有端点。'},
+  {type:'file',name:'frontend/src/pages/Dashboard.tsx',color:'blue',role:'项目列表',detail:'GET /projects。'},
+  {type:'file',name:'frontend/src/pages/NewProject.tsx',color:'blue',role:'创建项目',detail:'POST /projects。'},
+  {type:'file',name:'frontend/src/pages/WorldBuild.tsx',color:'purple',role:'10 阶段世界构建',detail:'SSE 流订阅。'},
+  {type:'file',name:'frontend/src/pages/Chapters.tsx',color:'blue',role:'章节列表 + 检索',detail:'搜索 + character_id 过滤。'},
+  {type:'file',name:'frontend/src/pages/Providers.tsx',color:'blue',role:'Provider CRUD UI',detail:'新增/编辑。'},
+  {type:'file',name:'frontend/src/pages/RoleAssignments.tsx',color:'blue',role:'15 角色绑定 UI',detail:'表格 + 下拉。'},
+  {type:'file',name:'frontend/src/pages/BridgeConsole.tsx',color:'amber',role:'★ 写作引擎控制台',detail:'按钮 + 日志 + 当前节点状态条（Spec C）。'},
+  {type:'file',name:'novel_AI/CLAUDE.md',color:'red',role:'行为宪法（5 元文件体系）',detail:'novel_AI 子仓库的 CLAUDE.md/README.md/index.md/PROJECT_LOG.md/lessons.md。'},
+  {type:'file',name:'novel_AI/run.py',color:'amber',role:'★ 统一命令入口',detail:'python run.py [...18 个子命令]。.env 加载在 import api_client 之前。'},
+  {type:'file',name:'novel_AI/orchestrator.py',color:'purple',role:'★ 总控制器 (700+ 行)',detail:'LangGraph 7 节点状态机。Phase 1.5 patch：补 compliance + 放宽 budget。'},
+  {type:'file',name:'novel_AI/orchestrator_state.py',color:'purple',role:'OrchestratorState TypedDict',detail:'全系统数据总线。'},
+  {type:'file',name:'novel_AI/api_client.py',color:'teal',role:'★ 6 provider LLM 客户端 (370+ 行)',detail:'MODEL_ROUTES + TOKEN_BUDGET + 连接池 + call_llm。Phase 1.5 patch：裸调用 + tenacity。'},
+  {type:'file',name:'novel_AI/agents/planner_agent.py',color:'purple',role:'设定包生成',detail:'run_planner → setting_package.json。'},
+  {type:'file',name:'novel_AI/agents/outline_agent.py',color:'teal',role:'弧任务拆解',detail:'run_outline → arc_N_tasks.json。'},
+  {type:'file',name:'novel_AI/agents/writer_agent.py',color:'purple',role:'★ 章节正文生成',detail:'2000-3000 字，最贵调用。'},
+  {type:'file',name:'novel_AI/agents/normalizer_agent.py',color:'blue',role:'文风净化',detail:'去 AI 腔 + second_pass_llm。'},
+  {type:'file',name:'novel_AI/agents/compliance_agent.py',color:'red',role:'合规检测',detail:'二分类：番茄平台是否违规。'},
+  {type:'file',name:'novel_AI/agents/checker_agent.py',color:'red',role:'★ 质量评审（×3）',detail:'3 厂商打分，平均 ≥ 6.5 通过。'},
+  {type:'file',name:'novel_AI/agents/rewriter_agent.py',color:'purple',role:'针对性重写',detail:'最多 3 次，超则 escalate。'},
+  {type:'file',name:'novel_AI/agents/summarizer_agent.py',color:'teal',role:'弧摘要',detail:'L5 记忆层。'},
+  {type:'file',name:'novel_AI/agents/tracker_agent.py',color:'teal',role:'故事元素追踪',detail:'人物/道具/伏笔。'},
+  {type:'file',name:'novel_AI/tools/bootstrap.py',color:'blue',role:'黄金三章生成 + 选版',detail:'run_bootstrap + select_version。'},
+  {type:'file',name:'novel_AI/tools/budget_manager.py',color:'gray',role:'预算报告',detail:'注意早返回路径缺 total_chapters_planned 字段（已知 bug）。'},
+  {type:'file',name:'novel_AI/tools/chapter_checker.py',color:'gray',role:'一致性扫描',detail:'scan_all_chapters。'},
+  {type:'file',name:'novel_AI/tools/fingerprint_checker.py',color:'gray',role:'AI 痕迹检测',detail:'cmd_scan / cmd_check。'},
+  {type:'file',name:'novel_AI/tools/exporter.py',color:'gray',role:'导出 TXT',detail:'export_chapters。'},
+  {type:'file',name:'novel_AI/tools/system_test.py',color:'gray',role:'20 项集成测试',detail:'Mock LLM 跑。'},
+  {type:'file',name:'novel_AI/tools/human_review.py',color:'gray',role:'交互式审核',detail:'run_review。'},
+  {type:'file',name:'novel_AI/tools/style_manager.py',color:'gray',role:'风格样本管理',detail:'cmd_list/add/preview。'},
+  {type:'file',name:'novel_AI/tools/calibrate_checker.py',color:'gray',role:'Checker 基线校准',detail:'run_calibration。'},
+  {type:'file',name:'novel_AI/tools/accept_tests.py',color:'gray',role:'AC1-5 验收测试',detail:'AC-1 到 AC-5。'},
+  {type:'file',name:'novel_AI/config/novel_config.json',color:'amber',role:'novel_config 落点',detail:'push_setting_concept 写这里。'},
+  {type:'file',name:'novel_AI/memory/memory_manager.py',color:'gray',role:'L2/L5 memory 注入',detail:'约 1500 token 限额。'},
+  {type:'file',name:'novel-assistant/README.md',color:'red',role:'原参考项目',detail:'早期 FastAPI + React 框架，已被 fusion 替代。gitignored。'},
+  {type:'file',name:'docs/novel_ai_fusion_guide.html',color:'green',role:'本文件（项目自解释）',detail:'基于真实代码分析的可视化页面，7 个 tab。'},
+  {type:'file',name:'docs/superpowers/specs/2026-06-27-phase1-5-fusion-debugs-design.md',color:'teal',role:'Phase 1.5 设计',detail:'排雷设计文档。'},
+  {type:'file',name:'docs/superpowers/specs/2026-06-28-spec-c-node-events-design.md',color:'teal',role:'Spec C 设计',detail:'节点事件设计文档。'},
+  {type:'file',name:'docs/superpowers/plans/2026-06-26-novel-assistant-fusion.md',color:'teal',role:'原始融合 plan',detail:'15-task 实施计划。'},
+  {type:'file',name:'docs/superpowers/plans/2026-06-27-phase1-5-fusion-debugs.md',color:'teal',role:'Phase 1.5 plan',detail:'12 task 排雷 plan。'},
+  {type:'file',name:'patches/2026-06-28-novel_ai-mvp-fixes.md',color:'amber',role:'novel_AI/ 修复 apply 指南',detail:'4 个 fix 详情，跨机需手动 apply。'}
 ];
-
-// ===== RENDER FILE TREE =====
-function renderTree(nodes, container, depth=0){
-  nodes.forEach(node=>{
-    const el=document.createElement('div');
-    if(node.type==='dir'){
-      el.className='tree-node';
-      el.innerHTML=`<span style="color:var(--fg3)">${depth>0?'┣ ':''}</span><span class="tree-file-name" style="color:var(--fg)">${node.name}</span><span class="tree-badge">目录</span>`;
-      container.appendChild(el);
-      if(node.children){
-        const ch=document.createElement('div');
-        ch.className='tree-children';
-        ch.style.display='block';
-        renderTree(node.children,ch,depth+1);
-        container.appendChild(ch);
-        el.onclick=e=>{e.stopPropagation();ch.style.display=ch.style.display==='none'?'block':'none'};
-      }
-    } else {
-      const colorMap={amber:'var(--amber)',purple:'var(--purple)',teal:'var(--teal)',blue:'var(--blue)',red:'var(--red)',green:'var(--green)'};
-      el.className='tree-node';
-      el.innerHTML=`<span style="color:var(--fg3)">${depth>0?'┗ ':''}</span><span class="tree-file-name" style="color:${colorMap[node.color]||'var(--fg)'}">${node.name}</span><span class="tree-badge" style="font-size:10px">${node.role}</span>`;
-      el.onclick=e=>{
-        e.stopPropagation();
-        document.querySelectorAll('.tree-node.selected').forEach(n=>n.classList.remove('selected'));
-        el.classList.add('selected');
-        const det=document.getElementById('file-detail');
-        det.innerHTML=`<div class="file-detail-name">${node.name}</div><div class="file-detail-role">${node.role}</div><div class="file-detail-body">${node.detail}</div>`;
-      };
-      container.appendChild(el);
-    }
-  });
-}
-renderTree(FILES,document.getElementById('file-tree'));
 
 // ===== WORKFLOW DATA =====
 const FLOW=[
