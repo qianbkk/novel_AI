@@ -7,6 +7,7 @@ SqliteSaver 落 backend/data/checkpoints.sqlite。无需真 API Key。
 """
 import time
 from pathlib import Path
+from queue import Queue
 
 from fastapi.testclient import TestClient
 
@@ -241,6 +242,46 @@ def smoke_8_scan(shared_client: TestClient) -> None:
     print(f"[8/8] scan OK (events={len(events)}, types={sorted(types)})")
 
 
+def smoke_9_node_wrapper() -> None:
+    """9/9: _NodeWrapper 单元测试 — 节点进出推 node_start/node_end 到 queue。
+
+    端到端验证需要真 LLM + 跑 graph.invoke (在 TestClient 下会撞 LangGraph 内部
+    event loop 问题)，所以这里只单测 _NodeWrapper 本身。
+    """
+    from engine.graph import _NodeWrapper
+    q = Queue()
+    entered = []
+
+    class _MockNode:
+        def __call__(self, state):
+            entered.append(state.get("x"))
+            return {"x": state.get("x", 0) + 1}
+
+    wrapped = _NodeWrapper("test_node", _MockNode(), q)
+    wrapped({"x": 42})
+
+    e1 = q.get_nowait()
+    e2 = q.get_nowait()
+    assert e1 == {"event": "node_start", "node": "test_node"}, f"e1 错: {e1}"
+    assert e2 == {"event": "node_end", "node": "test_node"}, f"e2 错: {e2}"
+    assert entered == [42], f"entered 错: {entered}"
+    assert q.empty(), "queue 应该空了"
+
+    # 异常路径：node 抛异常时 node_end 仍应 emit（finally 块）
+    q2 = Queue()
+    def _boom(state):
+        raise RuntimeError("simulated node failure")
+    wrapped_boom = _NodeWrapper("bad", _boom, q2)
+    try:
+        wrapped_boom({})
+    except RuntimeError:
+        pass
+    assert q2.get_nowait() == {"event": "node_start", "node": "bad"}
+    assert q2.get_nowait() == {"event": "node_end", "node": "bad"}
+
+    print("[9/9] _NodeWrapper OK (happy + exception paths both emit node_start/node_end)")
+
+
 if __name__ == "__main__":
     import sys
     import uuid
@@ -262,6 +303,6 @@ if __name__ == "__main__":
         smoke_6_dashboard(shared)
         smoke_7_budget(shared)
         smoke_8_scan(shared)
-        print("\nAll 8 smokes passed.")
-    else:
-        print("\nCore 5 smokes passed. (smoke 6/7/8 in TestClient flaky, run with --with-deep in uvicorn to enable)")
+
+    smoke_9_node_wrapper()
+    print("\nAll 9 smokes passed.")

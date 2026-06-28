@@ -27,6 +27,7 @@ export default function BridgeConsole() {
   const [novelAiDir, setNovelAiDir] = useState("");
   const [novelId, setNovelId] = useState("");
   const [reviewText, setReviewText] = useState<Record<string, string>>({});
+  const [activeNode, setActiveNode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
@@ -84,6 +85,16 @@ export default function BridgeConsole() {
       es.addEventListener("auto_import_chapters_start", (e) => handleEvent("auto_import_chapters_start", e as MessageEvent));
       es.addEventListener("auto_import_chapters_done", (e) => handleEvent("auto_import_chapters_done", e as MessageEvent));
       es.addEventListener("auto_chain_error", (e) => handleEvent("auto_chain_error", e as MessageEvent));
+      es.addEventListener("node_start", (e) => {
+        const payload: BridgeLogLine = JSON.parse((e as MessageEvent).data);
+        if (payload.node) setActiveNode(payload.node);
+        handleEvent("node_start", e as MessageEvent);
+      });
+      es.addEventListener("node_end", (e) => {
+        const payload: BridgeLogLine = JSON.parse((e as MessageEvent).data);
+        if (payload.node && activeNode === payload.node) setActiveNode(null);
+        handleEvent("node_end", e as MessageEvent);
+      });
       es.addEventListener("done", (e) => {
         const payload: BridgeLogLine = JSON.parse((e as MessageEvent).data);
         const code = payload.exit_code ?? 0;
@@ -92,6 +103,7 @@ export default function BridgeConsole() {
         es.close();
         setRunning(false);
         setActiveLabel(null);
+        setActiveNode(null);
       });
       es.addEventListener("error", (e) => {
         try {
@@ -240,6 +252,14 @@ export default function BridgeConsole() {
           </button>
         </div>
       </div>
+
+      {activeNode && (
+        <div className="card mt-24" style={{ borderColor: "var(--accent)" }}>
+          <span className="text-muted">当前节点：</span>
+          <strong>{activeNode}</strong>
+          <span className="text-muted" style={{ marginLeft: 8 }}>运行中…</span>
+        </div>
+      )}
 
       <div className="card mt-24">
         <div className="flex-between" style={{ marginBottom: 14 }}>

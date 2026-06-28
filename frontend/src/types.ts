@@ -149,11 +149,13 @@ export interface BridgeLogLine {
   event: "log" | "done" | "error"
        | "auto_pull_setting_start" | "auto_pull_setting_done"
        | "auto_import_chapters_start" | "auto_import_chapters_done"
-       | "auto_chain_error";
+       | "auto_chain_error"
+       | "node_start" | "node_end";
   line?: string;
   message?: string;
   exit_code?: number;
   data?: unknown;
+  node?: string;  // node_start / node_end 事件携带
 }
 
 export interface BridgeStatus {
