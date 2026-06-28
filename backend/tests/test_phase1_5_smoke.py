@@ -282,6 +282,18 @@ def smoke_9_node_wrapper() -> None:
     print("[9/9] _NodeWrapper OK (happy + exception paths both emit node_start/node_end)")
 
 
+def smoke_10_run_mvp_importable() -> None:
+    """10/10: run_mvp.py 可导入 + 关键函数签名对。完整 E2E 需要真后端+真项目，
+    跑 `cd backend && python -m scripts.run_mvp <project_id>` 验证。"""
+    import importlib
+    mod = importlib.import_module("scripts.run_mvp")
+    assert callable(mod.main), "main 不可调用"
+    assert callable(mod.call_bridge_run), "call_bridge_run 不可调用"
+    assert callable(mod.select_bootstrap_version), "select_bootstrap_version 不可调用"
+    assert callable(mod.stream_sse), "stream_sse 不可调用"
+    print("[10/10] run_mvp importable OK (main/call_bridge_run/select_bootstrap_version/stream_sse)")
+
+
 if __name__ == "__main__":
     import sys
     import uuid
@@ -305,4 +317,5 @@ if __name__ == "__main__":
         smoke_8_scan(shared)
 
     smoke_9_node_wrapper()
-    print("\nAll 9 smokes passed.")
+    smoke_10_run_mvp_importable()
+    print("\nAll 10 smokes passed.")
