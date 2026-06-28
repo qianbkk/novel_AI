@@ -564,6 +564,28 @@ const FILES=[
   {type:'file',name:'patches/2026-06-28-novel_ai-mvp-fixes.md',color:'amber',role:'novel_AI/ 修复 apply 指南',detail:'4 个 fix 详情，跨机需手动 apply。'}
 ];
 
+
+// ===== RENDER FILE TREE =====
+function renderTree(nodes, container, depth=0){
+  nodes.forEach(node=>{
+    const el=document.createElement('div');
+    el.className='tree-node';
+    const colorMap={amber:'var(--amber)',purple:'var(--purple)',teal:'var(--teal)',blue:'var(--blue)',red:'var(--red)',green:'var(--green)'};
+    const color=colorMap[node.color]||'var(--fg)';
+    el.innerHTML=`<span style="color:var(--fg3)">${depth>0?'┗ ':''}</span><span class="tree-file-name" style="color:${color}">${node.name}</span><span class="tree-badge" style="font-size:10px">${node.role}</span>`;
+    el.onclick=e=>{
+      e.stopPropagation();
+      document.querySelectorAll('.tree-node.selected').forEach(n=>n.classList.remove('selected'));
+      el.classList.add('selected');
+      const det=document.getElementById('file-detail');
+      det.innerHTML=`<div class="file-detail-name">${node.name}</div><div class="file-detail-role">${node.role}</div><div class="file-detail-body">${node.detail}</div>`;
+    };
+    container.appendChild(el);
+  });
+}
+renderTree(FILES, document.getElementById('file-tree'));
+
+
 // ===== WORKFLOW DATA =====
 const FLOW=[
   {id:'fe',cls:'node-blue',title:'① 前端按钮点击',sub:'user → React UI',items:['用户在 BridgeConsole 点"写10章"按钮','api.triggerBridge(projectId, "run", ["10"]) 调 fetch','POST /projects/{id}/bridge/run → FastAPI 路由处理','响应立即返回（200 + {bridge_run_id, status:pending}）','前端立即 client.stream("GET", /stream?run_id=...)']},
