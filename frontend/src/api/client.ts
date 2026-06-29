@@ -13,8 +13,8 @@ import type {
   NovelAIBinding,
 } from "../types";
 
-// 后端地址：默认本机 8000 端口，部署到别的地方时改 frontend/.env 里的 VITE_API_BASE 即可
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000";
+// 后端地址：默认本机 8123 端口，部署到别的地方时改 frontend/.env 里的 VITE_API_BASE 即可
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8123";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(`${API_BASE}${path}`, {

@@ -23,9 +23,9 @@ set "BACKEND_DIR=%PROJECT_ROOT%\backend"
 set "FRONTEND_DIR=%PROJECT_ROOT%\frontend"
 
 set "BACKEND_HOST=127.0.0.1"
-set "BACKEND_PORT=8000"
+set "BACKEND_PORT=8123"
 set "FRONTEND_HOST=127.0.0.1"
-set "FRONTEND_PORT=5173"
+set "FRONTEND_PORT=5293"
 
 set "LOG_DIR=%PROJECT_ROOT%\.runlogs"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
@@ -59,8 +59,8 @@ goto :eof
 :print_menu
 echo.
 echo %YELLOW%Choose action:%RESET%
-echo   %GREEN%1)%RESET% start backend     (uvicorn :8000)
-echo   %GREEN%2)%RESET% start frontend    (vite    :5173)
+echo   %GREEN%1)%RESET% start backend     (uvicorn :8123)
+echo   %GREEN%2)%RESET% start frontend    (vite    :5293)
 echo   %GREEN%3)%RESET% start BOTH
 echo   %GREEN%4)%RESET% stop backend
 echo   %GREEN%5)%RESET% stop frontend
@@ -77,9 +77,9 @@ REM ---------- PID lookup by LISTENING port ----------
 :find_pids_by_port
 set "PORT_TO_CHECK=%~1"
 set "RESULT_PIDS="
-REM Match :PORT followed by a space (both IPv4 "127.0.0.1:5173 " and
-REM IPv6 "[::1]:5173 ").  Anchoring on the trailing space prevents ":8000"
-REM from matching ":80000" or similar.
+REM Match :PORT followed by a space (both IPv4 "127.0.0.1:5293 " and
+REM IPv6 "[::1]:5293 ").  Anchoring on the trailing space prevents ":8123"
+REM from matching ":81230" or similar.
 for /F "tokens=5" %%P in ('netstat -ano ^| findstr ":%PORT_TO_CHECK% " ^| findstr LISTENING') do (
     if not defined RESULT_PIDS (set "RESULT_PIDS=%%P") else (set "RESULT_PIDS=!RESULT_PIDS! %%P")
 )
@@ -216,7 +216,7 @@ if not defined RESULT_PIDS (
 )
 echo %YELLOW%[stopping frontend]%RESET%  PIDs: !RESULT_PIDS!
 for %%P in (!RESULT_PIDS!) do call :kill_pid %%P
-REM Vite spawns node child; clean up orphans on 5173 port
+REM Vite spawns node child; clean up orphans on 5293 port
 ping -n 2 127.0.0.1 >nul
 call :find_pids_by_port %FRONTEND_PORT%
 if not defined RESULT_PIDS (
@@ -279,11 +279,11 @@ goto :menu_loop
 echo.
 echo %CYAN%Usage:%RESET%
 echo   dev.bat                       interactive menu
-echo   dev.bat start-backend         start uvicorn :8000
-echo   dev.bat start-frontend        start vite    :5173
+echo   dev.bat start-backend         start uvicorn :8123
+echo   dev.bat start-frontend        start vite    :5293
 echo   dev.bat start-all             start both
-echo   dev.bat stop-backend          kill 8000 listener
-echo   dev.bat stop-frontend         kill 5173 listener
+echo   dev.bat stop-backend          kill 8123 listener
+echo   dev.bat stop-frontend         kill 5293 listener
 echo   dev.bat stop-all              kill both
 echo   dev.bat restart-all           stop then start both
 echo   dev.bat status                print port / pid / /health

@@ -24,7 +24,7 @@ export default function Dashboard() {
         </button>
       </div>
 
-      {error && <div className="banner banner-danger">{error}（后端是不是没启动？默认地址 http://localhost:8000）</div>}
+      {error && <div className="banner banner-danger">{error}（后端是不是没启动？默认地址 http://localhost:8123）</div>}
 
       {!projects && !error && <p className="loading-text">加载中…</p>}
 

@@ -16,7 +16,7 @@
 ```bash
 cd backend
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8123
 ```
 
 前端：
@@ -34,7 +34,7 @@ cd novel_AI
 pip install langgraph anthropic httpx jieba
 ```
 
-打开 `http://localhost:5173`。
+打开 `http://localhost:5293`。
 
 ## 使用顺序
 
@@ -51,7 +51,7 @@ pip install langgraph anthropic httpx jieba
 ```bash
 cd backend
 # 1. 启动后端（另一个终端）
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8123
 
 # 2. 在 frontend 新建项目 + 完成 worldbuild（10 阶段），记下 project_id
 # 3. 跑 MVP（默认写 1 章，选版本 A）
