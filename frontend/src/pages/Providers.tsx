@@ -103,9 +103,18 @@ export default function Providers() {
 
   return (
     <div>
-      <div className="flex-between" style={{ marginBottom: 20 }}>
-        <h2 style={{ margin: 0 }}>Provider</h2>
-        {editingProvider && <span className="text-muted">正在编辑：{editingProvider.name}</span>}
+      <div className="page-header">
+        <div>
+          <h1 className="page-header__title">模型供应商</h1>
+          <div className="page-header__sub">
+            6 种供应商类型 · API Key 仅写入本地 SQLite · 删除会级联清空角色绑定
+          </div>
+        </div>
+        {editingProvider && (
+          <div className="page-header__actions">
+            <span className="badge-soft badge">正在编辑：{editingProvider.name}</span>
+          </div>
+        )}
       </div>
 
       {error && <div className="banner banner-danger">{error}</div>}
@@ -184,7 +193,7 @@ export default function Providers() {
               <div className="entity-card__desc mono">{provider.api_base || "未设置 API Base"}</div>
             </div>
             <div className="button-row">
-              {provider.needs_proxy && <span className="badge badge-draft">代理</span>}
+              {provider.needs_proxy && <span className="badge-soft badge">代理</span>}
               <button className="btn" onClick={() => startEdit(provider)}>
                 编辑
               </button>

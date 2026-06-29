@@ -98,21 +98,34 @@ export default function WorldBuild() {
 
   return (
     <div>
-      <div className="flex-between" style={{ marginBottom: 20 }}>
+      <div className="page-header">
         <div>
-          <h2 style={{ margin: 0 }}>{project.title || "未命名小说"}</h2>
-          <span className="text-muted">{project.genre}</span>
+          <h1 className="page-header__title">
+            {project.title || "未命名小说"}
+            {project.status === "ready" && (
+              <span className="badge-stamp">已就绪</span>
+            )}
+          </h1>
+          <div className="page-header__sub">
+            {project.genre}
+            {project.status === "ready"
+              ? " · 世界构建已完成"
+              : " · 10 阶段世界构建"}
+          </div>
         </div>
         {project.status === "ready" && (
-          <div style={{ display: "flex", gap: 8 }}>
+          <div className="page-header__actions">
+            <button
+              className="btn"
+              onClick={() => navigate(`/projects/${project.id}/chapters`)}
+            >
+              查看章节
+            </button>
             <button
               className="btn btn-primary"
               onClick={() => navigate(`/projects/${project.id}/bridge`)}
             >
-              ✍️ 去写作控制台
-            </button>
-            <button className="btn" onClick={() => navigate(`/projects/${project.id}/chapters`)}>
-              查看章节 →
+              ✍️ 去写作控制台 →
             </button>
           </div>
         )}
@@ -260,7 +273,7 @@ export default function WorldBuild() {
           {activeTab === "伏笔" &&
             result.foreshadowings.map((f) => (
               <div className="entity-card" key={f.id}>
-                <span className="badge badge-draft">{f.importance}</span>{" "}
+                <span className="badge-soft badge">{f.importance}</span>{" "}
                 <span className="entity-card__meta">{f.status}</span>
                 <div className="entity-card__desc">{f.content}</div>
               </div>

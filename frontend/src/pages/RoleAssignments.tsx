@@ -67,9 +67,16 @@ export default function RoleAssignments() {
 
   return (
     <div>
-      <div className="flex-between" style={{ marginBottom: 20 }}>
-        <h2 style={{ margin: 0 }}>角色配置</h2>
-        <span className="text-muted">共 {roles.length || 15} 个角色</span>
+      <div className="page-header">
+        <div>
+          <h1 className="page-header__title">角色绑定</h1>
+          <div className="page-header__sub">
+            15 个写作角色 · 把每个角色指给一个 Provider + 模型，下次写作时即时生效
+          </div>
+        </div>
+        <div className="page-header__actions">
+          <span className="badge-soft badge">共 {roles.length || 15} 个角色</span>
+        </div>
       </div>
 
       {error && <div className="banner banner-danger">{error}</div>}

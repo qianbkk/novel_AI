@@ -64,18 +64,35 @@ export default function Chapters() {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 20 }}>章节</h2>
+      <div className="page-header">
+        <div>
+          <h1 className="page-header__title">章节管理</h1>
+          <div className="page-header__sub">
+            {chapters.length > 0
+              ? `已存 ${chapters.length} 章 · 共 ${chapters.reduce((a, c) => a + c.word_count, 0).toLocaleString()} 字`
+              : "从写作控制台写入后会自动入库"}
+          </div>
+        </div>
+      </div>
 
       <div className="card">
-        <h3 className="card__title">新增一章</h3>
-        <div className="field" style={{ display: "flex", gap: 12 }}>
-          <div style={{ width: 100 }}>
+        <h3 className="card__title">手动新增一章</h3>
+        <div className="form-grid" style={{ marginBottom: 0 }}>
+          <div className="field">
             <label>章节号</label>
-            <input type="number" value={chapterNo} onChange={(e) => setChapterNo(Number(e.target.value))} />
+            <input
+              type="number"
+              value={chapterNo}
+              onChange={(e) => setChapterNo(Number(e.target.value))}
+            />
           </div>
-          <div style={{ flex: 1 }}>
+          <div className="field">
             <label>标题</label>
-            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="第N章 标题" />
+            <input
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              placeholder="第N章 标题"
+            />
           </div>
         </div>
         <div className="field">
@@ -90,7 +107,7 @@ export default function Chapters() {
 
         {repetitionWarnings.length > 0 && (
           <div className="banner banner-warn">
-            ⚠ 检测到与 {repetitionWarnings.length} 章高度相似（语义重复度 ≥ 0.85）：
+            检测到与 {repetitionWarnings.length} 章高度相似（语义重复度 ≥ 0.85）：
             {repetitionWarnings.map((w) => (
               <div key={w.compared_chapter_id} className="mono" style={{ marginTop: 4 }}>
                 {chapterLabel(w.compared_chapter_id)} · 相似度 {w.similarity}
@@ -99,30 +116,43 @@ export default function Chapters() {
           </div>
         )}
 
-        <button className="btn btn-primary" onClick={handleSave} disabled={saving || !content.trim()}>
+        <button
+          className="btn btn-primary"
+          onClick={handleSave}
+          disabled={saving || !content.trim()}
+        >
           {saving ? "保存中…" : "保存这一章"}
         </button>
       </div>
 
       <div className="card mt-24">
         <h3 className="card__title">语义检索</h3>
-        <div className="field" style={{ display: "flex", gap: 12 }}>
-          <input
-            style={{ flex: 1 }}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="检索意图，比如：重生回到答辩现场"
-          />
-          <select style={{ width: 200 }} value={characterId} onChange={(e) => setCharacterId(e.target.value)}>
-            <option value="">不限角色</option>
-            {characters.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-          <button className="btn" onClick={handleSearch} disabled={searching || !query.trim()}>
-            {searching ? "检索中…" : "检索"}
+        <div className="form-grid" style={{ alignItems: "end" }}>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label>检索意图</label>
+            <input
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="如：重生回到答辩现场"
+            />
+          </div>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label>角色过滤</label>
+            <select value={characterId} onChange={(e) => setCharacterId(e.target.value)}>
+              <option value="">不限角色</option>
+              {characters.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <div className="button-row" style={{ marginTop: 12 }}>
+          <button
+            className="btn btn-primary"
+            onClick={handleSearch}
+            disabled={searching || !query.trim()}
+          >
+            {searching ? "检索中…" : "开始检索"}
           </button>
         </div>
 
@@ -133,8 +163,8 @@ export default function Chapters() {
             ) : (
               searchResults.map((r) => (
                 <div className="entity-card" key={r.chapter_id}>
-                  <span className="entity-card__name">{chapterLabel(r.chapter_id)}</span>
-                  <span className="entity-card__meta">相似度 {r.similarity}</span>
+                  <span className="entity-card__name font-display">{chapterLabel(r.chapter_id)}</span>
+                  <span className="entity-card__meta mono">相似度 {r.similarity}</span>
                   <div className="entity-card__desc">{r.snippet}…</div>
                 </div>
               ))
@@ -144,21 +174,24 @@ export default function Chapters() {
       </div>
 
       <div className="card mt-24">
-        <h3 className="card__title">已保存的章节（{chapters.length}）</h3>
-        {chapters.length === 0 && <div className="empty-state">还没有章节。</div>}
-        {chapters.map((c) => (
-          <div className="chapter-row" key={c.id}>
-            <div>
-              <strong>
-                第{c.chapter_no}章 {c.title}
-              </strong>
-              <div className="text-muted" style={{ fontSize: "0.85rem" }}>
-                {c.content_preview}…
-              </div>
+        <h3 className="card__title">已保存章节</h3>
+        {chapters.length === 0 ? (
+          <div className="empty-state">
+            还没有章节
+            <div className="empty-state__hint">
+              从写作控制台点"写 N 章"，写完会自动出现在这里
             </div>
-            <span className="text-muted mono">{c.word_count} 字</span>
           </div>
-        ))}
+        ) : (
+          chapters.map((c) => (
+            <div className="chapter-row" key={c.id}>
+              <span className="chapter-row__no">第{c.chapter_no}章</span>
+              <div className="chapter-row__title">{c.title || "（无标题）"}</div>
+              <div className="chapter-row__preview">{c.content_preview}…</div>
+              <div className="chapter-row__meta">{c.word_count.toLocaleString()} 字</div>
+            </div>
+          ))
+        )}
       </div>
     </div>
   );

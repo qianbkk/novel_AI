@@ -45,85 +45,102 @@ export default function NewProject() {
   }
 
   return (
-    <div className="card" style={{ maxWidth: 640 }}>
-      <h2 className="card__title" style={{ fontSize: "1.2rem" }}>
-        新建小说
-      </h2>
-
-      <div className="field">
-        <label>小说名称（留空则 AI 自动取名）</label>
-        <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="输入小说名称" />
-      </div>
-
-      <div className="field">
-        <label>小说类型</label>
-        <div className="tag-group">
-          {GENRES.map((g) => (
-            <button
-              key={g}
-              className={`tag-btn ${genre === g ? "active" : ""}`}
-              onClick={() => setGenre(g)}
-              type="button"
-            >
-              {g}
-            </button>
-          ))}
+    <div>
+      <div className="page-header">
+        <div>
+          <h1 className="page-header__title">新建小说</h1>
+          <div className="page-header__sub">
+            填好题材和方向，下一步进入 10 阶段世界构建
+          </div>
         </div>
       </div>
 
-      <div className="field">
-        <label>叙事套路（可多选）</label>
-        <div className="tag-group">
-          {TROPES.map((t) => (
-            <button
-              key={t}
-              className={`tag-btn ${tropes.includes(t) ? "active" : ""}`}
-              onClick={() => toggleTrope(t)}
-              type="button"
-            >
-              {t}
-            </button>
-          ))}
+      <div className="card" style={{ maxWidth: 720 }}>
+        <div className="field">
+          <label>小说名称（留空则 AI 自动取名）</label>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="如：破境、长河日落、半城烟沙…"
+          />
+        </div>
+
+        <div className="field">
+          <label>小说类型</label>
+          <div className="tag-group">
+            {GENRES.map((g) => (
+              <button
+                key={g}
+                className={`tag-btn ${genre === g ? "active" : ""}`}
+                onClick={() => setGenre(g)}
+                type="button"
+              >
+                {g}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="field">
+          <label>叙事套路（可多选）</label>
+          <div className="tag-group">
+            {TROPES.map((t) => (
+              <button
+                key={t}
+                className={`tag-btn ${tropes.includes(t) ? "active" : ""}`}
+                onClick={() => toggleTrope(t)}
+                type="button"
+              >
+                {t}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="form-grid">
+          <div className="field">
+            <label>受众定位</label>
+            <select value={audience} onChange={(e) => setAudience(e.target.value)}>
+              {AUDIENCES.map((a) => (
+                <option key={a} value={a}>{a}</option>
+              ))}
+            </select>
+          </div>
+          <div className="field">
+            <label>篇幅字数</label>
+            <select value={lengthRange} onChange={(e) => setLengthRange(e.target.value)}>
+              {LENGTH_RANGES.map((l) => (
+                <option key={l} value={l}>{l}</option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className="field">
+          <label>主要冲突 / 创作方向</label>
+          <textarea
+            rows={3}
+            value={mainConflict}
+            onChange={(e) => setMainConflict(e.target.value)}
+            placeholder="简要描述你想写的故事方向或核心创意…"
+          />
+        </div>
+
+        {error && <div className="banner banner-danger">{error}</div>}
+
+        <div className="button-row" style={{ marginTop: 8 }}>
+          <button
+            className="btn btn-primary"
+            onClick={handleSubmit}
+            disabled={submitting}
+          >
+            {submitting ? "创建中…" : "创建并开始构建世界观 →"}
+          </button>
+          <button className="btn btn-ghost" onClick={() => navigate("/")}>
+            返回项目列表
+          </button>
         </div>
       </div>
-
-      <div className="field">
-        <label>受众定位</label>
-        <select value={audience} onChange={(e) => setAudience(e.target.value)}>
-          {AUDIENCES.map((a) => (
-            <option key={a} value={a}>
-              {a}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="field">
-        <label>篇幅字数</label>
-        <select value={lengthRange} onChange={(e) => setLengthRange(e.target.value)}>
-          {LENGTH_RANGES.map((l) => (
-            <option key={l} value={l}>
-              {l}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div className="field">
-        <label>主要冲突 / 创作方向</label>
-        <textarea
-          rows={3}
-          value={mainConflict}
-          onChange={(e) => setMainConflict(e.target.value)}
-          placeholder="简要描述你想写的故事方向或核心创意…"
-        />
-      </div>
-
-      {error && <div className="banner banner-danger">{error}</div>}
-
-      <button className="btn btn-primary" onClick={handleSubmit} disabled={submitting}>
-        {submitting ? "创建中…" : "创建并开始构建世界观"}
-      </button>
     </div>
   );
 }

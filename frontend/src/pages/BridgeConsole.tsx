@@ -183,14 +183,21 @@ export default function BridgeConsole() {
 
   return (
     <div>
-      <div className="flex-between" style={{ marginBottom: 20 }}>
+      <div className="page-header">
         <div>
-          <h2 style={{ margin: 0 }}>Bridge Console</h2>
-          <span className="text-muted">{project?.title || "未命名小说"}</span>
+          <h1 className="page-header__title">
+            写作控制台
+            {activeLabel && <span className="badge-stamp">{activeLabel}</span>}
+          </h1>
+          <div className="page-header__sub">
+            {project?.title || "未命名小说"} · 调 novel_AI 引擎跑命令
+          </div>
         </div>
-        <Link className="btn" to={`/projects/${projectId}/chapters`}>
-          查看章节
-        </Link>
+        <div className="page-header__actions">
+          <Link className="btn" to={`/projects/${projectId}/chapters`}>
+            查看章节
+          </Link>
+        </div>
       </div>
 
       {error && <div className="banner banner-danger">{error}</div>}
