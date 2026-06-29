@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { ChapterListItem, Character, ChapterSearchResult, RepetitionWarning } from "../types";
+import { useReveal } from "../hooks/useReveal";
 
 // 从章节 preview 中启发式推断衔接锁四个字段
 function deriveConnectionLock(c: ChapterListItem, all: ChapterListItem[]) {
@@ -45,8 +46,12 @@ export default function Chapters() {
   const [searchResults, setSearchResults] = useState<ChapterSearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
 
-  // 衔接锁下拉：只展开一个
+  // 衔接锁下拉：只展开一个（接入原生 <details>/<summary> 后仍由 React 受控，
+  // 只在 user-initiated 的章节切换时同步 DOM open 属性，避免动画冲突）
   const [expandedLock, setExpandedLock] = useState<string | null>(null);
+
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useReveal(rootRef);
 
   async function refreshChapters() {
     if (!projectId) return;
@@ -95,7 +100,7 @@ export default function Chapters() {
   const chaptersDesc = useMemo(() => [...chapters].sort((a, b) => b.chapter_no - a.chapter_no), [chapters]);
 
   return (
-    <div>
+    <div ref={rootRef}>
       <div className="page-header">
         <div>
           <h1 className="page-header__title">章节管理</h1>
@@ -206,7 +211,23 @@ export default function Chapters() {
       </div>
 
       {/* ============ 已保存章节 + 衔接锁 ============ */}
-      <div className="card mt-24">
+      <div className="card mt-24" style={{ position: "relative", overflow: "hidden" }}>
+        <div className="ink-drop-bg ink-drop-bg--soft" aria-hidden="true">
+          <svg viewBox="0 0 600 300" preserveAspectRatio="xMidYMid slice">
+            <defs>
+              <radialGradient id="chapter-ink" cx="80%" cy="20%" r="60%">
+                <stop offset="0%" stopColor="#6B8AFD" stopOpacity="0.18" />
+                <stop offset="100%" stopColor="#6B8AFD" stopOpacity="0" />
+              </radialGradient>
+            </defs>
+            <circle cx="500" cy="40" r="160" fill="url(#chapter-ink)" />
+            <path
+              d="M 30 280 q 18 -22 0 -44 q -18 22 0 44 z"
+              fill="#E06C5F"
+              opacity="0.10"
+            />
+          </svg>
+        </div>
         <h3 className="card__title">已保存章节 · 衔接锁</h3>
         <div className="text-muted" style={{ fontSize: 11.5, marginTop: -10, marginBottom: 12 }}>
           点击章节号可展开"章节衔接锁"：场景布置 / 角色登场 / 物品状态 / 前章收尾
@@ -221,58 +242,61 @@ export default function Chapters() {
         ) : (
           chaptersDesc.map((c) => {
             const lock = deriveConnectionLock(c, chapters);
-            const isOpen = expandedLock === c.id;
             const hasPrevChapter = c.chapter_no > 1;
+            const isOpen = expandedLock === c.id;
             return (
-              <div key={c.id} style={{ position: "relative" }}>
-                <div
-                  className={`chapter-row ${isOpen ? "is-locked" : ""}`}
-                  style={{ cursor: "pointer" }}
-                  onClick={() => setExpandedLock(isOpen ? null : c.id)}
-                >
-                  <span className="chapter-row__no">{isOpen ? "▼" : "▶"} 第{c.chapter_no}章</span>
+              <details
+                key={c.id}
+                className="lock-disclosure reveal"
+                open={isOpen}
+                onToggle={(e) => {
+                  // 受控同步：原生 toggle 事件 → React state
+                  const target = e.currentTarget;
+                  setExpandedLock(target.open ? c.id : null);
+                }}
+              >
+                <summary className={`chapter-row ${isOpen ? "is-locked" : ""}`}>
+                  <span className="chapter-row__no">第{c.chapter_no}章</span>
                   <div className="chapter-row__title">{c.title || "（无标题）"}</div>
                   <div className="chapter-row__preview">{c.content_preview}…</div>
                   <div className="chapter-row__meta">{c.word_count.toLocaleString()} 字</div>
-                </div>
+                </summary>
                 <span className="lock-mark" />
-                {isOpen && (
-                  <div className="conn-lock" style={{ margin: "0 0 14px 56px" }}>
-                    <div className="conn-lock__pane">
-                      <div className="conn-lock__head">场景布置</div>
-                      <ul className="conn-lock__list">
-                        <li className="conn-lock__item">{lock.sceneLayout}</li>
-                      </ul>
-                    </div>
-                    <div className="conn-lock__pane">
-                      <div className="conn-lock__head">角色登场 / 离场</div>
-                      <ul className="conn-lock__list">
-                        {lock.appearance.length > 0 ? (
-                          lock.appearance.map((n) => (
-                            <li className="conn-lock__item" key={n}>{n}</li>
-                          ))
-                        ) : (
-                          <li className="conn-lock__item conn-lock__item--empty">未识别到已知角色（可能为本章首次登场）</li>
-                        )}
-                      </ul>
-                    </div>
-                    <div className="conn-lock__pane">
-                      <div className="conn-lock__head">物品关联状态</div>
-                      <ul className="conn-lock__list">
-                        <li className="conn-lock__item">{lock.itemState}</li>
-                      </ul>
-                    </div>
-                    <div className="conn-lock__pane">
-                      <div className="conn-lock__head">前章收尾 / 后章悬念</div>
-                      <ul className="conn-lock__list">
-                        <li className={`conn-lock__item ${!hasPrevChapter ? "conn-lock__item--empty" : ""}`}>
-                          {hasPrevChapter ? lock.prevCliff : "（本书第一章，无前章）"}
-                        </li>
-                      </ul>
-                    </div>
+                <div className="conn-lock" style={{ margin: "0 0 14px 56px" }}>
+                  <div className="conn-lock__pane">
+                    <div className="conn-lock__head">场景布置</div>
+                    <ul className="conn-lock__list">
+                      <li className="conn-lock__item">{lock.sceneLayout}</li>
+                    </ul>
                   </div>
-                )}
-              </div>
+                  <div className="conn-lock__pane">
+                    <div className="conn-lock__head">角色登场 / 离场</div>
+                    <ul className="conn-lock__list">
+                      {lock.appearance.length > 0 ? (
+                        lock.appearance.map((n) => (
+                          <li className="conn-lock__item" key={n}>{n}</li>
+                        ))
+                      ) : (
+                        <li className="conn-lock__item conn-lock__item--empty">未识别到已知角色（可能为本章首次登场）</li>
+                      )}
+                    </ul>
+                  </div>
+                  <div className="conn-lock__pane">
+                    <div className="conn-lock__head">物品关联状态</div>
+                    <ul className="conn-lock__list">
+                      <li className="conn-lock__item">{lock.itemState}</li>
+                    </ul>
+                  </div>
+                  <div className="conn-lock__pane">
+                    <div className="conn-lock__head">前章收尾 / 后章悬念</div>
+                    <ul className="conn-lock__list">
+                      <li className={`conn-lock__item ${!hasPrevChapter ? "conn-lock__item--empty" : ""}`}>
+                        {hasPrevChapter ? lock.prevCliff : "（本书第一章，无前章）"}
+                      </li>
+                    </ul>
+                  </div>
+                </div>
+              </details>
             );
           })
         )}

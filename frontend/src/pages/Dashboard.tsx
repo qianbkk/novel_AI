@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import type { ChapterListItem, Project } from "../types";
+import { useReveal } from "../hooks/useReveal";
 
 function statusBadge(status: Project["status"]) {
   if (status === "ready") return <span className="badge-stamp">已就绪</span>;
@@ -9,16 +10,143 @@ function statusBadge(status: Project["status"]) {
   return <span className="badge-draft">草稿</span>;
 }
 
-// 把章节列表压缩成"三道记忆防线"的可视深度
-// L1 主线记忆：plot_skeleton 长度 -> 弧段数
-// L2 章节衔接锁：已有章节数（每章都是一个衔接锁）
-// L3 压缩存储：累计字数 / 10000 的对数，约等于长篇规模
 function memoryDepth(p: Project, chapters: ChapterListItem[]) {
-  const l1 = p.status === "ready" ? 5 : 1;        // 主线层是否已建立
-  const l2 = Math.min(12, chapters.length);        // 衔接锁数量
+  const l1 = p.status === "ready" ? 5 : 1;
+  const l2 = Math.min(12, chapters.length);
   const words = chapters.reduce((a, c) => a + c.word_count, 0);
   const l3 = Math.min(12, Math.floor(Math.log10(Math.max(1, words)) * 3) + 1);
   return { l1, l2, l3 };
+}
+
+// 6 大模块元数据：显示在顶栏罗盘
+const MODULES = [
+  { idx: "M01", title: "多重记忆防御", sub: "三道防线·可控推理", metric: "L1 弧段 + L2 衔接 + L3 压缩" },
+  { idx: "M02", title: "世界立法", sub: "GIS · 力量 · 物权", metric: "世界构建完成后即生效" },
+  { idx: "M03", title: "叙事工程", sub: "七要素 + 多模式大纲", metric: "欲望/阻碍/行动/结果/意外/转折/结局" },
+  { idx: "M04", title: "角色生命周期", sub: "数字实体 · 因果引擎", metric: "存续状态实时同步" },
+  { idx: "M05", title: "章节执行", sub: "实时人机协作", metric: "每章含场景+伏笔+状态" },
+  { idx: "M06", title: "AI 治理", sub: "规则中心 · 文笔指纹", metric: "毒舌模式 + 去味" },
+];
+
+function ModuleCompass({ projects, chapterMap }: { projects: Project[]; chapterMap: Record<string, ChapterListItem[]> }) {
+  const totalChapters = Object.values(chapterMap).reduce((a, c) => a + c.length, 0);
+  const totalWords = Object.values(chapterMap)
+    .flat()
+    .reduce((a, c) => a + c.word_count, 0);
+  const ready = projects.filter((p) => p.status === "ready").length;
+  // 罗盘进度 = 已构建项目比例 * 0.4 + 已写章节比例 * 0.4 + 字数比例 * 0.2
+  const arcPct = Math.min(
+    100,
+    Math.round(
+      (ready / Math.max(1, projects.length)) * 40 +
+        Math.min(40, (totalChapters / 200) * 40) +
+        Math.min(20, (Math.log10(Math.max(1, totalWords)) / 6) * 20),
+    ),
+  );
+  const R = 76;
+  const C = 2 * Math.PI * R;
+  const offset = C * (1 - arcPct / 100);
+
+  return (
+    <div className="module-compass reveal">
+      {/* 背景墨滴 SVG 装饰 */}
+      <div className="ink-drop-bg ink-drop-bg--soft">
+        <svg viewBox="0 0 600 200" preserveAspectRatio="xMidYMid slice">
+          <defs>
+            <radialGradient id="ink-grad" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stopColor="#E06C5F" stopOpacity="0.18" />
+              <stop offset="100%" stopColor="#E06C5F" stopOpacity="0" />
+            </radialGradient>
+          </defs>
+          <circle cx="540" cy="40" r="120" fill="url(#ink-grad)" />
+          <circle cx="60" cy="180" r="90" fill="url(#ink-grad)" opacity="0.6" />
+          <path
+            d="M 480 30 q 10 20 0 40 q -10 -20 0 -40 z"
+            fill="#6B8AFD"
+            opacity="0.10"
+          />
+        </svg>
+      </div>
+
+      <div className="module-compass__title">
+        落笔 · FirstDraft
+        <span className="module-compass__sub">6 大模块导览 · 长篇工业化</span>
+      </div>
+
+      <div className="module-compass__grid">
+        <div className="module-compass__dial" aria-label="整体进度">
+          <svg viewBox="0 0 200 200">
+            <defs>
+              <linearGradient id="dial-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+                <stop offset="0%" stopColor="#6B8AFD" />
+                <stop offset="50%" stopColor="#93A9FF" />
+                <stop offset="100%" stopColor="#E06C5F" />
+              </linearGradient>
+            </defs>
+            {/* 刻度环 */}
+            {Array.from({ length: 36 }).map((_, i) => {
+              const a = (i / 36) * Math.PI * 2 - Math.PI / 2;
+              const x1 = 100 + Math.cos(a) * 88;
+              const y1 = 100 + Math.sin(a) * 88;
+              const x2 = 100 + Math.cos(a) * 92;
+              const y2 = 100 + Math.sin(a) * 92;
+              return (
+                <line
+                  key={i}
+                  x1={x1} y1={y1} x2={x2} y2={y2}
+                  stroke={i % 9 === 0 ? "var(--accent-strong)" : "var(--border-strong)"}
+                  strokeWidth={i % 9 === 0 ? 1.4 : 0.6}
+                  strokeLinecap="round"
+                  opacity={i % 9 === 0 ? 0.9 : 0.4}
+                />
+              );
+            })}
+            <circle cx="100" cy="100" r={R} className="dial-arc-bg" />
+            <circle
+              cx="100"
+              cy="100"
+              r={R}
+              className="dial-arc-fg"
+              strokeDasharray={C}
+              strokeDashoffset={offset}
+              transform="rotate(-90 100 100)"
+            />
+            {/* 4 个方位文字 */}
+            {[
+              { x: 100, y: 18, t: "主线" },
+              { x: 182, y: 104, t: "立法" },
+              { x: 100, y: 192, t: "执行" },
+              { x: 18, y: 104, t: "治理" },
+            ].map((p) => (
+              <text key={p.t} x={p.x} y={p.y} textAnchor="middle" className="dial-tick-text">
+                {p.t}
+              </text>
+            ))}
+            {/* 中心读数 */}
+            <text x="100" y="96" textAnchor="middle" className="dial-label">整体</text>
+            <text x="100" y="116" textAnchor="middle" fill="var(--text)" fontFamily="var(--font-display)" fontSize="22" fontWeight={700}>
+              {arcPct}%
+            </text>
+            {/* 中心小光点 */}
+            <circle cx="100" cy="138" r="3" className="dial-pulse" />
+          </svg>
+        </div>
+
+        <div className="module-compass__cells">
+          {MODULES.map((m) => (
+            <div className="compass-cell" key={m.idx}>
+              <div className="compass-cell__head">
+                <span className="compass-cell__index">{m.idx}</span>
+                {m.title}
+              </div>
+              <div className="compass-cell__sub">{m.sub}</div>
+              <div className="compass-cell__metric">{m.metric}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 export default function Dashboard() {
@@ -26,13 +154,14 @@ export default function Dashboard() {
   const [chapterMap, setChapterMap] = useState<Record<string, ChapterListItem[]>>({});
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  useReveal(rootRef);
 
   useEffect(() => {
     api
       .listProjects()
       .then(async (ps) => {
         setProjects(ps);
-        // 并行拉取每个项目的章节，构建最近 3 章预览
         const entries = await Promise.all(
           ps.map(async (p) => {
             try {
@@ -48,14 +177,19 @@ export default function Dashboard() {
       .catch((e) => setError(String(e)));
   }, []);
 
+  const totalWords = useMemo(
+    () => Object.values(chapterMap).flat().reduce((a, c) => a + c.word_count, 0),
+    [chapterMap],
+  );
+
   return (
-    <div>
+    <div ref={rootRef}>
       <div className="page-header">
         <div>
           <h1 className="page-header__title">我的项目</h1>
           <div className="page-header__sub">
             {projects
-              ? `共 ${projects.length} 个项目 · 每张卡片都是一座落笔的小作坊`
+              ? `共 ${projects.length} 个项目 · ${Object.values(chapterMap).flat().length} 章 · ${totalWords.toLocaleString()} 字`
               : "加载中…"}
           </div>
         </div>
@@ -76,6 +210,8 @@ export default function Dashboard() {
         </div>
       )}
 
+      {projects && projects.length > 0 && <ModuleCompass projects={projects} chapterMap={chapterMap} />}
+
       {projects && projects.length === 0 && (
         <div className="card">
           <div className="empty-state">
@@ -89,17 +225,19 @@ export default function Dashboard() {
 
       {projects && projects.length > 0 && (
         <div className="grid-cards">
-          {projects.map((p) => {
+          {projects.map((p, i) => {
             const chs = chapterMap[p.id] || [];
             const recent = chs.slice(-3).reverse();
             const mem = memoryDepth(p, chs);
-            const totalWords = chs.reduce((a, c) => a + c.word_count, 0);
-            // 弧进度 = 已写章节 / 长篇目标 (粗略用 200 章当 200 万字基准)
+            const projectWords = chs.reduce((a, c) => a + c.word_count, 0);
             const arcPct = Math.min(100, Math.round((chs.length / 200) * 100));
+            // 弧曲线数据：取最近 12 章的累计字数
+            const lastN = chs.slice(-12);
+            const wps = lastN.map((c, idx) => ({ x: idx, y: c.word_count }));
             return (
               <div
                 key={p.id}
-                className="project-card"
+                className={`project-card reveal reveal--delay-${Math.min(5, i + 1)}`}
                 onClick={() =>
                   navigate(
                     p.status === "ready"
@@ -108,6 +246,13 @@ export default function Dashboard() {
                   )
                 }
               >
+                {/* 卡片装饰羽毛笔 SVG */}
+                <svg className="ink-splash-corner" viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M50 8c-7 0-17 5-26 14-7 7-12 17-12 24l12-12c10-10 14-19 14-26z" stroke="var(--accent-strong)" />
+                  <path d="M12 46l12-12" stroke="var(--stamp)" />
+                  <path d="M22 36l2 2" stroke="var(--stamp)" />
+                </svg>
+
                 <div className="project-card__title">
                   {p.title || "未命名小说"}
                 </div>
@@ -135,13 +280,13 @@ export default function Dashboard() {
                   <div className="memory-row memory-row--l3" style={{ padding: "6px 10px 6px 12px" }}>
                     <span className="memory-row__layer">L3</span>
                     <span className="memory-row__title" style={{ fontSize: 11.5 }}>
-                      压缩存储 · {totalWords.toLocaleString()} 字
+                      压缩存储 · {projectWords.toLocaleString()} 字
                     </span>
                     <span className="memory-row__count">深度 {mem.l3}/12</span>
                   </div>
                 </div>
 
-                {/* 弧进度条 */}
+                {/* 弧进度条 + 弧曲线 */}
                 <div className="project-card__progress">
                   <div className="arc-pill" style={{ marginBottom: 4 }}>
                     <span>弧进度</span>
@@ -151,16 +296,60 @@ export default function Dashboard() {
                   <div className="progress-track" style={{ height: 3, margin: 0 }}>
                     <div className="progress-fill" style={{ width: `${arcPct}%` }} />
                   </div>
+                  {wps.length > 1 && (
+                    <div className="arc-curve" aria-hidden="true">
+                      <svg viewBox={`0 0 ${Math.max(40, wps.length * 12)} 64`} preserveAspectRatio="none">
+                        <defs>
+                          <linearGradient id={`arc-grad-${p.id}`} x1="0" x2="1" y1="0" y2="0">
+                            <stop offset="0%" stopColor="var(--accent)" />
+                            <stop offset="100%" stopColor="var(--accent-strong)" />
+                          </linearGradient>
+                        </defs>
+                        <line
+                          x1="0" y1="32" x2={Math.max(40, wps.length * 12)} y2="32"
+                          className="arc-curve__bg-line"
+                        />
+                        {(() => {
+                          const W = Math.max(40, wps.length * 12);
+                          const max = Math.max(1, ...wps.map((d) => d.y));
+                          const pts = wps.map((d, i) => {
+                            const x = (i / Math.max(1, wps.length - 1)) * W;
+                            const y = 60 - (d.y / max) * 50;
+                            return `${x.toFixed(1)},${y.toFixed(1)}`;
+                          });
+                          const path = `M ${pts.join(" L ")}`;
+                          return (
+                            <>
+                              <path d={path} className="arc-curve__fg-line" stroke={`url(#arc-grad-${p.id})`} />
+                              {wps.map((d, i) => {
+                                const x = (i / Math.max(1, wps.length - 1)) * W;
+                                const y = 60 - (d.y / max) * 50;
+                                return <circle key={i} cx={x} cy={y} r="2" className="arc-curve__dot" />;
+                              })}
+                            </>
+                          );
+                        })()}
+                      </svg>
+                    </div>
+                  )}
                 </div>
 
-                {/* 最近三章预览 */}
+                {/* 章节预览 fan（3D 叠层） */}
                 {recent.length > 0 && (
-                  <div className="last-chapters">
-                    {recent.map((c) => (
-                      <div className="last-chapter-line" key={c.id}>
-                        <span className="last-chapter-line__no">第{c.chapter_no}章</span>
-                        <span className="last-chapter-line__title">{c.title || "（无标题）"}</span>
-                        <span className="last-chapter-line__preview">{c.content_preview}</span>
+                  <div className="chapter-fan" aria-hidden="true">
+                    {recent.map((c, idx) => (
+                      <div
+                        key={c.id}
+                        className="chapter-fan__card"
+                        style={{
+                          transform: `translateY(${idx * 4}px) scale(${1 - idx * 0.04})`,
+                          zIndex: recent.length - idx,
+                          opacity: 1 - idx * 0.18,
+                        }}
+                      >
+                        <span className="chapter-fan__card__no">第{c.chapter_no}章</span>
+                        <span className="chapter-fan__card__title">{c.title || "（无标题）"}</span>
+                        <span className="chapter-fan__card__preview">{c.content_preview}</span>
                       </div>
                     ))}
                   </div>

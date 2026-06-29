@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { BridgeLogLine, BridgePendingItem, BridgeStatus, ChapterListItem, Project } from "../types";
+import { useReveal } from "../hooks/useReveal";
 
 type PanelData = BridgeStatus | BridgePendingItem[] | Record<string, unknown>[] | Record<string, unknown> | null;
 
@@ -44,6 +45,9 @@ export default function BridgeConsole() {
   const [plotStep, setPlotStep] = useState<number>(0); // 当前 chapter 在七要素中的进度
   const eventSourceRef = useRef<EventSource | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const nodeFlipRef = useRef<HTMLDivElement | null>(null);
+  useReveal(rootRef);
 
   useEffect(() => {
     if (!projectId) return;
@@ -72,6 +76,35 @@ export default function BridgeConsole() {
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ block: "end" });
   }, [logs]);
+
+  // 当章节数变化时（命令完成 / 重新加载），用 Web Animations API 给时间线一个脉冲
+  const prevChapterCountRef = useRef(0);
+  useEffect(() => {
+    if (chapters.length > prevChapterCountRef.current) {
+      const tl = document.querySelector(".chapter-timeline");
+      if (tl && typeof (tl as HTMLElement).animate === "function") {
+        (tl as HTMLElement).animate(
+          [
+            { boxShadow: "0 0 0 0 rgba(107,138,253,0.55)" },
+            { boxShadow: "0 0 0 6px rgba(107,138,253,0)" },
+          ],
+          { duration: 1200, easing: "cubic-bezier(.2,.7,.2,1)" },
+        );
+      }
+    }
+    prevChapterCountRef.current = chapters.length;
+  }, [chapters.length]);
+
+  // 当前节点变化时翻 3D 卡
+  useEffect(() => {
+    const el = nodeFlipRef.current;
+    if (!el) return;
+    if (activeNode) {
+      el.classList.add("is-flipped");
+    } else {
+      el.classList.remove("is-flipped");
+    }
+  }, [activeNode]);
 
   function appendLog(line: string) {
     setLogs((prev) => [...prev, line]);
@@ -214,7 +247,7 @@ export default function BridgeConsole() {
   if (!projectId) return <div className="banner banner-danger">缺少项目 ID。</div>;
 
   return (
-    <div>
+    <div ref={rootRef}>
       <div className="page-header">
         <div>
           <h1 className="page-header__title">
@@ -242,13 +275,48 @@ export default function BridgeConsole() {
       <div className="card">
         <h3 className="card__title">实时记忆层 · 当前节点状态</h3>
 
-        {/* 当前节点状态条（已有逻辑） */}
-        {activeNode && (
-          <div className="banner banner-info" style={{ marginBottom: 12 }}>
-            <strong>{activeNode}</strong>
-            <span style={{ marginLeft: 8 }}>运行中…</span>
+        {/* 3D 翻牌：当前节点状态 */}
+        <div className="perspective-3d" style={{ marginBottom: 14, height: 64 }}>
+          <div
+            ref={nodeFlipRef}
+            className="flip-3d"
+            style={{ position: "relative", height: "100%" }}
+          >
+            <div
+              className="flip-3d__face banner banner-info"
+              style={{ margin: 0, display: "flex", alignItems: "center", gap: 10 }}
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--accent-strong)" strokeWidth="1.5" strokeLinecap="round">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7v5l3 2" />
+              </svg>
+              <span style={{ fontFamily: "var(--font-mono)", fontSize: 11.5, color: "var(--text-muted)", letterSpacing: "0.05em" }}>
+                IDLE · 等待命令
+              </span>
+              <span className="text-faint" style={{ fontSize: 11, marginLeft: "auto" }}>点击运行命令触发翻牌</span>
+            </div>
+            <div
+              className="flip-3d__face flip-3d__face--back banner"
+              style={{
+                margin: 0,
+                background: "var(--accent-soft)",
+                borderColor: "var(--accent)",
+                color: "var(--accent-strong)",
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                boxShadow: "0 0 18px rgba(107,138,253,0.35)",
+              }}
+            >
+              <span
+                className="dial-pulse"
+                style={{ width: 10, height: 10, borderRadius: "50%", background: "var(--accent-strong)" }}
+              />
+              <strong style={{ fontFamily: "var(--font-display)", fontSize: 14 }}>{activeNode ?? "—"}</strong>
+              <span style={{ marginLeft: "auto", fontFamily: "var(--font-mono)", fontSize: 11.5 }}>运行中…</span>
+            </div>
           </div>
-        )}
+        </div>
 
         {/* 三个温度计：L2 衔接锁热度 · L3 压缩存储容量 · L5 弧进度 */}
         <div className="memory-stack" style={{ marginBottom: 18 }}>
@@ -284,6 +352,46 @@ export default function BridgeConsole() {
             <span className="thermo__legend">弧 {Math.floor(chapters.length / 25) + 1}/4</span>
           </div>
         </div>
+
+        {/* 章节时间线 sparkline（最近 30 章字数曲线） */}
+        {chapters.length > 0 && (() => {
+          const tail = chapters.slice(-30);
+          const W = 600, H = 56;
+          const max = Math.max(1, ...tail.map((c) => c.word_count));
+          const pts = tail.map((c, i) => {
+            const x = (i / Math.max(1, tail.length - 1)) * (W - 8) + 4;
+            const y = H - 6 - (c.word_count / max) * (H - 12);
+            return [x, y] as const;
+          });
+          const linePath = pts.map((p, i) => (i === 0 ? `M ${p[0]} ${p[1]}` : `L ${p[0]} ${p[1]}`)).join(" ");
+          const areaPath = `${linePath} L ${pts[pts.length - 1][0]} ${H} L ${pts[0][0]} ${H} Z`;
+          return (
+            <div className="chapter-timeline">
+              <div className="chapter-timeline__head">
+                <span>章节时间线 · 最近 {tail.length} 章字数</span>
+                <span>峰值 {max.toLocaleString()} 字</span>
+              </div>
+              <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="tl-grad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--accent-strong)" stopOpacity="0.65" />
+                    <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.0" />
+                  </linearGradient>
+                </defs>
+                <path d={areaPath} className="tl-area" />
+                <path d={linePath} className="tl-spark" />
+                {pts.map(([x, y], i) => (
+                  <circle
+                    key={i}
+                    cx={x} cy={y}
+                    r={i === pts.length - 1 ? 4 : 2}
+                    className={i === pts.length - 1 ? "tl-pulse" : "tl-dot"}
+                  />
+                ))}
+              </svg>
+            </div>
+          );
+        })()}
 
         {/* 七要素剧情模型：wheel */}
         <h3 className="module-heading">

@@ -1490,3 +1490,445 @@ label {
   margin-top: 12px;
 }
 
+/* ============================================================
+   "惊艳" 增量层（HTML5 / CSS 3D / SVG 动画 / scroll reveal）
+   保持现有类名 0 破坏；全部为新增。
+   ============================================================ */
+
+/* ---- 滚动入场：IntersectionObserver 触发的淡入 + 上移 ---- */
+.reveal {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 0.7s cubic-bezier(.2,.7,.2,1), transform 0.7s cubic-bezier(.2,.7,.2,1);
+  will-change: opacity, transform;
+}
+.reveal.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+.reveal--delay-1 { transition-delay: 60ms; }
+.reveal--delay-2 { transition-delay: 140ms; }
+.reveal--delay-3 { transition-delay: 220ms; }
+.reveal--delay-4 { transition-delay: 300ms; }
+.reveal--delay-5 { transition-delay: 380ms; }
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal { opacity: 1; transform: none; transition: none; }
+}
+
+/* ---- 3D 透视 + 翻转 ---- */
+.perspective-3d { perspective: 1200px; }
+.flip-3d {
+  position: relative;
+  transform-style: preserve-3d;
+  transition: transform 0.8s cubic-bezier(.2,.7,.2,1);
+}
+.flip-3d.is-flipped { transform: rotateY(180deg); }
+.flip-3d__face {
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+.flip-3d__face--back {
+  position: absolute;
+  inset: 0;
+  transform: rotateY(180deg);
+}
+
+/* ---- 墨滴 / 背景装饰 SVG 容器 ---- */
+.ink-drop-bg {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+  z-index: 0;
+}
+.ink-drop-bg svg {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  opacity: 0.18;
+}
+.ink-drop-bg--soft { opacity: 0.55; }
+.ink-drop-bg--soft svg { opacity: 0.10; }
+
+/* 卡片内嵌墨滴：右上角 SVG 羽毛笔 + 墨滴飞溅 */
+.ink-splash-corner {
+  position: absolute;
+  top: 12px; right: 12px;
+  width: 64px; height: 64px;
+  pointer-events: none;
+  opacity: 0.10;
+  z-index: 0;
+}
+
+/* ---- Dashboard 顶栏 "6 模块罗盘" ---- */
+.module-compass {
+  position: relative;
+  background: linear-gradient(135deg, var(--bg-elevated) 0%, var(--surface) 100%);
+  border: 1px solid var(--border-strong);
+  border-radius: 14px;
+  padding: 22px 26px 18px;
+  margin-bottom: 24px;
+  overflow: hidden;
+}
+.module-compass__title {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  display: flex; align-items: baseline; gap: 10px;
+  margin-bottom: 14px;
+}
+.module-compass__sub {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.module-compass__grid {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 26px;
+  align-items: center;
+  position: relative;
+  z-index: 1;
+}
+.module-compass__dial {
+  width: 200px; height: 200px;
+  position: relative;
+  margin: 0 auto;
+}
+.module-compass__dial svg { width: 100%; height: 100%; display: block; }
+.dial-arc-bg { fill: none; stroke: var(--border-strong); stroke-width: 4; }
+.dial-arc-fg {
+  fill: none;
+  stroke: url(#dial-grad);
+  stroke-width: 6;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 1.2s cubic-bezier(.2,.7,.2,1);
+  filter: drop-shadow(0 0 6px rgba(107,138,253,0.35));
+}
+.dial-pulse {
+  fill: var(--accent);
+  filter: drop-shadow(0 0 8px var(--accent-strong));
+  animation: dialPulse 2.2s ease-in-out infinite;
+}
+@keyframes dialPulse {
+  0%, 100% { r: 5; opacity: 0.85; }
+  50% { r: 8; opacity: 1; }
+}
+.dial-tick-text {
+  font-family: var(--font-mono);
+  font-size: 8px;
+  fill: var(--text-faint);
+  letter-spacing: 0.04em;
+}
+.dial-label {
+  font-family: var(--font-display);
+  font-size: 9.5px;
+  fill: var(--text-muted);
+  letter-spacing: 0.05em;
+}
+
+.module-compass__cells {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.compass-cell {
+  position: relative;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: default;
+  transition: border-color .15s, background .15s, transform .15s;
+  overflow: hidden;
+}
+.compass-cell::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 0; bottom: 0;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0.6;
+}
+.compass-cell:hover {
+  border-color: var(--border-strong);
+  background: var(--bg-elevated);
+  transform: translateY(-1px);
+}
+.compass-cell__head {
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--font-display);
+  font-size: 12.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  margin-bottom: 2px;
+}
+.compass-cell__index {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  padding: 1px 5px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+}
+.compass-cell__sub {
+  font-size: 11px;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.compass-cell__metric {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  margin-top: 4px;
+}
+@media (max-width: 880px) {
+  .module-compass__grid { grid-template-columns: 1fr; }
+  .module-compass__dial { width: 160px; height: 160px; }
+  .module-compass__cells { grid-template-columns: repeat(2, minmax(0,1fr)); }
+}
+
+/* ---- 章节时间线 sparkline ---- */
+.chapter-timeline {
+  position: relative;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 16px 8px;
+  margin-top: 12px;
+}
+.chapter-timeline__head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 11px; color: var(--text-muted);
+  margin-bottom: 6px;
+  font-family: var(--font-mono);
+  letter-spacing: 0.05em;
+}
+.chapter-timeline svg { display: block; width: 100%; height: 56px; overflow: visible; }
+.tl-spark { fill: none; stroke: var(--accent); stroke-width: 1.5; filter: drop-shadow(0 0 4px rgba(107,138,253,0.4)); }
+.tl-area { fill: url(#tl-grad); opacity: 0.45; }
+.tl-dot {
+  fill: var(--accent-strong);
+  filter: drop-shadow(0 0 4px var(--accent-strong));
+}
+.tl-pulse {
+  fill: var(--stamp);
+  filter: drop-shadow(0 0 6px var(--stamp));
+  animation: tlPulse 1.4s ease-in-out infinite;
+}
+@keyframes tlPulse {
+  0%, 100% { r: 3; opacity: 0.6; }
+  50% { r: 5.5; opacity: 1; }
+}
+
+/* ---- 势力关系 SVG 图 ---- */
+.faction-graph {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+}
+.faction-graph svg { display: block; width: 100%; height: 320px; }
+.fg-node-circle {
+  fill: var(--surface);
+  stroke: var(--accent);
+  stroke-width: 1.5;
+  transition: fill .15s, stroke .15s;
+  cursor: pointer;
+}
+.fg-node:hover .fg-node-circle { fill: var(--bg-elevated); stroke: var(--accent-strong); }
+.fg-node-label {
+  font-family: var(--font-display);
+  font-size: 12px;
+  fill: var(--text);
+  pointer-events: none;
+  letter-spacing: 0.02em;
+}
+.fg-edge {
+  fill: none;
+  stroke: var(--text-faint);
+  stroke-width: 0.8;
+  opacity: 0.5;
+  transition: opacity .15s, stroke .15s;
+}
+.fg-edge--hostile { stroke: var(--stamp); opacity: 0.7; }
+.fg-edge--ally { stroke: var(--moss); opacity: 0.7; }
+
+/* ---- 详情面板：details/summary 美化 ---- */
+details.lock-disclosure {
+  border-left: 1px dashed var(--border);
+  padding-left: 12px;
+  margin-left: 0;
+  transition: border-color .15s;
+}
+details.lock-disclosure[open] {
+  border-left-color: var(--stamp);
+  animation: lockOpen 0.5s ease-out;
+}
+@keyframes lockOpen {
+  from { opacity: 0.4; transform: translateX(-6px); }
+  to   { opacity: 1;   transform: translateX(0); }
+}
+details.lock-disclosure > summary {
+  list-style: none;
+  cursor: pointer;
+  position: relative;
+  padding-left: 22px;
+  padding-right: 14px;
+  outline: none;
+}
+details.lock-disclosure > summary::-webkit-details-marker { display: none; }
+details.lock-disclosure > summary::before {
+  content: "▸";
+  position: absolute;
+  left: 4px; top: 50%;
+  transform: translateY(-50%);
+  color: var(--accent-strong);
+  transition: transform 0.25s ease;
+  font-size: 10px;
+}
+details.lock-disclosure[open] > summary::before {
+  transform: translateY(-50%) rotate(90deg);
+  color: var(--stamp);
+}
+details.lock-disclosure > summary:hover { background: rgba(255,255,255,0.02); }
+
+/* ---- <dialog> 弹层样式 ---- */
+dialog.ink-dialog {
+  border: 1px solid var(--border-strong);
+  background: var(--bg-elevated);
+  color: var(--text);
+  border-radius: 10px;
+  padding: 22px 24px;
+  width: min(440px, calc(100vw - 32px));
+  box-shadow: 0 12px 40px rgba(0,0,0,0.55), 0 0 0 1px rgba(255,255,255,0.04) inset;
+}
+dialog.ink-dialog::backdrop {
+  background: rgba(8, 10, 16, 0.62);
+  backdrop-filter: blur(3px);
+}
+dialog.ink-dialog__title {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin: 0 0 4px;
+}
+dialog.ink-dialog__sub {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 0 0 14px;
+}
+dialog.ink-dialog__actions {
+  display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px;
+}
+
+/* ---- 字符闪烁（写入时的"墨水落笔"）---- */
+@keyframes inkDrop {
+  0%   { transform: translateY(-3px) scale(0.85); opacity: 0; }
+  60%  { transform: translateY(0) scale(1.05); opacity: 1; }
+  100% { transform: translateY(0) scale(1); opacity: 1; }
+}
+.ink-drop {
+  display: inline-block;
+  animation: inkDrop 0.5s cubic-bezier(.2,.7,.2,1) both;
+}
+
+/* ---- 翻牌卡片（章节预览 fan）---- */
+.chapter-fan {
+  position: relative;
+  height: 92px;
+  perspective: 800px;
+  margin-top: 10px;
+}
+.chapter-fan__card {
+  position: absolute;
+  inset: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  transform-origin: center top;
+  transition: transform 0.4s cubic-bezier(.2,.7,.2,1), box-shadow .3s;
+  cursor: pointer;
+}
+.chapter-fan__card:hover { box-shadow: 0 6px 20px rgba(0,0,0,0.55); }
+.chapter-fan__card__no {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+.chapter-fan__card__title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  color: var(--text);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chapter-fan__card__preview {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ---- 高亮提示闪光（运行工具后）---- */
+@keyframes highlightFlash {
+  0% { background: var(--accent-soft-strong); }
+  100% { background: transparent; }
+}
+.flash-cell { animation: highlightFlash 1.4s ease-out; }
+
+/* ---- 主线记忆曲线 (折线 + 渐变) ---- */
+.arc-curve {
+  position: relative;
+  height: 64px;
+  margin-top: 4px;
+}
+.arc-curve svg { width: 100%; height: 100%; display: block; }
+.arc-curve__bg-line { stroke: var(--border); stroke-width: 1; fill: none; }
+.arc-curve__fg-line {
+  stroke: url(#arc-grad);
+  stroke-width: 1.8;
+  fill: none;
+  stroke-linecap: round;
+  filter: drop-shadow(0 0 4px rgba(107,138,253,0.4));
+}
+.arc-curve__dot {
+  fill: var(--accent-strong);
+  filter: drop-shadow(0 0 4px var(--accent-strong));
+}
+
+/* 跑马灯式滚动状态条 */
+@keyframes shimmerSweep {
+  0%   { transform: translateX(-110%); }
+  100% { transform: translateX(110%); }
+}
+.shimmer-bar {
+  position: relative;
+  height: 3px;
+  background: var(--bg);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.shimmer-bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, var(--accent-strong) 50%, transparent 100%);
+  animation: shimmerSweep 1.8s ease-in-out infinite;
+}
+
