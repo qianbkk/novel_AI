@@ -1,13 +1,15 @@
-# Novel AI Fusion Assistant
+# novel_AI
 
-融合版 AI 小说写作助手。
+novel_AI：一个用多 Agent 协作写长篇网文的工程。
 
-本仓库把两个原型项目合并成一个可运行项目：
+FastAPI + React Web 框架内嵌一个 LangGraph 多 Agent 写作引擎。前端点点按钮，9 个写作 Agent（Planner / Writer / Normalizer / Compliance / Checker×3 / Rewriter / Outline / Summarizer / Tracker）协同生成设定、规划章节、逐章写作、质量评审与重写，章节自动入库。
 
-- `backend/`：FastAPI 后端，提供项目管理、世界构建、Provider/角色配置、novel_AI 桥接、章节导入与检索。
+仓库目录：
+
+- `backend/`：FastAPI 后端，提供项目管理、世界构建、Provider/角色配置、写作引擎桥接、章节导入与检索。
 - `frontend/`：React + TypeScript + Vite 前端，提供项目页面、Provider 管理、角色配置和写作引擎控制台。
-- `novel_AI/`：LangGraph 多 Agent 写作引擎源码，作为后端 bridge 的子进程执行目标。
-- `novel-assistant/`：原 novel-assistant 参考项目，保留用于对照。
+- `docs/`：项目文档与可视化页面（含自解释指南 `novel_ai_fusion_guide.html`）。
+- `patches/`：写作引擎的修复 apply 指南，跨机器需手动 apply。
 
 ## 本地运行
 
@@ -27,7 +29,7 @@ npm install
 npm run dev
 ```
 
-novel_AI 依赖：
+写作引擎依赖（NovelAI 项目根目录）：
 
 ```bash
 cd novel_AI

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Novel AI Fusion 项目全解析</title>
+<title>novel_AI 项目全解析</title>
 <style>
 :root{--bg:#0b0c13;--s1:#111320;--s2:#181b2a;--s3:#1e2235;--b1:#252a40;--b2:#333860;--fg:#d4d8f0;--fg2:#7880a8;--fg3:#40476a;--amber:#f5a42a;--amber-dim:rgba(245,164,42,.13);--blue:#5b9cf6;--blue-dim:rgba(91,156,246,.12);--teal:#38d9c0;--teal-dim:rgba(56,217,192,.12);--purple:#a87df8;--purple-dim:rgba(168,125,248,.12);--red:#f07272;--red-dim:rgba(240,114,114,.12);--green:#4dda90;--green-dim:rgba(77,218,144,.12);--pink:#f472b6;--mono:'Menlo','Monaco','Courier New',monospace;--r:8px}
 *{box-sizing:border-box;margin:0;padding:0}
@@ -137,7 +137,7 @@ p{color:var(--fg2);line-height:1.75;margin-bottom:12px}
 <!-- ====== OVERVIEW ====== -->
 <section id="s-overview" class="sec on">
   <h2>项目全景</h2>
-  <p class="subtitle">把 LangGraph 多 Agent 写作引擎装进 Web App 的融合项目</p>
+  <p class="subtitle">novel_AI：把 LangGraph 多 Agent 写作引擎装进 Web App 的工程</p>
 
   <div class="stats">
     <div class="stat"><div class="stat-num">14</div><div class="stat-label">main 分支 commits</div></div>
@@ -150,7 +150,7 @@ p{color:var(--fg2);line-height:1.75;margin-bottom:12px}
 
   <div class="intro-box">
     <h3>这个项目做什么</h3>
-    <p style="margin:0;font-size:13px;color:var(--fg2)">把两个原型合成一个：<code style="color:var(--amber)">novel-assistant</code>（FastAPI + React Web 框架）+ <code style="color:var(--amber)">novel_AI</code>（LangGraph 多 Agent 写作引擎）。用户只接触 Web 界面，写作引擎作为后端进程内调起。三个仓库平级：<code style="color:var(--amber)">novel_AI/</code> 和 <code style="color:var(--amber)">novel-assistant/</code> 是仅供阅读的参考（gitignored），不修改也不 push。</p>
+    <p style="margin:0;font-size:13px;color:var(--fg2)">novel_AI：FastAPI + React Web 框架内嵌 LangGraph 多 Agent 写作引擎。用户只接触 Web 界面，写作引擎作为后端进程内调起。<code style="color:var(--amber)">novel_AI/</code> 子目录是写作引擎源码（gitignored，跨机器需手动 apply patches）。</p>
   </div>
 
   <h3>系统全貌（数据流向）</h3>
@@ -271,7 +271,7 @@ p{color:var(--fg2);line-height:1.75;margin-bottom:12px}
 <!-- ====== AGENTS ====== -->
 <section id="s-agents" class="sec">
   <h2>九大 Agent + 15 角色</h2>
-  <p class="subtitle">novel_AI 内置 9 个专业 Agent；前端 15 个 Role 键 = 3 个 novel-assistant 自有 + 12 个 novel_AI Agent 映射</p>
+  <p class="subtitle">novel_AI 内置 9 个专业 Agent；前端 15 个 Role 键统一管理所有写作角色</p>
 
   <h3 style="margin-bottom:12px">novel_AI 9 大 Agent（gitignored 参考）</h3>
   <div class="card-row c3" id="agent-grid"></div>
@@ -293,7 +293,7 @@ p{color:var(--fg2);line-height:1.75;margin-bottom:12px}
       <span class="badge badge-purple">tracker</span>
       <span class="badge badge-purple">summarizer</span>
     </div>
-    <p style="font-size:12px;color:var(--fg2);margin-top:10px">+ 3 个 novel-assistant 自有（structured_logic / creative_detail / consistency_check）由 <code class="code">app/llm_router.py</code> 路由。</p>
+    <p style="font-size:12px;color:var(--fg2);margin-top:10px">+ 3 个辅助角色（structured_logic / creative_detail / consistency_check）由 <code class="code">app/llm_router.py</code> 路由。</p>
   </div>
 </section>
 
@@ -304,7 +304,7 @@ p{color:var(--fg2);line-height:1.75;margin-bottom:12px}
 
   <div class="intro-box">
     <h3>核心问题</h3>
-    <p style="margin:0;font-size:12px;color:var(--fg2)">AI 上下文窗口有限（约 20 万 token）。写完 1500 章后，全塞进去一是塞不下、二是极贵。记忆系统用最小 token 数（约 1500）给 Writer 最相关的历史。fusion 项目加了一层 <strong>LangGraph SqliteSaver</strong> 持久化 state，让"中断-恢复"无缝。</p>
+    <p style="margin:0;font-size:12px;color:var(--fg2)">AI 上下文窗口有限（约 20 万 token）。写完 1500 章后，全塞进去一是塞不下、二是极贵。记忆系统用最小 token 数（约 1500）给 Writer 最相关的历史。novel_AI 项目加了一层 <strong>LangGraph SqliteSaver</strong> 持久化 state，让"中断-恢复"无缝。</p>
   </div>
 
   <h3 style="margin-bottom:12px">各层说明（novel_AI 三层）</h3>
@@ -332,7 +332,7 @@ p{color:var(--fg2);line-height:1.75;margin-bottom:12px}
     </div>
   </div>
 
-  <h3 style="margin:20px 0 12px">fusion 加层：SqliteSaver state checkpoint</h3>
+  <h3 style="margin:20px 0 12px">SqliteSaver state checkpoint</h3>
   <div class="card">
     <div class="kv-row">
       <div class="k">文件位置</div>
@@ -487,14 +487,14 @@ function routing(){show('routing')}
 
 // ===== FILE TREE DATA =====
 const FILES=[
-  {type:'file',name:'README.md',color:'amber',role:'项目入门',detail:'顶层说明：本地运行步骤、使用顺序、CLI 一键 MVP 入口。说明 novel_AI/ 和 novel-assistant/ 是参考目录。'},
+  {type:'file',name:'README.md',color:'amber',role:'项目入门',detail:'顶层说明：本地运行步骤、使用顺序、CLI 一键 MVP 入口。介绍 novel_AI 子目录和写作引擎。'},
   {type:'file',name:'backend/requirements.txt',color:'gray',role:'依赖列表',detail:'fastapi/sqlalchemy/pydantic/httpx/sse-starlette/langgraph-checkpoint-sqlite + tenacity。'},
   {type:'file',name:'backend/app/main.py',color:'blue',role:'FastAPI 入口',detail:'app 启动 + CORS + 6 个 router + seed 15 行 role_assignments。32 个路由。'},
   {type:'file',name:'backend/app/config.py',color:'gray',role:'pydantic-settings 配置',detail:'从环境变量读 API keys。'},
   {type:'file',name:'backend/app/database.py',color:'blue',role:'SQLAlchemy + SQLite',detail:'engine + SessionLocal + Base + get_db。'},
-  {type:'file',name:'backend/app/models.py',color:'purple',role:'15 张表 ORM',detail:'业务表 + 融合表（Provider/RoleAssignment/BridgeRun/NovelAIBinding）。'},
+  {type:'file',name:'backend/app/models.py',color:'purple',role:'15 张表 ORM',detail:'业务表 + 引擎桥接表（Provider/RoleAssignment/BridgeRun/NovelAIBinding）。'},
   {type:'file',name:'backend/app/schemas.py',color:'blue',role:'Pydantic V2 schemas',detail:'API 请求/响应类型。'},
-  {type:'file',name:'backend/app/llm_router.py',color:'gray',role:'3 角色 legacy 路由',detail:'novel-assistant 自有的 3 个角色 → ProviderConfig。'},
+  {type:'file',name:'backend/app/llm_router.py',color:'gray',role:'3 辅助角色路由',detail:'3 个辅助角色 → ProviderConfig。'},
   {type:'file',name:'backend/app/api/bridge.py',color:'purple',role:'★ 核心 SSE bridge (261 行)',detail:'9 个端点。Phase 1.5 改造：async def + BackgroundTasks + asyncio.to_thread + per-project asyncio.Lock。'},
   {type:'file',name:'backend/app/api/projects.py',color:'gray',role:'项目 CRUD',detail:'GET/POST/DELETE /projects。'},
   {type:'file',name:'backend/app/api/chapters.py',color:'gray',role:'章节 CRUD + 检索',detail:'GET/POST + 语义搜索。'},
@@ -529,7 +529,7 @@ const FILES=[
   {type:'file',name:'frontend/src/pages/Providers.tsx',color:'blue',role:'Provider CRUD UI',detail:'新增/编辑。'},
   {type:'file',name:'frontend/src/pages/RoleAssignments.tsx',color:'blue',role:'15 角色绑定 UI',detail:'表格 + 下拉。'},
   {type:'file',name:'frontend/src/pages/BridgeConsole.tsx',color:'amber',role:'★ 写作引擎控制台',detail:'按钮 + 日志 + 当前节点状态条（Spec C）。'},
-  {type:'file',name:'novel_AI/CLAUDE.md',color:'red',role:'行为宪法（5 元文件体系）',detail:'novel_AI 子仓库的 CLAUDE.md/README.md/index.md/PROJECT_LOG.md/lessons.md。'},
+  {type:'file',name:'novel_AI/CLAUDE.md',color:'red',role:'行为宪法（5 元文件体系）',detail:'novel_AI 的 CLAUDE.md/README.md/index.md/PROJECT_LOG.md/lessons.md。'},
   {type:'file',name:'novel_AI/run.py',color:'amber',role:'★ 统一命令入口',detail:'python run.py [...18 个子命令]。.env 加载在 import api_client 之前。'},
   {type:'file',name:'novel_AI/orchestrator.py',color:'purple',role:'★ 总控制器 (700+ 行)',detail:'LangGraph 7 节点状态机。Phase 1.5 patch：补 compliance + 放宽 budget。'},
   {type:'file',name:'novel_AI/orchestrator_state.py',color:'purple',role:'OrchestratorState TypedDict',detail:'全系统数据总线。'},
@@ -555,11 +555,9 @@ const FILES=[
   {type:'file',name:'novel_AI/tools/accept_tests.py',color:'gray',role:'AC1-5 验收测试',detail:'AC-1 到 AC-5。'},
   {type:'file',name:'novel_AI/config/novel_config.json',color:'amber',role:'novel_config 落点',detail:'push_setting_concept 写这里。'},
   {type:'file',name:'novel_AI/memory/memory_manager.py',color:'gray',role:'L2/L5 memory 注入',detail:'约 1500 token 限额。'},
-  {type:'file',name:'novel-assistant/README.md',color:'red',role:'原参考项目',detail:'早期 FastAPI + React 框架，已被 fusion 替代。gitignored。'},
   {type:'file',name:'docs/novel_ai_fusion_guide.html',color:'green',role:'本文件（项目自解释）',detail:'基于真实代码分析的可视化页面，7 个 tab。'},
   {type:'file',name:'docs/superpowers/specs/2026-06-27-phase1-5-fusion-debugs-design.md',color:'teal',role:'Phase 1.5 设计',detail:'排雷设计文档。'},
   {type:'file',name:'docs/superpowers/specs/2026-06-28-spec-c-node-events-design.md',color:'teal',role:'Spec C 设计',detail:'节点事件设计文档。'},
-  {type:'file',name:'docs/superpowers/plans/2026-06-26-novel-assistant-fusion.md',color:'teal',role:'原始融合 plan',detail:'15-task 实施计划。'},
   {type:'file',name:'docs/superpowers/plans/2026-06-27-phase1-5-fusion-debugs.md',color:'teal',role:'Phase 1.5 plan',detail:'12 task 排雷 plan。'},
   {type:'file',name:'patches/2026-06-28-novel_ai-mvp-fixes.md',color:'amber',role:'novel_AI/ 修复 apply 指南',detail:'4 个 fix 详情，跨机需手动 apply。'}
 ];
