@@ -131,7 +131,7 @@ export default function RuleCenter() {
     const v = dialogInputRef.current?.value.trim();
     if (v) {
       setTaboos((prev) => Array.from(new Set([...prev, v])));
-      playTick(audioCtxRef, 420, 0.07);
+      playTick(audioCtxRef, 220, 0.07);
     }
     closeDialog();
   }
@@ -144,7 +144,7 @@ export default function RuleCenter() {
   function runTool(key: string) {
     setRunning(key);
     setToolOutputs((prev) => ({ ...prev, [key]: "" }));
-    playTick(audioCtxRef, 260, 0.05);
+    playTick(audioCtxRef, 220, 0.05);
     window.setTimeout(() => {
       const output =
         `[${key}] 占位输出 — 当前 API 未暴露规则中心后处理端点。\n` +
