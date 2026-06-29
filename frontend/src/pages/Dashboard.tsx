@@ -40,14 +40,24 @@ export default function Dashboard() {
             <div
               key={p.id}
               className="project-card"
-              onClick={() => navigate(`/projects/${p.id}/worldbuild`)}
+              onClick={() =>
+                navigate(
+                  p.status === "ready"
+                    ? `/projects/${p.id}/bridge`
+                    : `/projects/${p.id}/worldbuild`,
+                )
+              }
             >
               <div className="project-card__title">{p.title || "未命名小说"}</div>
               <div className="text-muted" style={{ fontSize: "0.85rem", marginBottom: 10 }}>
                 {p.genre} · {p.audience || "未设定受众"}
               </div>
               <span className={`badge ${p.status === "ready" ? "badge-ready" : "badge-draft"}`}>
-                {p.status === "ready" ? "世界构建已完成" : p.status === "worldbuilding" ? "构建中" : "草稿"}
+                {p.status === "ready"
+                  ? "✍️ 就绪 · 点进去写章节"
+                  : p.status === "worldbuilding"
+                    ? "构建中"
+                    : "草稿"}
               </span>
             </div>
           ))}

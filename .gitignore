@@ -42,3 +42,7 @@ Thumbs.db
 .playwright-cli/
 test_output/
 .test_project_id
+
+# dev.bat runtime output (port logs, launcher .cmd)
+.runlogs/
+PID

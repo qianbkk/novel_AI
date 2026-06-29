@@ -104,9 +104,17 @@ export default function WorldBuild() {
           <span className="text-muted">{project.genre}</span>
         </div>
         {project.status === "ready" && (
-          <button className="btn" onClick={() => navigate(`/projects/${project.id}/chapters`)}>
-            前往章节 →
-          </button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button
+              className="btn btn-primary"
+              onClick={() => navigate(`/projects/${project.id}/bridge`)}
+            >
+              ✍️ 去写作控制台
+            </button>
+            <button className="btn" onClick={() => navigate(`/projects/${project.id}/chapters`)}>
+              查看章节 →
+            </button>
+          </div>
         )}
       </div>
 
