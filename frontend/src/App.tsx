@@ -23,8 +23,14 @@ export default function App() {
     <div className="app-shell">
       <aside className="app-sidebar">
         <div className="sidebar-brand">
-          <div className="sidebar-brand__name">墨笺 · Novel AI</div>
-          <div className="sidebar-brand__sub">FUSION · v0.1</div>
+          <div className="sidebar-brand__name">
+            <svg className="brand-mark" width="14" height="14" viewBox="0 0 14 14" aria-hidden="true">
+              <circle cx="6.5" cy="6.5" r="4.5" fill="var(--accent)" />
+              <circle cx="11.5" cy="11.5" r="1.6" fill="var(--stamp)" />
+            </svg>
+            行文
+          </div>
+          <div className="sidebar-brand__sub">v0.1</div>
         </div>
 
         <div className="sidebar-section">
@@ -78,8 +84,7 @@ export default function App() {
         )}
 
         <div className="sidebar-footer">
-          <div>backend :8123</div>
-          <div>frontend :5293</div>
+          <div>执笔成卷</div>
         </div>
       </aside>
 
