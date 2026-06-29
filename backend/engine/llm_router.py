@@ -108,12 +108,29 @@ class LLMRouter:
 
         self._engine.configure(routes=routes, api_keys=api_keys)
         set_active_router(self._engine)
-        # Also wire the writer agent to use this router.
-        try:
-            from .agents.writer import set_active_router as set_writer_router
-            set_writer_router(self._engine)
-        except ImportError:
-            pass
+        # Wire all agents that hold their own active-router reference.
+        # Each agent reads from `get_active_router()` on every call, so this
+        # is mainly to ensure the writer / future agent modules that capture
+        # the router at module load still work.
+        for _name, _modname in (
+            ("writer",     "writer"),
+            ("normalizer", "normalizer"),
+            ("compliance", "compliance"),
+            ("checker",    "checker"),
+            ("rewriter",   "rewriter"),
+            ("tracker",    "tracker"),
+            ("summarizer", "summarizer"),
+            ("outline",    "outline"),
+        ):
+            try:
+                _mod = __import__(f"backend.engine.agents.{_modname}",
+                                  fromlist=["set_active_router"])
+                if hasattr(_mod, "set_active_router"):
+                    _mod.set_active_router(self._engine)
+            except Exception:
+                # Agent modules may not have set_active_router — that's fine,
+                # they read get_active_router() per-call anyway.
+                pass
         return self._engine
 
     @property

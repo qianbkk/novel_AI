@@ -1,0 +1,15 @@
+{
+  "platform": "fanqie",
+  "version": "1.0",
+  "hard_rejects": [
+    {"id": "HR-01", "desc": "政治人物可识别影射", "patterns": ["习近平", "总书记", "中央委员", "政治局"], "category": "political"},
+    {"id": "HR-02", "desc": "血腥/肢解详细描写", "patterns": ["器官.*摘除", "开膛.*血流", "内脏.*外露"], "category": "violence"},
+    {"id": "HR-03", "desc": "敏感宗教/分裂组织", "patterns": ["法轮功", "东突", "藏独"], "category": "religion"},
+    {"id": "HR-04", "desc": "未成年性暗示", "patterns": ["幼女", "萝莉", "未成年.*性", "小学生.*情欲"], "category": "minor"},
+    {"id": "HR-05", "desc": "真实地名+犯罪直接组合", "patterns": ["上海|北京|广州|深圳.*爆炸|连环杀|屠杀"], "category": "geocrime"}
+  ],
+  "warnings": [
+    {"id": "W-04", "desc": "自伤/自杀倾向描写", "patterns": ["割腕", "自杀", "了结生命"], "category": "self_harm"}
+  ],
+  "length_limits": {"min_chapter_chars": 1500, "max_chapter_chars": 4000}
+}

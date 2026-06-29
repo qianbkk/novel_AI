@@ -1,21 +1,18 @@
 """Orchestrator — LangGraph 7-node state machine.
 
-Migrated from novel_AI/orchestrator.py. P1 scope:
+Migrated from novel_AI/orchestrator.py. P2 scope:
   - 7 nodes: load_arc_tasks, get_next_task, write_pipeline, rewrite,
              save_and_track, human_escalation, (budget_stop routing)
-  - Writer agent full implementation
-  - Other agents (Normalizer / Compliance / Checker / Outline / Tracker /
-    Summarizer / Planner) — stub implementations that satisfy the
-    orchestrator's call signature. P2 will replace stubs with real agents.
-  - In-memory memory manager stub (P2 adds hot/cold L2 + L5 arc summaries)
+  - All 8 agents have real implementations (writer + normalizer +
+    compliance + checker + rewriter + tracker + summarizer + outline).
+  - Real L2/L5 memory manager (hot/cold分层 + L5 arc summaries + style samples).
 
 Import graph (all relative; NO sys.path injection):
   from .state import OrchestratorState, save_state, load_state
   from .agents.writer import run_writer
-  from .agents.stub import run_normalizer / run_compliance / run_checker /
-                              run_rewriter / run_tracker / run_summarizer /
-                              run_outline
-  from .memory.stub import get_l2
+  from .agents.normalizer / compliance / checker / rewriter / tracker /
+                              summarizer / outline
+  from .memory.manager import get_l2
 """
 from __future__ import annotations
 import json
@@ -29,11 +26,14 @@ from langgraph.graph import StateGraph, END
 
 from .state import OrchestratorState, save_state, load_state, create_initial_state
 from .agents.writer import run_writer
-from .agents.stub import (
-    run_normalizer, run_compliance, run_checker, run_rewriter,
-    run_tracker, run_summarizer, run_outline,
-)
-from .memory.stub import get_l2
+from .agents.normalizer import run_normalizer
+from .agents.compliance import run_compliance
+from .agents.checker    import run_checker
+from .agents.rewriter   import run_rewriter
+from .agents.tracker    import run_tracker
+from .agents.summarizer import run_summarizer
+from .agents.outline    import run_outline
+from .memory.manager import get_l2
 
 # ── Paths (relative to backend/) ──
 BACKEND_DIR = Path(__file__).resolve().parent.parent

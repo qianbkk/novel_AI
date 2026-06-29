@@ -1,13 +1,11 @@
 """Writer Agent — 章节正文生成
 
-Migrated from novel_AI/agents/writer_agent.py. P1 simplification:
-  - No dependency on novel_AI/config/prompt_templates.py — genre/hook
-    guidance are inlined as a single UNIVERSAL_WRITING_RULES constant.
-  - No dependency on novel_AI/memory/memory_manager.py — context
-    is read from backend.engine.memory.stub.get_writer_context(),
-    which returns a flat in-memory dict.
+Migrated from novel_AI/agents/writer_agent.py. P2 expansion:
+  - Now uses backend.engine.config.prompt_templates for genre/hook/voice
+    guidance (the canonical place per CLAUDE.md rule).
+  - Now uses backend.engine.memory.manager for context retrieval
+    (real L2 hot/cold + L5 + style samples).
   - Prompt Cache prefix kept (Anthropic only).
-  - P2 will swap in prompt_templates.py + real memory_manager.
 """
 from __future__ import annotations
 import os
@@ -15,7 +13,11 @@ import sys
 from typing import Tuple
 
 from ..llm.router import LLMRouter
-from ..memory.stub import get_writer_context, maybe_update_style_samples
+from ..memory.manager import get_writer_context, maybe_update_style_samples
+from ..config.prompt_templates import (
+    get_genre_instruction, get_hook_guidance,
+    get_character_voice_reminder, UNIVERSAL_WRITING_RULES,
+)
 
 # Active router is set by backend.engine.graph.build_project_graph()
 _ACTIVE_ROUTER: LLMRouter | None = None
@@ -48,8 +50,9 @@ def _call_llm(agent_name: str, system: str, user: str, max_tokens: int,
     )
 
 
-# ── Prompt templates (P1 inlined; P2 move to prompts/writer.py) ──
-UNIVERSAL_WRITING_RULES = """\
+# ── Prompt templates (P2: import from config.prompt_templates) ──
+# Keep a local alias so writers / callers don't break if config is missing.
+UNIVERSAL_WRITING_RULES_LOCAL = """\
 你的文字风格：节奏紧凑、对话自然、动作流畅、爽点清晰、钩子有力。
 - 不要出现"说道""他心想"等 AI 常见词
 - 对话要像真人在说话，不用套话
@@ -59,30 +62,26 @@ UNIVERSAL_WRITING_RULES = """\
 """
 
 
-# Genre-specific quick guidance (P1 minimal; P2 expand from novel_AI/config/prompt_templates.py)
-_GENRE_GUIDANCE = {
-    "玄幻": "修炼等级推进、灵根/法宝/丹药体系、宗门与散修之争。",
-    "仙侠": "渡劫、飞升、灵山/魔界、师徒/道侣。",
-    "都市": "职场/商场/家族/校园、现实规则束缚下的逆袭。",
-    "科幻": "技术逻辑自洽、未来社会结构、AI/星际/时间线。",
-    "历史": "史实细节、官制/兵制/礼仪、权谋。",
-    "言情": "情感递进、误会与解开、关系成长。",
-    "悬疑": "线索铺陈与回收、视角错位、留白。",
-    "武侠": "江湖门派、武功修炼、侠义抉择。",
-    "奇幻": "种族/魔法/世界规则、冒险旅程。",
-    "末世": "生存压力、资源争夺、人性考验。",
-    "游戏": "系统/技能树/副本/数值。",
-    "军事": "战术/编制/装备/政治。",
-}
-
-
 def _genre_instruction(genre: str) -> str:
-    g = _GENRE_GUIDANCE.get(genre, _GENRE_GUIDANCE["都市"])
-    return f"题材：{genre}。{g}\n"
+    """P2: pull from config.prompt_templates; fall back to inline default."""
+    try:
+        return get_genre_instruction(genre)
+    except Exception:
+        return f"题材：{genre}。\n"
 
 
 def _hook_guidance(hook_type: str) -> str:
-    return f"结尾钩子类型：{hook_type}。请在结尾埋下一个让读者想看下一章的钩子。\n"
+    try:
+        return get_hook_guidance(hook_type)
+    except Exception:
+        return f"结尾钩子类型：{hook_type}。请在结尾埋下一个让读者想看下一章的钩子。\n"
+
+
+def _character_voice_reminder(characters: list, setting: dict) -> str:
+    try:
+        return get_character_voice_reminder(characters, setting)
+    except Exception:
+        return ""
 
 
 # Cacheable system prefix — sent to LLM but eligible for prompt cache (Anthropic only)
@@ -99,6 +98,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 
     genre_instr    = _genre_instruction(genre)
     hook_guidance  = _hook_guidance(task.get("ending_hook_type", "悬念钩"))
+    voice_reminder = _character_voice_reminder(task.get("main_characters", []) or [], setting)
 
     style_samples = context.get("style_samples", []) or []
     style_block = ""
@@ -144,7 +144,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 类型：{task.get('shuang_type','未指定') or '未指定'}
 描述：{task.get('shuang_description','')}
 
-【{hook_guidance}】
+{hook_guidance}
 
 【本章出场人物】{', '.join(task.get('main_characters', []) or [])}
 
@@ -153,6 +153,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 
 【即将到期的伏笔（请在本章埋下呼应）】
 {foreshadow_str}
+{voice_reminder}
 {('【历史背景参考】\n' + cold_str) if cold_str else ''}
 {style_block}
 

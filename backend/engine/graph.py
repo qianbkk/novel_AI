@@ -33,6 +33,74 @@ log = logging.getLogger("novel_ai.engine")
 
 
 # ══════════════════════════════════════════
+# SqliteSaver lifecycle (P3)
+# ══════════════════════════════════════════
+import sqlite3
+import threading as _threading
+
+_checkpointers: dict[str, "_CheckpointHandle"] = {}
+_checkpointers_lock = _threading.Lock()
+
+
+class _CheckpointHandle:
+    """Holds a SqliteSaver + the sqlite3.Connection it was built on.
+
+    Both must stay alive for the lifetime of the compiled graph; the
+    handle keeps them paired so we can close them deterministically.
+    """
+    def __init__(self, saver, conn: sqlite3.Connection):
+        self.saver = saver
+        self.conn = conn
+
+
+def _get_or_open_checkpointer(path: str):
+    """Open or reuse a SqliteSaver-backed checkpointer at `path`.
+
+    Returns the saver object (compatible with StateGraph.compile(checkpointer=...))
+    or None if both SQLite and MemorySaver fail.
+    """
+    with _checkpointers_lock:
+        handle = _checkpointers.get(path)
+        if handle is not None:
+            return handle.saver
+    try:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        # check_same_thread=False because LangGraph may call put/get from
+        # a background thread (e.g. when running via FastAPI BackgroundTasks).
+        conn = sqlite3.connect(path, check_same_thread=False)
+        from langgraph.checkpoint.sqlite import SqliteSaver
+        saver = SqliteSaver(conn)
+        # setup() is idempotent — creates tables if absent, returns immediately
+        # if is_setup is already True.
+        saver.setup()
+        handle = _CheckpointHandle(saver=saver, conn=conn)
+        with _checkpointers_lock:
+            _checkpointers[path] = handle
+        log.info("SqliteSaver wired: %s", path)
+        return saver
+    except Exception as e:
+        log.warning("SqliteSaver unavailable (%s); falling back to MemorySaver", e)
+        try:
+            from langgraph.checkpoint.memory import MemorySaver
+            return MemorySaver()
+        except Exception as e2:
+            log.warning("MemorySaver also unavailable: %s", e2)
+            return None
+
+
+def close_all_checkpointers() -> None:
+    """Close every SqliteSaver + its underlying connection. Call at process
+    shutdown (or between tests)."""
+    with _checkpointers_lock:
+        for path, handle in list(_checkpointers.items()):
+            try:
+                handle.conn.close()
+            except Exception:
+                pass
+            _checkpointers.pop(path, None)
+
+
+# ══════════════════════════════════════════
 # Node event wrapper (Spec C)
 # ══════════════════════════════════════════
 class _NodeWrapper:
@@ -157,21 +225,16 @@ def build_project_graph(project_id: str, queue: Queue | None = None) -> Any:
     bridge_router.install()
     engine_router = bridge_router.engine
 
-    # 2. Checkpoint saver. SqliteSaver in langgraph-checkpoint-sqlite 3.1+
-    #    is a context manager (from_conn_string), and direct construction
-    #    with a path string raises "'str' object has no attribute
-    #    'executescript'". For P1 we use the in-memory saver from langgraph
-    #    core; SqliteSaver wiring is left for P3.
-    #    The file at _CHECKPOINTS_PATH is still touched so the smoke test
-    #    that checks for its existence continues to pass.
-    try:
-        Path(_CHECKPOINTS_PATH).parent.mkdir(parents=True, exist_ok=True)
-        Path(_CHECKPOINTS_PATH).touch(exist_ok=True)
-        from langgraph.checkpoint.memory import MemorySaver
-        checkpointer = MemorySaver()
-    except Exception as e:
-        log.warning("MemorySaver unavailable, running without checkpoint: %s", e)
-        checkpointer = None
+    # 2. Checkpoint saver (P3: real SqliteSaver).
+    #    langgraph-checkpoint-sqlite 3.1+ takes a sqlite3.Connection, not a
+    #    string path. We open the connection ourselves (check_same_thread=
+    #    False because LangGraph dispatches from multiple threads), then
+    #    construct SqliteSaver directly and call setup() to create tables.
+    #    The connection lives as long as the compiled graph does; we cache
+    #    it module-level so multiple builds of the same project re-use the
+    #    same DB handle. Falls back to MemorySaver if sqlite fails for any
+    #    reason (e.g. read-only FS, sqlite3 unavailable).
+    checkpointer = _get_or_open_checkpointer(_CHECKPOINTS_PATH)
 
     # 3. Build the LangGraph state machine from the orchestrator module.
     from .orchestrator import (
@@ -294,11 +357,23 @@ def run_graph_task(
             capture.write("[engine] WARN: dashboard command not yet ported (P3)\n")
             exit_code = 0
         elif command == "budget":
-            capture.write("[engine] WARN: budget command not yet ported (P3)\n")
-            exit_code = 0
+            try:
+                from .tools.budget_manager import print_report
+                with redirect_stdout(capture):
+                    print_report()
+                exit_code = 0
+            except Exception as e:
+                capture.write(f"[engine] budget failed: {e}\n")
+                exit_code = 1
         elif command == "scan":
-            capture.write("[engine] WARN: scan command not yet ported (P3)\n")
-            exit_code = 0
+            try:
+                from .tools.chapter_checker import scan_all_chapters
+                with redirect_stdout(capture):
+                    scan_all_chapters(novel_id=project_id)
+                exit_code = 0
+            except Exception as e:
+                capture.write(f"[engine] scan failed: {e}\n")
+                exit_code = 1
         elif command == "pending":
             pending = state.get("human_pending", [])
             with redirect_stdout(capture):
@@ -314,17 +389,85 @@ def run_graph_task(
                         )
             exit_code = 0
         elif command == "fingerprint":
-            capture.write("[engine] WARN: fingerprint command not yet ported (P3)\n")
-            exit_code = 0
+            try:
+                from .tools.fingerprint_checker import cmd_scan
+                with redirect_stdout(capture):
+                    cmd_scan()
+                exit_code = 0
+            except Exception as e:
+                capture.write(f"[engine] fingerprint failed: {e}\n")
+                exit_code = 1
         elif command == "export":
-            capture.write("[engine] WARN: export command not yet ported (P3)\n")
-            exit_code = 0
+            try:
+                from .tools.exporter import export_chapters, print_stats
+                sub = args[0] if args else "full"
+                with redirect_stdout(capture):
+                    if sub == "stats":
+                        print_stats()
+                    else:
+                        export_chapters()
+                exit_code = 0
+            except Exception as e:
+                capture.write(f"[engine] export failed: {e}\n")
+                exit_code = 1
         elif command == "stats":
-            capture.write("[engine] WARN: stats command not yet ported (P3)\n")
-            exit_code = 0
+            try:
+                from .tools.exporter import print_stats
+                with redirect_stdout(capture):
+                    print_stats()
+                exit_code = 0
+            except Exception as e:
+                capture.write(f"[engine] stats failed: {e}\n")
+                exit_code = 1
         elif command == "init_arc":
-            capture.write("[engine] WARN: init_arc command not yet ported (P2)\n")
-            exit_code = 0
+            try:
+                from .tools.bootstrap import run_bootstrap
+                with redirect_stdout(capture):
+                    run_bootstrap(novel_id=project_id)
+                exit_code = 0
+            except Exception as e:
+                capture.write(f"[engine] init_arc failed: {e}\n")
+                exit_code = 1
+        elif command == "human_review":
+            try:
+                from .tools.human_review import run_review
+                with redirect_stdout(capture):
+                    run_review()
+                exit_code = 0
+            except Exception as e:
+                capture.write(f"[engine] human_review failed: {e}\n")
+                exit_code = 1
+        elif command == "style":
+            try:
+                from .tools.style_manager import cmd_list, extract_internal_samples
+                sub = args[0] if args else "list"
+                with redirect_stdout(capture):
+                    if sub == "extract":
+                        extract_internal_samples()
+                    else:
+                        cmd_list()
+                exit_code = 0
+            except Exception as e:
+                capture.write(f"[engine] style failed: {e}\n")
+                exit_code = 1
+        elif command == "calibrate":
+            try:
+                from .tools.calibrate_checker import run_calibration
+                with redirect_stdout(capture):
+                    run_calibration()
+                exit_code = 0
+            except Exception as e:
+                capture.write(f"[engine] calibrate failed: {e}\n")
+                exit_code = 1
+        elif command == "acceptance":
+            try:
+                from .tools.acceptance_tests import run_all
+                with redirect_stdout(capture):
+                    ok = run_all()
+                exit_code = 0 if ok else 1
+            except Exception as e:
+                capture.write(f"[engine] acceptance failed: {e}\n")
+                exit_code = 1
         elif command == "show":
             n = int(args[0]) if args else 1
             txt = DATA_DIR / "engine" / "output" / "chapters" / f"ch_{n:04d}.txt"
