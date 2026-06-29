@@ -23,11 +23,27 @@ export default function App() {
     <div className="app-shell">
       <aside className="app-sidebar">
         <div className="sidebar-brand">
-          <div className="sidebar-brand__row">
-            <span className="sidebar-brand__mark" aria-hidden="true" />
-            <span className="sidebar-brand__name">墨笺</span>
+          <div className="sidebar-brand__name">
+            <svg
+              className="sidebar-brand__icon"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              {/* 羽毛笔 quill */}
+              <path d="M20 3c-3 0-7 2-11 6-3 3-5 7-5 10l5-5c4-4 6-8 6-11z" />
+              <path d="M4 19l5-5" />
+              <path d="M9 14l1 1" />
+              <path d="M13 10l1 1" />
+              <path d="M16 7l1 1" />
+            </svg>
+            落笔
           </div>
-          <div className="sidebar-brand__sub">多 Agent 协作写作</div>
+          <div className="sidebar-brand__sub">FirstDraft · AI 写小说</div>
         </div>
 
         <div className="sidebar-section">
