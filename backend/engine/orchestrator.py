@@ -1,0 +1,494 @@
+"""Orchestrator — LangGraph 7-node state machine.
+
+Migrated from novel_AI/orchestrator.py. P1 scope:
+  - 7 nodes: load_arc_tasks, get_next_task, write_pipeline, rewrite,
+             save_and_track, human_escalation, (budget_stop routing)
+  - Writer agent full implementation
+  - Other agents (Normalizer / Compliance / Checker / Outline / Tracker /
+    Summarizer / Planner) — stub implementations that satisfy the
+    orchestrator's call signature. P2 will replace stubs with real agents.
+  - In-memory memory manager stub (P2 adds hot/cold L2 + L5 arc summaries)
+
+Import graph (all relative; NO sys.path injection):
+  from .state import OrchestratorState, save_state, load_state
+  from .agents.writer import run_writer
+  from .agents.stub import run_normalizer / run_compliance / run_checker /
+                              run_rewriter / run_tracker / run_summarizer /
+                              run_outline
+  from .memory.stub import get_l2
+"""
+from __future__ import annotations
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Literal
+
+from langgraph.graph import StateGraph, END
+
+from .state import OrchestratorState, save_state, load_state, create_initial_state
+from .agents.writer import run_writer
+from .agents.stub import (
+    run_normalizer, run_compliance, run_checker, run_rewriter,
+    run_tracker, run_summarizer, run_outline,
+)
+from .memory.stub import get_l2
+
+# ── Paths (relative to backend/) ──
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+ENGINE_DIR  = Path(__file__).resolve().parent
+OUTPUT_DIR  = BACKEND_DIR / "data" / "engine" / "output"
+CHAPTERS_DIR = OUTPUT_DIR / "chapters"
+STATE_PATH  = OUTPUT_DIR / "orchestrator_state.json"
+SETTING_PATH = OUTPUT_DIR / "setting_package.json"
+CONFIG_PATH  = BACKEND_DIR / "data" / "engine" / "config" / "novel_config.json"
+
+# Ensure dirs exist
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+CHAPTERS_DIR.mkdir(parents=True, exist_ok=True)
+CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+
+MAX_REWRITE  = 3
+PASS_SCORE   = 6.5
+BUDGET_WARN  = 1.00   # 100% warning
+BUDGET_HARD  = 1.50   # 150% hard stop (MVP-relaxed per patches/2026-06-28)
+
+# Module-level cache (avoid re-reading setting per chapter)
+_setting_cache: dict | None = None
+
+
+def _setting() -> dict:
+    global _setting_cache
+    if _setting_cache is None:
+        if not SETTING_PATH.exists():
+            return {}
+        with open(SETTING_PATH, encoding="utf-8") as f:
+            _setting_cache = json.load(f)
+    return _setting_cache
+
+
+def _config() -> dict:
+    if not CONFIG_PATH.exists():
+        return {"novel_id": "default", "platform": "fanqie", "genre": "都市",
+                "setting_concept": "", "budget_limit_usd": 500.0}
+    with open(CONFIG_PATH, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save_chapter(novel_id: str, ch_num: int, text: str, meta: dict) -> None:
+    CHAPTERS_DIR.mkdir(parents=True, exist_ok=True)
+    with open(CHAPTERS_DIR / f"ch_{ch_num:04d}.txt", "w", encoding="utf-8") as f:
+        f.write(text)
+    with open(CHAPTERS_DIR / f"ch_{ch_num:04d}_meta.json", "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False, indent=2)
+
+
+def log(msg: str, state: OrchestratorState) -> None:
+    ts = time.strftime("%H:%M:%S")
+    line = f"[{ts}] Ch{state.get('current_chapter',0):04d} | {msg}"
+    print(line)
+    if "ERR" in msg or "FAIL" in msg:
+        el = state.get("error_log", [])
+        el.append(line)
+        state["error_log"] = el[-100:]
+
+
+def _add_cost(state: OrchestratorState, cost: float) -> None:
+    state["budget_used_usd"] = state.get("budget_used_usd", 0.0) + cost
+
+
+def _budget_ok(state: OrchestratorState) -> bool:
+    used  = state.get("budget_used_usd", 0.0)
+    limit = state.get("budget_limit_usd", 500.0)
+    return used < limit * BUDGET_HARD
+
+
+# ══════════════════════════════════════════
+# 节点 — all 7 implemented
+# ══════════════════════════════════════════
+def node_load_arc_tasks(state: OrchestratorState) -> OrchestratorState:
+    if state.get("chapter_task_queue"):
+        return state
+    if not _budget_ok(state):
+        log("🚨 预算已达硬停上限，系统暂停", state)
+        state["current_phase"] = "budget_paused"
+        state["human_pending"] = state.get("human_pending", []) + [{
+            "task_id": "budget_exceeded",
+            "task_type": "fix_chapter",
+            "description": f"预算已用{state.get('budget_used_usd',0):.2f}/{state.get('budget_limit_usd',500):.0f}USD，请确认是否继续",
+            "payload": {},
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "priority": "must",
+        }]
+        save_state(state, str(STATE_PATH))
+        return state
+
+    setting   = _setting()
+    arc_plans = state.get("arc_plans", [])
+    arc_idx   = state.get("current_arc", 0)
+
+    if arc_idx >= len(arc_plans):
+        state["current_phase"] = "done"
+        return state
+
+    arc    = arc_plans[arc_idx]
+    memory = get_l2(state.get("novel_id", "default"))
+    start  = state.get("current_chapter", 0) + 1
+
+    log(f"📋 拆解弧{arc.get('arc_id', arc_idx+1)}「{arc.get('arc_name','')}」", state)
+    try:
+        tasks, cost = run_outline(arc, start, setting, memory)
+    except Exception as e:
+        log(f"ERR outline failed: {e}", state)
+        # Stub fallback: build 10 placeholder tasks
+        tasks = [_placeholder_task(arc_idx, i, arc) for i in range(10)]
+        cost = 0.0
+    _add_cost(state, cost)
+
+    state["chapter_task_queue"]      = tasks
+    state["total_chapters_planned"]  = state.get("total_chapters_planned", 0) + len(tasks)
+
+    # Save task sheet
+    out_path = OUTPUT_DIR / f"arc_{arc.get('arc_id', arc_idx+1)}_tasks.json"
+    with open(out_path, "w", encoding="utf-8") as f:
+        json.dump(tasks, f, ensure_ascii=False, indent=2)
+
+    if arc_idx > 0:
+        state["human_pending"] = state.get("human_pending", []) + [{
+            "task_id": f"arc_{arc.get('arc_id', arc_idx+1)}_confirm",
+            "task_type": "confirm_arc",
+            "description": f"弧{arc.get('arc_id', arc_idx+1)}「{arc.get('arc_name','')}」{len(tasks)}章任务单已生成，建议审阅",
+            "payload": {"arc": arc, "task_count": len(tasks)},
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "priority": "recommended",
+        }]
+    save_state(state, str(STATE_PATH))
+    return state
+
+
+def _placeholder_task(arc_idx: int, i: int, arc: dict) -> dict:
+    """Minimal ChapterTask used when outline agent is a stub."""
+    return {
+        "chapter_number": arc_idx * 30 + i + 1,
+        "chapter_role":   "发展",
+        "chapter_goal":   f"第{i+1}章：推进剧情",
+        "main_characters": ["主角"],
+        "shuang_type":    None,
+        "shuang_description": "",
+        "ending_hook_type":       "信息钩",
+        "ending_hook_description": "下一章揭示",
+        "setting_constraints": [],
+        "forbidden_actions": [],
+        "target_length": "2000-2200",
+        "audit_mode":    "full",
+        "is_arc_climax": False,
+    }
+
+
+def node_get_next_task(state: OrchestratorState) -> OrchestratorState:
+    queue = state.get("chapter_task_queue", [])
+    if not queue:
+        return state
+    task = queue.pop(0)
+    state["chapter_task_queue"]    = queue
+    state["current_task"]          = task
+    state["current_chapter"]       = task["chapter_number"]
+    state["rewrite_count_current"] = 0
+    state["current_phase"]         = "writing"
+    log(f"▶  [{task.get('chapter_role','')}] {task.get('chapter_goal','')[:50]}", state)
+    return state
+
+
+def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
+    task    = state["current_task"]
+    setting = _setting()
+    setting = {**setting, "novel_id": state.get("novel_id", "default")}
+
+    log("  ✍️  Writer生成中...", state)
+    try:
+        raw_text, cost = run_writer(task, {}, setting)
+    except Exception as e:
+        log(f"ERR writer failed: {e}", state)
+        raw_text, cost = f"[writer-stub] {task.get('chapter_goal','')}", 0.0
+    _add_cost(state, cost)
+
+    log("  🔧 Normalizer处理...", state)
+    try:
+        clean_text, fmt_issues, cost = run_normalizer(raw_text, task)
+    except Exception as e:
+        log(f"ERR normalizer failed: {e}", state)
+        clean_text, fmt_issues, cost = raw_text, [], 0.0
+    _add_cost(state, cost)
+
+    log("  🛡️  合规检查...", state)
+    try:
+        comp_result, cost = run_compliance(clean_text, state.get("platform", "fanqie"))
+    except Exception as e:
+        log(f"ERR compliance failed: {e}", state)
+        comp_result, cost = {"passed": True}, 0.0
+    _add_cost(state, cost)
+
+    if not comp_result.get("passed", True):
+        log(f"  ❌ 合规失败", state)
+        task["_compliance_failed"]   = True
+        task["_compliance_feedback"] = comp_result.get("suggestion", "")
+        task["_draft_text"]          = clean_text
+        state["current_task"]        = task
+        return state
+
+    audit_mode = task.get("audit_mode", "full")
+    log(f"  🔍 质检（{audit_mode}）...", state)
+    try:
+        checker_result, cost = run_checker(clean_text, task, audit_mode)
+    except Exception as e:
+        log(f"ERR checker failed: {e}", state)
+        checker_result, cost = {"score": 7.0, "verdict": "PASS", "feedback": "", "rewrite_level": "P0", "weakest_point": ""}, 0.0
+    _add_cost(state, cost)
+
+    score = checker_result.get("score", 0)
+    log(f"  📊 {score:.1f}分 | {checker_result.get('verdict','')}", state)
+
+    task["_draft_text"]        = clean_text
+    task["_checker_result"]    = checker_result
+    task["_compliance_failed"] = False
+    state["current_task"]      = task
+
+    qh = state.get("quality_history", [])
+    qh.append(score)
+    state["quality_history"] = qh[-100:]
+    state["consecutive_low_score"] = (state.get("consecutive_low_score", 0) + 1 if score < PASS_SCORE else 0)
+    return state
+
+
+def node_rewrite(state: OrchestratorState) -> OrchestratorState:
+    task         = state["current_task"]
+    setting      = {**_setting(), "novel_id": state.get("novel_id", "default")}
+    memory       = get_l2(state.get("novel_id", "default"))
+    failed_comp  = task.get("_compliance_failed", False)
+    cr           = task.get("_checker_result", {})
+    draft_text   = task.get("_draft_text", "")
+    feedback     = (task.get("_compliance_feedback", "违规内容需重写") if failed_comp
+                    else cr.get("feedback", ""))
+    rewrite_lvl  = "P1" if failed_comp else cr.get("rewrite_level", "P1")
+
+    state["rewrite_count_current"] = state.get("rewrite_count_current", 0) + 1
+    log(f"  ♻️  第{state['rewrite_count_current']}次重写（{rewrite_lvl}）", state)
+
+    try:
+        new_text, cost = run_rewriter(draft_text, rewrite_lvl, feedback, task, cr, memory, setting)
+    except Exception as e:
+        log(f"ERR rewriter failed: {e}", state)
+        new_text, cost = draft_text, 0.0
+    _add_cost(state, cost)
+
+    try:
+        clean_text, _, cost = run_normalizer(new_text, task)
+    except Exception as e:
+        log(f"ERR normalizer (post-rewrite) failed: {e}", state)
+        clean_text, cost = new_text, 0.0
+    _add_cost(state, cost)
+
+    # Re-verify compliance
+    try:
+        comp_result, cost = run_compliance(clean_text, state.get("platform", "fanqie"))
+    except Exception as e:
+        log(f"ERR compliance (post-rewrite) failed: {e}", state)
+        comp_result, cost = {"passed": True}, 0.0
+    _add_cost(state, cost)
+    if not comp_result.get("passed", True):
+        log(f"  🛡️  重写后仍违规", state)
+        task["_draft_text"]          = clean_text
+        task["_compliance_failed"]   = True
+        task["_compliance_feedback"] = comp_result.get("reason", "违规内容需重写")
+        state["current_task"]        = task
+        return state
+
+    try:
+        cr2, cost = run_checker(clean_text, task, "lite")
+    except Exception as e:
+        log(f"ERR checker (post-rewrite) failed: {e}", state)
+        cr2, cost = cr, 0.0
+    _add_cost(state, cost)
+    log(f"  📊 重写后：{cr2.get('score',0):.1f}分", state)
+
+    task["_draft_text"]        = clean_text
+    task["_checker_result"]    = cr2
+    task["_compliance_failed"] = False
+    state["current_task"]      = task
+
+    qh = state.get("quality_history", [])
+    qh.append(cr2.get("score", 0))
+    state["quality_history"] = qh[-100:]
+    return state
+
+
+def node_save_and_track(state: OrchestratorState) -> OrchestratorState:
+    task   = state["current_task"]
+    text   = task.get("_draft_text", "")
+    cr     = task.get("_checker_result", {})
+    memory = get_l2(state.get("novel_id", "default"))
+
+    meta = {
+        "chapter_number": task["chapter_number"],
+        "chapter_role":   task.get("chapter_role", ""),
+        "chapter_goal":   task.get("chapter_goal", ""),
+        "score":          cr.get("score", 0),
+        "verdict":        cr.get("verdict", ""),
+        "dimensions":     cr.get("dimensions", {}),
+        "rewrite_count":  state.get("rewrite_count_current", 0),
+        "word_count":     len(text),
+    }
+    save_chapter(state.get("novel_id", "default"), task["chapter_number"], text, meta)
+    log(f"  💾 已保存（{len(text)}字，{cr.get('score',0):.1f}分）", state)
+
+    try:
+        updated_mem, cost = run_tracker(text, task, memory, state.get("novel_id", "default"))
+    except Exception as e:
+        log(f"ERR tracker failed: {e}", state)
+        updated_mem, cost = memory, 0.0
+    _add_cost(state, cost)
+
+    # Arc end check
+    if not state.get("chapter_task_queue"):
+        arc_plans = state.get("arc_plans", [])
+        arc_idx   = state.get("current_arc", 0)
+        log(f"🏁 弧{arc_idx+1}完成，触发Summarizer", state)
+        if arc_idx < len(arc_plans):
+            try:
+                _, cost = run_summarizer("arc_end", arc_plans[arc_idx], updated_mem, state.get("novel_id", "default"))
+            except Exception as e:
+                log(f"ERR summarizer failed: {e}", state)
+                cost = 0.0
+            _add_cost(state, cost)
+        state["current_arc"] = arc_idx + 1
+
+    # Budget warning
+    used  = state.get("budget_used_usd", 0.0)
+    limit = state.get("budget_limit_usd", 500.0)
+    if used >= limit * BUDGET_WARN and int(used / (limit * 0.01)) % 5 == 0:
+        log(f"  💰 预算已用{used/limit:.0%}（${used:.2f}/${limit:.0f}）", state)
+
+    save_state(state, str(STATE_PATH))
+    return state
+
+
+def node_human_escalation(state: OrchestratorState) -> OrchestratorState:
+    task = state["current_task"]
+    cr   = task.get("_checker_result", {})
+    log(f"  🚨 超过{MAX_REWRITE}次重写，需人工介入", state)
+    state["human_pending"] = state.get("human_pending", []) + [{
+        "task_id":     f"fix_ch_{task['chapter_number']}",
+        "task_type":   "fix_chapter",
+        "description": f"第{task['chapter_number']}章重写{MAX_REWRITE}次仍不达标({cr.get('score',0):.1f}分)",
+        "payload": {
+            "chapter_number": task["chapter_number"],
+            "last_score":     cr.get("score", 0),
+            "weakest_point":  cr.get("weakest_point", ""),
+            "feedback":       cr.get("feedback", ""),
+        },
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "priority": "must",
+    }]
+    text = task.get("_draft_text", "")
+    save_chapter(state.get("novel_id", "default"), task["chapter_number"],
+                 f"[待修订]\n{text}", {
+        "chapter_number": task["chapter_number"],
+        "status":         "human_required",
+        "score":          cr.get("score", 0),
+        "word_count":     len(text),
+    })
+    save_state(state, str(STATE_PATH))
+    return state
+
+
+# ══════════════════════════════════════════
+# 路由
+# ══════════════════════════════════════════
+def route_after_pipeline(state) -> Literal["save", "rewrite", "escalate", "budget_stop"]:
+    if state.get("current_phase") in ("done", "budget_paused"):
+        return "save"
+    task = state.get("current_task", {})
+    score = task.get("_checker_result", {}).get("score", 0) if task.get("_checker_result") else 0
+    rw = state.get("rewrite_count_current", 0)
+    if task.get("_compliance_failed"):
+        return "escalate" if rw >= MAX_REWRITE else "rewrite"
+    if score >= PASS_SCORE:
+        return "save"
+    return "escalate" if rw >= MAX_REWRITE else "rewrite"
+
+
+def route_after_rewrite(state) -> Literal["save", "rewrite", "escalate"]:
+    task  = state.get("current_task", {})
+    score = task.get("_checker_result", {}).get("score", 0) if task.get("_checker_result") else 0
+    rw    = state.get("rewrite_count_current", 0)
+    if score >= PASS_SCORE:
+        return "save"
+    return "escalate" if rw >= MAX_REWRITE else "rewrite"
+
+
+def route_after_save(state) -> Literal["next_task", "done"]:
+    if state.get("current_phase") in ("done", "budget_paused"):
+        return "done"
+    if (not state.get("chapter_task_queue")
+        and state.get("current_arc", 0) >= len(state.get("arc_plans", []))):
+        return "done"
+    return "next_task"
+
+
+# ══════════════════════════════════════════
+# 构建图
+# ══════════════════════════════════════════
+def build_graph():
+    g = StateGraph(OrchestratorState)  # type: ignore
+    g.add_node("load_arc_tasks",   node_load_arc_tasks)
+    g.add_node("get_next_task",    node_get_next_task)
+    g.add_node("write_pipeline",   node_write_pipeline)
+    g.add_node("rewrite",          node_rewrite)
+    g.add_node("save_and_track",   node_save_and_track)
+    g.add_node("human_escalation", node_human_escalation)
+    g.set_entry_point("load_arc_tasks")
+    g.add_edge("load_arc_tasks", "get_next_task")
+    g.add_edge("get_next_task",  "write_pipeline")
+    g.add_conditional_edges("write_pipeline", route_after_pipeline,
+        {"save": "save_and_track", "rewrite": "rewrite",
+         "escalate": "human_escalation", "budget_stop": END})
+    g.add_conditional_edges("rewrite", route_after_rewrite,
+        {"save": "save_and_track", "rewrite": "rewrite", "escalate": "human_escalation"})
+    g.add_conditional_edges("save_and_track", route_after_save,
+        {"next_task": "load_arc_tasks", "done": END})
+    g.add_edge("human_escalation", END)
+    return g.compile()
+
+
+# ══════════════════════════════════════════
+# 对外接口（与原 novel_AI/orchestrator.py 签名完全一致）
+# ══════════════════════════════════════════
+def run_orchestrator(state: OrchestratorState, max_chapters: int = 10) -> OrchestratorState:
+    app = build_graph()
+    chapters_done = 0
+    print(f"\n{'='*60}")
+    print(f"🚀 Orchestrator | 目标{max_chapters}章 | 起始Ch{state.get('current_chapter',0)+1}")
+    print(f"   {state.get('novel_id')} | 预算${state.get('budget_used_usd',0):.2f}/${state.get('budget_limit_usd',500):.0f}")
+    print(f"{'='*60}\n")
+    for event in app.stream(state, {"recursion_limit": 250}):
+        node_name = list(event.keys())[0]
+        new_state = event[node_name]
+        if node_name == "save_and_track":
+            chapters_done += 1
+            print(f"\n✅ [{chapters_done}/{max_chapters}] Ch{new_state.get('current_chapter',0)} "
+                  f"完成 | ${new_state.get('budget_used_usd',0):.4f}\n")
+            if chapters_done >= max_chapters:
+                print(f"⏸  已完成{max_chapters}章，暂停。")
+                save_state(new_state, str(STATE_PATH))
+                return new_state
+        if node_name == "human_escalation":
+            pending = new_state.get("human_pending", [])
+            print(f"\n🚨 需要人工介入！{len(pending)}个待处理任务")
+            for t in pending[-3:]:
+                print(f"   [{t.get('priority','?')}] {t['description']}")
+            save_state(new_state, str(STATE_PATH))
+            return new_state
+        state = new_state
+    save_state(state, str(STATE_PATH))
+    return state
