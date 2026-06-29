@@ -111,32 +111,51 @@ a:hover { color: var(--accent); }
   border-bottom: 1px solid var(--border);
 }
 
-.sidebar-brand__name {
-  font-family: var(--font-display);
-  font-size: 17px;
-  font-weight: 700;
-  color: var(--text);
-  letter-spacing: 0.08em;
+.sidebar-brand__row {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
 }
 
-.brand-mark {
+/* Brand mark: abstract seal — square outline + center ink dot, slightly
+   rotated. Uses the same stamp color + corner radius as the .badge-stamp
+   so the logo and the status badges share one visual language. */
+.sidebar-brand__mark {
+  width: 22px;
+  height: 22px;
+  border: 1.5px solid var(--stamp);
+  background: var(--stamp-soft);
+  border-radius: var(--radius-stamp);
+  position: relative;
+  transform: rotate(-3deg);
   flex-shrink: 0;
-  /* 墨滴飞溅感：让小点稍微外溢 */
-  filter: drop-shadow(0 0 0 transparent);
-  transition: transform .4s cubic-bezier(0.4, 0, 0.2, 1);
+  box-shadow: inset 0 0 0 1px rgba(224, 108, 95, 0.18);
 }
-.sidebar-brand:hover .brand-mark {
-  transform: rotate(-8deg);
+.sidebar-brand__mark::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: 5px;
+  height: 5px;
+  background: var(--stamp);
+  border-radius: 50%;
+}
+
+.sidebar-brand__name {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: 0.06em;
 }
 
 .sidebar-brand__sub {
-  margin-top: 6px;
+  margin-top: 8px;
+  margin-left: 32px;       /* align under the name, after the mark */
   font-size: 11px;
   color: var(--text-faint);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.08em;
 }
 
 .sidebar-section { padding: 0 12px; }
