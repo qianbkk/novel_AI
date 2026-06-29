@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { Project, WorldBuildResult, StageEvent } from "../types";
+import type { Project, WorldBuildResult, StageEvent, MapNode } from "../types";
 
 // 跟后端 worldbuild/stages.py 里的 STAGES 保持一致——原型阶段先手动同步，
 // 更稳妥的做法是让后端在 /worldbuild/start 的响应里把阶段清单带回来，
@@ -21,7 +21,13 @@ const STAGES: { key: string; label: string }[] = [
 
 type StageStatus = "pending" | "active" | "done";
 
-const TABS = ["世界观", "人物", "人物关系", "势力", "地图", "力量体系", "货币", "伏笔", "一致性校验"] as const;
+// 顶层三大立法视图：世界、人物、立法
+const TOP_TABS = ["世界观", "人物阵营", "世界立法"] as const;
+type TopTab = (typeof TOP_TABS)[number];
+
+// 世界立法下的子标签
+type LegislationTab = "GIS 地图" | "力量体系" | "货币物权" | "势力" | "伏笔" | "一致性校验";
+const LEGISLATION_TABS: LegislationTab[] = ["GIS 地图", "力量体系", "货币物权", "势力", "伏笔", "一致性校验"];
 
 export default function WorldBuild() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -32,7 +38,8 @@ export default function WorldBuild() {
   const [progress, setProgress] = useState(0);
   const [building, setBuilding] = useState(false);
   const [result, setResult] = useState<WorldBuildResult | null>(null);
-  const [activeTab, setActiveTab] = useState<(typeof TABS)[number]>("世界观");
+  const [topTab, setTopTab] = useState<TopTab>("世界观");
+  const [legislationTab, setLegislationTab] = useState<LegislationTab>("GIS 地图");
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -109,12 +116,18 @@ export default function WorldBuild() {
           <div className="page-header__sub">
             {project.genre}
             {project.status === "ready"
-              ? " · 世界构建已完成"
+              ? " · 世界构建已完成 · 立法已生效"
               : " · 10 阶段世界构建"}
           </div>
         </div>
         {project.status === "ready" && (
           <div className="page-header__actions">
+            <button
+              className="btn"
+              onClick={() => navigate(`/projects/${project.id}/rules`)}
+            >
+              规则中心
+            </button>
             <button
               className="btn"
               onClick={() => navigate(`/projects/${project.id}/chapters`)}
@@ -164,31 +177,35 @@ export default function WorldBuild() {
       )}
 
       {result && (
-        <div className="card mt-24">
+        <>
           {result.consistency_warnings.length > 0 && (
             <div className="banner banner-warn">
               ⚠ 一致性校验发现 {result.consistency_warnings.length} 条待复核（重名/孤儿节点/悬空引用），
-              详见"一致性校验"标签页，不影响其他设定的使用。
+              详见"世界立法 → 一致性校验"。
             </div>
           )}
 
+          {/* 顶层三大 tab */}
           <div className="tabs">
-            {TABS.map((t) => (
+            {TOP_TABS.map((t) => (
               <button
                 key={t}
-                className={`tab-btn ${activeTab === t ? "active" : ""}`}
-                onClick={() => setActiveTab(t)}
+                className={`tab-btn ${topTab === t ? "active" : ""}`}
+                onClick={() => setTopTab(t)}
               >
                 {t}
-                {t === "一致性校验" && result.consistency_warnings.length > 0 && (
-                  <> ({result.consistency_warnings.length})</>
-                )}
               </button>
             ))}
           </div>
 
-          {activeTab === "世界观" && result.world_setting && (
+          {/* ===================== 世界观 tab ===================== */}
+          {topTab === "世界观" && result.world_setting && (
             <div>
+              <h3 className="module-heading">
+                <span className="module-heading__index">M03</span>
+                叙事工程 · 故事核心
+                <span className="module-heading__sub">主线记忆防线 L1</span>
+              </h3>
               <div className="entity-card">
                 <div className="entity-card__name">世界观设定</div>
                 <div className="entity-card__desc">{result.world_setting.world_view}</div>
@@ -199,99 +216,248 @@ export default function WorldBuild() {
               </div>
               {result.world_setting.plot_skeleton_json?.map((v, i) => (
                 <div className="entity-card" key={i}>
-                  <div className="entity-card__name">{v.title}</div>
+                  <div className="entity-card__name">
+                    <span className="last-chapter-line__no" style={{ marginRight: 8 }}>弧 {i + 1}</span>
+                    {v.title}
+                  </div>
                   <div className="entity-card__desc">{v.summary}</div>
                 </div>
               ))}
             </div>
           )}
 
-          {activeTab === "人物" &&
-            result.characters.map((c) => (
-              <div className="entity-card" key={c.id}>
-                <span className="entity-card__name">{c.name}</span>
-                <span className="entity-card__meta">{c.role}</span>
-                <div className="entity-card__desc">{String(c.detail_json?.detail ?? "")}</div>
+          {/* ===================== 人物阵营 tab ===================== */}
+          {topTab === "人物阵营" && (
+            <div>
+              <h3 className="module-heading">
+                <span className="module-heading__index">M04</span>
+                角色动态生命周期
+                <span className="module-heading__sub">{result.characters.length} 名角色 · {result.relations.length} 条关系</span>
+              </h3>
+              <div className="legislation-grid" style={{ marginBottom: 18 }}>
+                {result.characters.map((c) => (
+                  <div key={c.id} className="legislation-card">
+                    <div className="legislation-card__head">
+                      <span className="legislation-card__title">{c.name}</span>
+                      <span className="life-dot life-dot--alive">存续</span>
+                    </div>
+                    <span className="legislation-card__desc">{c.role || "未分配角色"}</span>
+                    <div className="legislation-card__chips">
+                      <span className="legislation-card__chip">id · {c.id.slice(0, 6)}</span>
+                    </div>
+                  </div>
+                ))}
               </div>
-            ))}
+              <h3 className="module-heading">
+                <span className="module-heading__index">M04</span>
+                因果关系引擎 · 关系网
+                <span className="module-heading__sub">关系变动触发后续语义同步</span>
+              </h3>
+              {result.relations.map((r) => {
+                const fromName = result.characters.find((c) => c.id === r.from_id)?.name || r.from_id;
+                const toName = result.characters.find((c) => c.id === r.to_id)?.name || r.to_id;
+                return (
+                  <div className="entity-card" key={r.id}>
+                    <span className="entity-card__name">{fromName} → {toName}</span>
+                    <span className="entity-card__meta">{r.relation}</span>
+                    <div className="entity-card__desc">{r.description}</div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
-          {activeTab === "人物关系" &&
-            result.relations.map((r) => {
-              const fromName = result.characters.find((c) => c.id === r.from_id)?.name || r.from_id;
-              const toName = result.characters.find((c) => c.id === r.to_id)?.name || r.to_id;
-              return (
-                <div className="entity-card" key={r.id}>
-                  <span className="entity-card__name">
-                    {fromName} → {toName}
-                  </span>
-                  <span className="entity-card__meta">{r.relation}</span>
-                  <div className="entity-card__desc">{r.description}</div>
+          {/* ===================== 世界立法 tab ===================== */}
+          {topTab === "世界立法" && (
+            <div>
+              <h3 className="module-heading">
+                <span className="module-heading__index">M02</span>
+                世界立法
+                <span className="module-heading__sub">把设定转化为 AI 必须执行的底层法律</span>
+              </h3>
+
+              <div className="subtabs">
+                {LEGISLATION_TABS.map((t) => (
+                  <button
+                    key={t}
+                    className={`subtabs__btn ${legislationTab === t ? "is-active" : ""}`}
+                    onClick={() => setLegislationTab(t)}
+                  >
+                    {t}
+                    {t === "一致性校验" && result.consistency_warnings.length > 0 && (
+                      <span style={{ marginLeft: 4, opacity: 0.7 }}>({result.consistency_warnings.length})</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              {/* --- GIS 地图：层级路径 + 子节点 --- */}
+              {legislationTab === "GIS 地图" && (
+                <div>
+                  <h3 className="module-heading">
+                    <span className="module-heading__index">M02.1</span>
+                    地理信息系统 · 路径规划
+                    <span className="module-heading__sub">{result.map_nodes.length} 个子节点 · 世界 → 大陆 → 城市</span>
+                  </h3>
+                  {groupMapByLevel(result.map_nodes).map((group) => (
+                    <div key={group.level} style={{ marginBottom: 14 }}>
+                      <div className="gis-crumbs" style={{ marginBottom: 6 }}>
+                        <strong style={{ color: "var(--accent-strong)" }}>{group.level}</strong>
+                        <span className="gis-crumbs__sep">·</span>
+                        共 {group.nodes.length} 个节点
+                      </div>
+                      <div className="legislation-grid">
+                        {group.nodes.map((m) => (
+                          <div key={m.id} className="legislation-card">
+                            <div className="legislation-card__head">
+                              <span className="legislation-card__title">{m.name}</span>
+                              <span className="legislation-card__kicker">{m.level}</span>
+                            </div>
+                            <span className="legislation-card__desc">{m.description || "—"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                  {result.map_nodes.length === 0 && (
+                    <div className="empty-state">还没有地图节点</div>
+                  )}
                 </div>
-              );
-            })}
+              )}
 
-          {activeTab === "势力" &&
-            result.factions.map((f) => (
-              <div className="entity-card" key={f.id}>
-                <span className="entity-card__name">{f.name}</span>
-                <div className="entity-card__desc">{String(f.detail_json?.detail ?? "")}</div>
-              </div>
-            ))}
-
-          {activeTab === "地图" &&
-            result.map_nodes.map((m) => (
-              <div className="entity-card" key={m.id}>
-                <span className="entity-card__name">{m.name}</span>
-                <span className="entity-card__meta">{m.level}</span>
-                <div className="entity-card__desc">{m.description}</div>
-              </div>
-            ))}
-
-          {activeTab === "力量体系" &&
-            result.power_systems.map((p) => (
-              <div className="entity-card" key={p.id}>
-                <div className="entity-card__name">{p.name}</div>
-                <div className="entity-card__desc">{p.description}</div>
-                <div className="mt-24">
-                  {p.tiers_json?.map((t) => (
-                    <div key={t.level} className="text-muted" style={{ fontSize: "0.85rem" }}>
-                      {t.level}. {t.name}
+              {/* --- 力量体系：tier rail --- */}
+              {legislationTab === "力量体系" && (
+                <div>
+                  <h3 className="module-heading">
+                    <span className="module-heading__index">M02.2</span>
+                    社会规则 · 力量等级
+                    <span className="module-heading__sub">突破事件触发阶梯同步</span>
+                  </h3>
+                  {result.power_systems.map((p) => (
+                    <div className="entity-card" key={p.id}>
+                      <div className="entity-card__name">{p.name}</div>
+                      <div className="entity-card__desc">{p.description}</div>
+                      {p.tiers_json && p.tiers_json.length > 0 && (
+                        <div className="tier-rail" style={{ marginTop: 10 }}>
+                          {p.tiers_json.map((t, i) => {
+                            const reached = i < Math.ceil(p.tiers_json!.length / 2);
+                            const isCurrent = i === Math.floor(p.tiers_json!.length / 2);
+                            return (
+                              <div
+                                key={t.level}
+                                className={`tier-rail__step ${isCurrent ? "is-current" : reached ? "is-reached" : ""}`}
+                              >
+                                {t.name}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
-              </div>
-            ))}
+              )}
 
-          {activeTab === "货币" &&
-            result.currencies.map((c) => (
-              <div className="entity-card" key={c.id}>
-                <span className="entity-card__name">{c.name}</span>
-                <div className="entity-card__desc">{String(c.detail_json?.detail ?? "")}</div>
-              </div>
-            ))}
-
-          {activeTab === "伏笔" &&
-            result.foreshadowings.map((f) => (
-              <div className="entity-card" key={f.id}>
-                <span className="badge-soft badge">{f.importance}</span>{" "}
-                <span className="entity-card__meta">{f.status}</span>
-                <div className="entity-card__desc">{f.content}</div>
-              </div>
-            ))}
-
-          {activeTab === "一致性校验" &&
-            (result.consistency_warnings.length === 0 ? (
-              <div className="empty-state">没有发现明显的结构性问题 ✓</div>
-            ) : (
-              result.consistency_warnings.map((w, i) => (
-                <div className="entity-card" key={i}>
-                  <span className="entity-card__name mono">{w.type}</span>
-                  <div className="entity-card__desc">{w.detail.join("、")}</div>
+              {/* --- 货币物权 --- */}
+              {legislationTab === "货币物权" && (
+                <div>
+                  <h3 className="module-heading">
+                    <span className="module-heading__index">M02.3</span>
+                    货币与物权追踪
+                    <span className="module-heading__sub">支持汇率核算 · 物品流转自动同步</span>
+                  </h3>
+                  <div className="legislation-grid">
+                    {result.currencies.map((c) => (
+                      <div key={c.id} className="legislation-card">
+                        <div className="legislation-card__head">
+                          <span className="legislation-card__title">{c.name}</span>
+                          <span className="legislation-card__kicker">货币</span>
+                        </div>
+                        <span className="legislation-card__desc">{String(c.detail_json?.detail ?? "") || "—"}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-              ))
-            ))}
-        </div>
+              )}
+
+              {/* --- 势力 --- */}
+              {legislationTab === "势力" && (
+                <div>
+                  <h3 className="module-heading">
+                    <span className="module-heading__index">M02.4</span>
+                    势力阵营
+                    <span className="module-heading__sub">{result.factions.length} 个阵营</span>
+                  </h3>
+                  <div className="legislation-grid">
+                    {result.factions.map((f) => (
+                      <div key={f.id} className="legislation-card">
+                        <div className="legislation-card__head">
+                          <span className="legislation-card__title">{f.name}</span>
+                          <span className="legislation-card__kicker">势力</span>
+                        </div>
+                        <span className="legislation-card__desc">{String(f.detail_json?.detail ?? "") || "—"}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* --- 伏笔 --- */}
+              {legislationTab === "伏笔" && (
+                <div>
+                  <h3 className="module-heading">
+                    <span className="module-heading__index">M03</span>
+                    伏笔系统
+                    <span className="module-heading__sub">回收提醒 · 重要性分级</span>
+                  </h3>
+                  {result.foreshadowings.map((f) => (
+                    <div className="entity-card" key={f.id}>
+                      <span className={`badge ${f.importance === "high" ? "badge-stamp" : "badge-soft"}`}>{f.importance}</span>{" "}
+                      <span className="entity-card__meta">{f.status}</span>
+                      <div className="entity-card__desc">{f.content}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* --- 一致性校验 --- */}
+              {legislationTab === "一致性校验" && (
+                <div>
+                  <h3 className="module-heading">
+                    <span className="module-heading__index">M02.5</span>
+                    一致性校验
+                    <span className="module-heading__sub">重名 / 孤儿节点 / 悬空引用</span>
+                  </h3>
+                  {result.consistency_warnings.length === 0 ? (
+                    <div className="empty-state">没有发现明显的结构性问题 ✓</div>
+                  ) : (
+                    result.consistency_warnings.map((w, i) => (
+                      <div className="entity-card" key={i}>
+                        <span className="entity-card__name mono">{w.type}</span>
+                        <div className="entity-card__desc">{w.detail.join("、")}</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </>
       )}
     </div>
   );
+}
+
+// 把 MapNode 按 level 分组显示
+function groupMapByLevel(nodes: MapNode[]): { level: string; nodes: MapNode[] }[] {
+  const seen = new Map<string, MapNode[]>();
+  for (const n of nodes) {
+    const arr = seen.get(n.level) || [];
+    arr.push(n);
+    seen.set(n.level, arr);
+  }
+  // 排序：按 level 字串首字母排（粗略，但够用）
+  return Array.from(seen.entries())
+    .map(([level, ns]) => ({ level, nodes: ns }))
+    .sort((a, b) => a.level.localeCompare(b.level));
 }

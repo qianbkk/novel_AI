@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { BridgeLogLine, BridgePendingItem, BridgeStatus, Project } from "../types";
+import type { BridgeLogLine, BridgePendingItem, BridgeStatus, ChapterListItem, Project } from "../types";
 
 type PanelData = BridgeStatus | BridgePendingItem[] | Record<string, unknown>[] | Record<string, unknown> | null;
 
@@ -12,6 +12,16 @@ const RUN_COMMANDS = [
   { label: "质量看板", command: "dashboard", args: [] },
   { label: "一致性扫描", command: "scan", args: [] },
   { label: "文风指纹", command: "fingerprint", args: [] },
+];
+
+// 七要素剧情模型：欲望 / 阻碍 / 行动 / 结果 / 意外 / 转折 / 结局
+const PLOT_WHEEL = ["欲望", "阻碍", "行动", "结果", "意外", "转折", "结局"];
+
+// 多模式大纲
+const OUTLINE_MODES = [
+  { key: "batch", label: "传统批量", desc: "线性序列生成，效率优先" },
+  { key: "card", label: "抽卡探索", desc: "多分支概率推理，提供 3-5 种走向" },
+  { key: "talk", label: "对话头脑风暴", desc: "实时人机协作推理，深度打磨" },
 ];
 
 export default function BridgeConsole() {
@@ -29,6 +39,9 @@ export default function BridgeConsole() {
   const [reviewText, setReviewText] = useState<Record<string, string>>({});
   const [activeNode, setActiveNode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [chapters, setChapters] = useState<ChapterListItem[]>([]);
+  const [outlineMode, setOutlineMode] = useState<string>("batch");
+  const [plotStep, setPlotStep] = useState<number>(0); // 当前 chapter 在七要素中的进度
   const eventSourceRef = useRef<EventSource | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
 
@@ -43,8 +56,18 @@ export default function BridgeConsole() {
       .catch(() => {
         setNovelAiDir("");
       });
+    api.listChapters(projectId)
+      .then(setChapters)
+      .catch(() => setChapters([]));
     return () => eventSourceRef.current?.close();
   }, [projectId]);
+
+  // 根据章节数推算当前章节在七要素中的位置
+  useEffect(() => {
+    const n = chapters.length;
+    if (n === 0) setPlotStep(0);
+    else setPlotStep(((n - 1) % PLOT_WHEEL.length) + 1);
+  }, [chapters.length]);
 
   useEffect(() => {
     logEndRef.current?.scrollIntoView({ block: "end" });
@@ -104,6 +127,8 @@ export default function BridgeConsole() {
         setRunning(false);
         setActiveLabel(null);
         setActiveNode(null);
+        // 跑完命令后刷新章节数
+        api.listChapters(projectId!).then(setChapters).catch(() => {});
       });
       es.addEventListener("error", (e) => {
         try {
@@ -179,6 +204,13 @@ export default function BridgeConsole() {
     }
   }
 
+  // 记忆层温度：从章节数据粗略推算
+  // L2 热 = 高频上场章节数；L5 弧 = 已写章节数 / 25 (4 弧基准)
+  const totalWords = chapters.reduce((a, c) => a + c.word_count, 0);
+  const memPips = Math.min(10, Math.max(0, Math.ceil(chapters.length / 1.5))); // 0-10
+  const arcPips = Math.min(10, Math.max(0, Math.ceil((chapters.length / 25) * 10))); // 0-10
+  const pipsToShow = Array.from({ length: 10 }, (_, i) => i < memPips);
+
   if (!projectId) return <div className="banner banner-danger">缺少项目 ID。</div>;
 
   return (
@@ -194,6 +226,9 @@ export default function BridgeConsole() {
           </div>
         </div>
         <div className="page-header__actions">
+          <Link className="btn" to={`/projects/${projectId}/rules`}>
+            规则中心
+          </Link>
           <Link className="btn" to={`/projects/${projectId}/chapters`}>
             查看章节
           </Link>
@@ -203,7 +238,92 @@ export default function BridgeConsole() {
       {error && <div className="banner banner-danger">{error}</div>}
       {exitCode !== null && <div className="banner banner-success">命令完成，exit code: {exitCode}</div>}
 
+      {/* ============ ① 三道记忆防线 + ② 多模式大纲 / 七要素概览 ============ */}
       <div className="card">
+        <h3 className="card__title">实时记忆层 · 当前节点状态</h3>
+
+        {/* 当前节点状态条（已有逻辑） */}
+        {activeNode && (
+          <div className="banner banner-info" style={{ marginBottom: 12 }}>
+            <strong>{activeNode}</strong>
+            <span style={{ marginLeft: 8 }}>运行中…</span>
+          </div>
+        )}
+
+        {/* 三个温度计：L2 衔接锁热度 · L3 压缩存储容量 · L5 弧进度 */}
+        <div className="memory-stack" style={{ marginBottom: 18 }}>
+          <div className="thermo">
+            <span className="thermo__label">L2 衔接锁热度</span>
+            <div className="thermo__pip-row">
+              {pipsToShow.map((filled, i) => (
+                <span
+                  key={i}
+                  className={`thermo__pip ${filled ? (i < 4 ? "is-cold" : i < 7 ? "is-cool" : i < 9 ? "is-warm" : "is-hot") : ""}`}
+                  style={filled ? undefined : { opacity: 0.35 }}
+                />
+              ))}
+            </div>
+            <span className="thermo__legend">{chapters.length} 章</span>
+          </div>
+          <div className="thermo">
+            <span className="thermo__label">L3 压缩存储</span>
+            <div className="thermo__pip-row">
+              {Array.from({ length: 10 }, (_, i) => i < Math.min(10, Math.floor(Math.log10(Math.max(1, totalWords)) * 2))).map((_, i) => (
+                <span key={i} className="thermo__pip is-cool" />
+              ))}
+            </div>
+            <span className="thermo__legend">{totalWords.toLocaleString()} 字</span>
+          </div>
+          <div className="thermo">
+            <span className="thermo__label">L5 弧进度</span>
+            <div className="thermo__pip-row">
+              {Array.from({ length: 10 }, (_, i) => i < arcPips).map((_, i) => (
+                <span key={i} className="thermo__pip is-cold" style={{ background: "var(--accent)", borderColor: "var(--accent)" }} />
+              ))}
+            </div>
+            <span className="thermo__legend">弧 {Math.floor(chapters.length / 25) + 1}/4</span>
+          </div>
+        </div>
+
+        {/* 七要素剧情模型：wheel */}
+        <h3 className="module-heading">
+          <span className="module-heading__index">M03</span>
+          七要素剧情模型 · 当前章节进度
+          <span className="module-heading__sub">
+            {chapters.length > 0 ? `正在写第 ${chapters.length + 1} 章` : "尚未开始"}
+          </span>
+        </h3>
+        <div className="plot-wheel">
+          {PLOT_WHEEL.map((label, i) => {
+            const step = i + 1;
+            const state = plotStep === 0 ? "future" : step < plotStep ? "done" : step === plotStep ? "active" : "future";
+            return (
+              <div key={label} className={`plot-wheel__step is-${state}`}>
+                <span className="plot-wheel__pip">{["欲", "阻", "行", "果", "外", "转", "结"][i]}</span>
+                <span className="plot-wheel__label">{label}</span>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* 多模式大纲 chip */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+          <span className="text-muted" style={{ fontSize: 12, marginRight: 4 }}>大纲模式</span>
+          {OUTLINE_MODES.map((m) => (
+            <button
+              key={m.key}
+              className={`mode-chip ${outlineMode === m.key ? "is-active" : ""}`}
+              onClick={() => setOutlineMode(m.key)}
+              title={m.desc}
+            >
+              {m.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* ============ novel_AI 目录绑定（保留） ============ */}
+      <div className="card mt-24">
         <h3 className="card__title">novel_AI 目录绑定</h3>
         <div className="form-grid">
           <div className="field">
@@ -222,6 +342,7 @@ export default function BridgeConsole() {
         </div>
       </div>
 
+      {/* ============ 命令区（保留） ============ */}
       <div className="card mt-24">
         <h3 className="card__title">命令</h3>
         <div className="command-grid">
@@ -260,14 +381,7 @@ export default function BridgeConsole() {
         </div>
       </div>
 
-      {activeNode && (
-        <div className="card mt-24" style={{ borderColor: "var(--accent)" }}>
-          <span className="text-muted">当前节点：</span>
-          <strong>{activeNode}</strong>
-          <span className="text-muted" style={{ marginLeft: 8 }}>运行中…</span>
-        </div>
-      )}
-
+      {/* ============ 实时日志（保留） ============ */}
       <div className="card mt-24">
         <div className="flex-between" style={{ marginBottom: 14 }}>
           <h3 className="card__title" style={{ margin: 0 }}>
@@ -281,6 +395,7 @@ export default function BridgeConsole() {
         <div ref={logEndRef} />
       </div>
 
+      {/* ============ 数据面板（保留） ============ */}
       {panelTitle && (
         <div className="card mt-24">
           <h3 className="card__title">{panelTitle}</h3>
@@ -288,6 +403,7 @@ export default function BridgeConsole() {
         </div>
       )}
 
+      {/* ============ 待审核（保留） ============ */}
       {pending.length > 0 && (
         <div className="card mt-24">
           <h3 className="card__title">人工审核</h3>

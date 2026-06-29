@@ -837,3 +837,656 @@ label {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ============================================================
+   6 大模块：新增组件类（全部增量，无破坏性改名）
+   ① 三道记忆防线 · ② 世界立法 · ③ 七要素剧情 · ④ 角色生命
+   ⑤ 章节衔接锁 · ⑥ 规则中心
+   ============================================================ */
+
+/* ---- 通用：模块小标题（带章节引号） ---- */
+.module-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 12px;
+  letter-spacing: 0.04em;
+}
+.module-heading__index {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  padding: 2px 7px;
+  background: var(--bg-elevated);
+  border-radius: 3px;
+  letter-spacing: 0.08em;
+}
+.module-heading__sub {
+  font-family: var(--font-body);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  letter-spacing: 0;
+  font-weight: 400;
+  margin-left: auto;
+}
+
+/* ---- ① 三道记忆防线 ---- */
+.memory-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.memory-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px 10px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  position: relative;
+}
+.memory-row::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 8px; bottom: 8px;
+  width: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+  opacity: 0.6;
+}
+.memory-row--l1::before { background: var(--accent-strong); }
+.memory-row--l2::before { background: var(--stamp); }
+.memory-row--l3::before { background: var(--moss); }
+.memory-row__layer {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+  text-align: center;
+  padding: 2px 0;
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+}
+.memory-row__title {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+.memory-row__meta {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.memory-row__count {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-faint);
+}
+
+/* 记忆温度计 (L2 热/冷 + L5 弧摘要) */
+.thermo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.thermo__label {
+  font-size: 12px;
+  color: var(--text-muted);
+  min-width: 84px;
+  letter-spacing: 0.04em;
+}
+.thermo__pip-row {
+  display: flex;
+  gap: 2px;
+  flex: 1;
+}
+.thermo__pip {
+  flex: 1;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  transition: background .12s, border-color .12s;
+}
+.thermo__pip.is-warm {
+  background: var(--warn);
+  border-color: var(--warn);
+}
+.thermo__pip.is-hot {
+  background: var(--stamp);
+  border-color: var(--stamp);
+}
+.thermo__pip.is-cool {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.thermo__pip.is-cold {
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
+  opacity: 0.6;
+}
+.thermo__legend {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  min-width: 64px;
+  text-align: right;
+}
+
+/* 弧进度（项目卡用）：圆角胶囊，带刻度 */
+.arc-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+}
+.arc-pill__bar {
+  position: relative;
+  width: 92px;
+  height: 4px;
+  background: var(--bg);
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+}
+.arc-pill__bar > span {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, var(--accent), var(--accent-strong));
+  transform-origin: left;
+}
+
+/* ---- ② 世界立法：GIS / 力量体系 / 物权 子标签 ---- */
+.subtabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 3px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin: 0 0 16px;
+}
+.subtabs__btn {
+  font-family: var(--font-body);
+  font-size: 12px;
+  padding: 5px 11px;
+  border-radius: calc(var(--radius) - 2px);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.subtabs__btn:hover { color: var(--text); }
+.subtabs__btn.is-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  font-weight: 500;
+}
+
+/* 实体卡片网格（世界立法用）*/
+.legislation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: 10px;
+}
+.legislation-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color .12s, transform .12s;
+  position: relative;
+  overflow: hidden;
+}
+.legislation-card::before {
+  content: "";
+  position: absolute;
+  left: 0; top: 14px; bottom: 14px;
+  width: 2px;
+  background: var(--accent);
+  opacity: 0;
+  transition: opacity .12s;
+}
+.legislation-card:hover { border-color: var(--border-strong); transform: translateY(-1px); }
+.legislation-card:hover::before { opacity: 0.7; }
+.legislation-card__head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 6px;
+}
+.legislation-card__title {
+  font-family: var(--font-display);
+  font-size: 14.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.legislation-card__kicker {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--accent-strong);
+  letter-spacing: 0.08em;
+}
+.legislation-card__desc {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.55;
+}
+.legislation-card__meta {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-faint);
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.legislation-card__chips {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  margin-top: 4px;
+}
+.legislation-card__chip {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  padding: 1px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text-faint);
+}
+
+/* GIS 路径面包屑 */
+.gis-crumbs {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-faint);
+  letter-spacing: 0.04em;
+}
+.gis-crumbs__sep {
+  color: var(--text-faint);
+  margin: 0 4px;
+  opacity: 0.5;
+}
+
+/* 力量等级条 */
+.tier-rail {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+.tier-rail__step {
+  flex: 1;
+  padding: 4px 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-align: center;
+  background: var(--bg);
+  color: var(--text-faint);
+  border-right: 1px solid var(--border);
+  position: relative;
+}
+.tier-rail__step:last-child { border-right: none; }
+.tier-rail__step.is-reached {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 500;
+}
+.tier-rail__step.is-current {
+  background: linear-gradient(180deg, var(--accent-soft-strong), var(--accent-soft));
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+/* ---- ③ 七要素剧情模型 ---- */
+.plot-wheel {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 6px;
+  padding: 16px 0 8px;
+}
+.plot-wheel__step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+.plot-wheel__pip {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--bg);
+  border: 1.5px solid var(--border-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-faint);
+  transition: all .15s;
+}
+.plot-wheel__step.is-done .plot-wheel__pip {
+  background: var(--moss-soft);
+  border-color: var(--moss);
+  color: var(--moss);
+}
+.plot-wheel__step.is-active .plot-wheel__pip {
+  background: var(--accent);
+  border-color: var(--accent-strong);
+  color: #0E1326;
+  box-shadow: 0 0 0 5px var(--accent-soft);
+}
+.plot-wheel__step.is-future .plot-wheel__pip {
+  opacity: 0.55;
+}
+.plot-wheel__label {
+  font-size: 11px;
+  font-family: var(--font-body);
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+.plot-wheel__step.is-active .plot-wheel__label {
+  color: var(--accent-strong);
+  font-weight: 500;
+}
+.plot-wheel__step.is-done .plot-wheel__label {
+  color: var(--text);
+}
+
+/* 多模式大纲：模式 chip */
+.mode-chip {
+  font-family: var(--font-body);
+  font-size: 12px;
+  padding: 6px 12px;
+  border: 1px dashed var(--border-strong);
+  background: transparent;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color .12s, color .12s, background .12s;
+}
+.mode-chip:hover { border-color: var(--accent); color: var(--text); }
+.mode-chip.is-active {
+  border-style: solid;
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-weight: 500;
+}
+
+/* 七要素摘要行 */
+.plot-summary-row {
+  display: grid;
+  grid-template-columns: 70px 1fr;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--border);
+  font-size: 12.5px;
+}
+.plot-summary-row:last-child { border-bottom: none; }
+.plot-summary-row__label {
+  font-family: var(--font-display);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent-strong);
+  letter-spacing: 0.04em;
+}
+.plot-summary-row__value {
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+/* ---- ④ 角色生命周期：小标识 ---- */
+.life-dot {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.05em;
+  padding: 1px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+.life-dot::before {
+  content: "";
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--moss);
+}
+.life-dot--alive::before { background: var(--moss); }
+.life-dot--dead { color: var(--text-faint); }
+.life-dot--dead::before { background: var(--text-faint); }
+.life-dot--unknown { color: var(--text-muted); }
+.life-dot--unknown::before { background: var(--warn); }
+
+/* ---- ⑤ 章节衔接锁 (Chapter Connection Lock) ---- */
+.conn-lock {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+}
+.conn-lock__pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.conn-lock__head {
+  display: flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  letter-spacing: 0.10em;
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+.conn-lock__head::before {
+  content: "";
+  width: 8px; height: 1.5px; background: var(--accent);
+}
+.conn-lock__list {
+  list-style: none;
+  margin: 0; padding: 0;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.conn-lock__item {
+  font-size: 12.5px;
+  color: var(--text);
+  padding-left: 14px;
+  position: relative;
+  line-height: 1.55;
+}
+.conn-lock__item::before {
+  content: "·";
+  position: absolute;
+  left: 4px; top: -1px;
+  color: var(--accent-strong);
+  font-weight: 700;
+  font-size: 16px;
+  line-height: 1;
+}
+.conn-lock__item--empty {
+  color: var(--text-faint);
+  font-style: italic;
+}
+
+/* 章节行：左侧加锁符号 */
+.chapter-row { position: relative; }
+.chapter-row .lock-mark {
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 4px; height: 24px;
+  background: var(--accent);
+  border-radius: 1px;
+  opacity: 0.4;
+}
+.chapter-row.is-locked .lock-mark { background: var(--stamp); opacity: 0.9; }
+
+/* ---- ⑥ 规则中心 ---- */
+.rule-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 12px;
+}
+.rule-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.rule-card__head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 6px;
+}
+.rule-card__name {
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+.rule-card__body {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+.rule-card__chips {
+  display: flex; flex-wrap: wrap; gap: 4px;
+}
+
+.rule-section {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin: 8px 0 10px;
+}
+.rule-section__num {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--stamp);
+  padding: 1px 7px;
+  border: 1.5px solid var(--stamp-border);
+  border-radius: var(--radius-stamp);
+  transform: rotate(-1.5deg);
+}
+.rule-section__title {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* 模板占位 */
+.template-stub {
+  background: var(--bg);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--text-faint);
+  line-height: 1.7;
+}
+.template-stub__name {
+  color: var(--accent-strong);
+  font-weight: 500;
+}
+
+/* ---- 通用 6 模块网格布局 ---- */
+.module-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+.module-grid-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 880px) {
+  .module-grid-3, .module-grid-2 { grid-template-columns: 1fr; }
+  .conn-lock { grid-template-columns: 1fr; }
+  .plot-wheel { grid-template-columns: repeat(7, minmax(34px, 1fr)); }
+}
+
+/* === 工具：三个最新章节预览 === */
+.last-chapters {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 8px;
+}
+.last-chapter-line {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-family: var(--font-body);
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.last-chapter-line__no {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  padding: 1px 5px;
+  background: var(--bg);
+  border-radius: 3px;
+  min-width: 38px;
+  text-align: center;
+  flex-shrink: 0;
+}
+.last-chapter-line__title {
+  font-family: var(--font-display);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  flex-shrink: 0;
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.last-chapter-line__preview {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-faint);
+}
+
+/* 项目卡底部：进度条缩略 */
+.project-card__progress {
+  margin-top: 12px;
+}
+

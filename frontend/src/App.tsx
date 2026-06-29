@@ -6,6 +6,7 @@ import Chapters from "./pages/Chapters";
 import Providers from "./pages/Providers";
 import RoleAssignments from "./pages/RoleAssignments";
 import BridgeConsole from "./pages/BridgeConsole";
+import RuleCenter from "./pages/RuleCenter";
 
 const GLOBAL_LINKS = [
   { to: "/", label: "项目" },
@@ -93,6 +94,15 @@ export default function App() {
               <span className="sidebar-link__dot" />
               章节管理
             </NavLink>
+            <NavLink
+              to={`/projects/${projectId}/rules`}
+              className={({ isActive }) =>
+                `sidebar-link${isActive ? " is-active" : ""}`
+              }
+            >
+              <span className="sidebar-link__dot" />
+              规则中心
+            </NavLink>
           </div>
         )}
 
@@ -111,6 +121,7 @@ export default function App() {
           <Route path="/projects/:projectId/worldbuild" element={<WorldBuild />} />
           <Route path="/projects/:projectId/chapters" element={<Chapters />} />
           <Route path="/projects/:projectId/bridge" element={<BridgeConsole />} />
+          <Route path="/projects/:projectId/rules" element={<RuleCenter />} />
         </Routes>
       </main>
     </div>
