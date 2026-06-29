@@ -93,47 +93,72 @@ goto :eof
 REM ---------- status panel ----------
 :print_status
 echo.
-echo %CYAN%[Port / PID status]%RESET%
+echo %CYAN%[Snapshot]%RESET%
 echo %GRAY%------------------------------------------------------------%RESET%
 
 call :find_pids_by_port %BACKEND_PORT%
 set "BE_PIDS=!RESULT_PIDS!"
 if defined BE_PIDS (
-    echo   backend  :%BACKEND_PORT%   %GREEN%RUNNING%RESET%   PIDs: !BE_PIDS!
+    echo   backend  :%BACKEND_PORT%    %GREEN%running%RESET%   PIDs: !BE_PIDS!
+    set "BE_UP=1"
 ) else (
-    echo   backend  :%BACKEND_PORT%   %GRAY%stopped%RESET%
+    echo   backend  :%BACKEND_PORT%    %GRAY%stopped%RESET%
+    set "BE_UP=0"
 )
 
 call :find_pids_by_port %FRONTEND_PORT%
 set "FE_PIDS=!RESULT_PIDS!"
 if defined FE_PIDS (
-    echo   frontend :%FRONTEND_PORT%   %GREEN%RUNNING%RESET%   PIDs: !FE_PIDS!
+    echo   frontend :%FRONTEND_PORT%    %GREEN%running%RESET%   PIDs: !FE_PIDS!
+    set "FE_UP=1"
 ) else (
-    echo   frontend :%FRONTEND_PORT%   %GRAY%stopped%RESET%
+    echo   frontend :%FRONTEND_PORT%    %GRAY%stopped%RESET%
+    set "FE_UP=0"
 )
 echo %GRAY%------------------------------------------------------------%RESET%
 
-REM HTTP /health check (PowerShell; returns 0 regardless of HTTP result, so we
-REM detect failure from the catch branch's own output, not from errorlevel).
-REM Trick: embed bat-expanded ANSI codes INTO the PowerShell command string
-REM (single-quoted ' ' so PowerShell does not re-interpret), so $env:... is
-REM never needed and the literal ESC characters reach the terminal.
-echo %CYAN%[HTTP /health]%RESET%
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r=Invoke-WebRequest -Uri 'http://%BACKEND_HOST%:%BACKEND_PORT%/health' -UseBasicParsing -TimeoutSec 3; if ($r.StatusCode -lt 400) { Write-Host ('  backend /health   %GREEN%OK    %RESET% status=' + $r.StatusCode) } else { Write-Host ('  backend /health   %YELLOW%HTTP%RESET% status=' + $r.StatusCode) } } catch { Write-Host ('  backend /health   %RED%FAIL%RESET% ' + $_.Exception.Message) }" 2>&1
-if errorlevel 1 (
-    echo   backend /health   %RED%FAIL%RESET%   PowerShell error
-)
+REM HTTP /health check (only when the port is listening; otherwise it is
+REM obviously unreachable and we skip the call to avoid a 3s timeout per row).
+echo %CYAN%[HTTP probe]%RESET%
+if "%BE_UP%"=="1" goto :_be_probe_on
+echo   backend /health    %GRAY%skipped (not listening)%RESET%
+goto :_be_probe_end
+:_be_probe_on
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r=Invoke-WebRequest -Uri 'http://%BACKEND_HOST%:%BACKEND_PORT%/health' -UseBasicParsing -TimeoutSec 3; if ($r.StatusCode -lt 400) { Write-Host ('  backend /health    %GREEN%ok%RESET%      status=' + $r.StatusCode) } else { Write-Host ('  backend /health    %YELLOW%http' + $r.StatusCode + '%RESET%') } } catch { Write-Host ('  backend /health    %RED%fail%RESET%   ' + $_.Exception.Message) }" 2>&1
+:_be_probe_end
 
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r=Invoke-WebRequest -Uri 'http://%FRONTEND_HOST%:%FRONTEND_PORT%' -UseBasicParsing -TimeoutSec 3; Write-Host ('  frontend /        %GREEN%OK    %RESET% status=' + $r.StatusCode) } catch { Write-Host ('  frontend /        %YELLOW%N/A   %RESET% vite may still be compiling') }" 2>&1
-if errorlevel 1 (
-    echo   frontend /        %YELLOW%N/A%RESET%   PowerShell error
-)
+if "%FE_UP%"=="1" goto :_fe_probe_on
+echo   frontend /         %GRAY%skipped (not listening)%RESET%
+goto :_fe_probe_end
+:_fe_probe_on
+powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r=Invoke-WebRequest -Uri 'http://%FRONTEND_HOST%:%FRONTEND_PORT%' -UseBasicParsing -TimeoutSec 3; Write-Host ('  frontend /         %GREEN%ok%RESET%      status=' + $r.StatusCode) } catch { Write-Host ('  frontend /         %YELLOW%n/a%RESET%     ' + $_.Exception.Message) }" 2>&1
+:_fe_probe_end
 echo %GRAY%------------------------------------------------------------%RESET%
+
+REM Smart hint: if both down, suggest the single command to start everything.
+if "%BE_UP%%FE_UP%"=="00" goto :_hint_both_down
+if "%BE_UP%"=="0" goto :_hint_be_down
+if "%FE_UP%"=="0" goto :_hint_fe_down
+goto :eof
+
+:_hint_both_down
+echo %YELLOW%hint%RESET%  both stopped. Press %GREEN%3%RESET% from the menu, or run:  dev.bat start-all
+goto :eof
+
+:_hint_be_down
+echo %YELLOW%hint%RESET%  backend is down but frontend is up. The web UI will not be able to reach the API.
+echo          start it with menu option %GREEN%1%RESET%, or:  dev.bat start-backend
+goto :eof
+
+:_hint_fe_down
+echo %YELLOW%hint%RESET%  backend is up but frontend is down. You can hit the API directly at http://%BACKEND_HOST%:%BACKEND_PORT%/docs
+echo          start the UI with menu option %GREEN%2%RESET%, or:  dev.bat start-frontend
 goto :eof
 
 REM ==================== START ====================
 
 :start_backend
+set "LAST_RESULT=ok"
 call :find_pids_by_port %BACKEND_PORT%
 if defined RESULT_PIDS (
     echo %YELLOW%[backend already running]%RESET% PIDs: !RESULT_PIDS!
@@ -141,27 +166,34 @@ if defined RESULT_PIDS (
 )
 if not exist "%BACKEND_DIR%" (
     echo %RED%[error]%RESET% backend dir missing: %BACKEND_DIR%
+    set "LAST_RESULT=fail"
     goto :eof
 )
-echo %GREEN%[starting backend]%RESET%  uvicorn  :%BACKEND_PORT%  --^>  %LOG_DIR%\backend.log
+echo %GREEN%[starting backend]%RESET%  uvicorn  :%BACKEND_PORT%  --^>^>  %LOG_DIR%\backend.log
 REM Write a tiny launcher .cmd to avoid quoting hell inside `start ... cmd /c`.
+REM Use >> (append) instead of > (truncate) so a leftover writer on backend.log
+REM (e.g. a ghost uvicorn from a previous session) does not block us.
 set "BE_LAUNCHER=%LOG_DIR%\_start_backend.cmd"
 >  "%BE_LAUNCHER%" echo @echo off
 >> "%BE_LAUNCHER%" echo chcp 65001 ^>nul
 >> "%BE_LAUNCHER%" echo cd /d "%BACKEND_DIR%"
->> "%BE_LAUNCHER%" echo python -m uvicorn app.main:app --host %BACKEND_HOST% --port %BACKEND_PORT% --reload ^> "%LOG_DIR%\backend.log" 2^>^&1
+>> "%BE_LAUNCHER%" echo echo. ^>^> "%LOG_DIR%\backend.log"
+>> "%BE_LAUNCHER%" echo echo ==== start at %DATE% %TIME% ==== ^>^> "%LOG_DIR%\backend.log"
+>> "%BE_LAUNCHER%" echo python -m uvicorn app.main:app --host %BACKEND_HOST% --port %BACKEND_PORT% --reload ^>^> "%LOG_DIR%\backend.log" 2^>^&1
 cd /d "%BACKEND_DIR%"
 start "novelai-backend" /B cmd /c "%BE_LAUNCHER%"
 ping -n 5 127.0.0.1 >nul
 call :find_pids_by_port %BACKEND_PORT%
 if defined RESULT_PIDS (
-    echo %GREEN%[backend up]%RESET% PIDs: !RESULT_PIDS!
+    echo %GREEN%[backend up]%RESET% PIDs: !RESULT_PIDS!    http://%BACKEND_HOST%:%BACKEND_PORT%/docs
 ) else (
     echo %RED%[backend start failed]%RESET% see: %LOG_DIR%\backend.log
+    set "LAST_RESULT=fail"
 )
 goto :eof
 
 :start_frontend
+set "LAST_RESULT=ok"
 call :find_pids_by_port %FRONTEND_PORT%
 if defined RESULT_PIDS (
     echo %YELLOW%[frontend already running]%RESET% PIDs: !RESULT_PIDS!
@@ -169,33 +201,40 @@ if defined RESULT_PIDS (
 )
 if not exist "%FRONTEND_DIR%" (
     echo %RED%[error]%RESET% frontend dir missing: %FRONTEND_DIR%
+    set "LAST_RESULT=fail"
     goto :eof
 )
-echo %GREEN%[starting frontend]%RESET%  vite     :%FRONTEND_PORT%  --^>  %LOG_DIR%\frontend.log
+echo %GREEN%[starting frontend]%RESET%  vite     :%FRONTEND_PORT%  --^>^>  %LOG_DIR%\frontend.log
 REM Write a tiny launcher .cmd to avoid quoting hell inside `start ... cmd /c`.
 set "FE_LAUNCHER=%LOG_DIR%\_start_frontend.cmd"
 >  "%FE_LAUNCHER%" echo @echo off
 >> "%FE_LAUNCHER%" echo chcp 65001 ^>nul
 >> "%FE_LAUNCHER%" echo cd /d "%FRONTEND_DIR%"
->> "%FE_LAUNCHER%" echo npm run dev -- --host %FRONTEND_HOST% --port %FRONTEND_PORT% ^> "%LOG_DIR%\frontend.log" 2^>^&1
+>> "%FE_LAUNCHER%" echo echo ==== start at %DATE% %TIME% ==== ^>^> "%LOG_DIR%\frontend.log"
+>> "%FE_LAUNCHER%" echo npm run dev -- --host %FRONTEND_HOST% --port %FRONTEND_PORT% ^>^> "%LOG_DIR%\frontend.log" 2^>^&1
 cd /d "%FRONTEND_DIR%"
 start "novelai-frontend" /B cmd /c "%FE_LAUNCHER%"
-echo   waiting for vite to compile...
 ping -n 6 127.0.0.1 >nul
 call :find_pids_by_port %FRONTEND_PORT%
 if defined RESULT_PIDS (
-    echo %GREEN%[frontend up]%RESET% PIDs: !RESULT_PIDS!
+    echo %GREEN%[frontend up]%RESET% PIDs: !RESULT_PIDS!    http://%FRONTEND_HOST%:%FRONTEND_PORT%/
 ) else (
     echo %YELLOW%[frontend still booting]%RESET% waiting another 5s...
     ping -n 6 127.0.0.1 >nul
     call :find_pids_by_port %FRONTEND_PORT%
-    if defined RESULT_PIDS (echo %GREEN%[frontend up]%RESET% PIDs: !RESULT_PIDS!) else (echo %RED%[frontend start failed]%RESET% see: %LOG_DIR%\frontend.log)
+    if defined RESULT_PIDS (
+        echo %GREEN%[frontend up]%RESET% PIDs: !RESULT_PIDS!    http://%FRONTEND_HOST%:%FRONTEND_PORT%/
+    ) else (
+        echo %RED%[frontend start failed]%RESET% see: %LOG_DIR%\frontend.log
+        set "LAST_RESULT=fail"
+    )
 )
 goto :eof
 
 REM ==================== STOP ====================
 
 :stop_backend
+set "LAST_RESULT=ok"
 call :find_pids_by_port %BACKEND_PORT%
 if not defined RESULT_PIDS (
     echo %GRAY%[backend not running]%RESET%
@@ -205,10 +244,16 @@ echo %YELLOW%[stopping backend]%RESET%  PIDs: !RESULT_PIDS!
 for %%P in (!RESULT_PIDS!) do call :kill_pid %%P
 ping -n 2 127.0.0.1 >nul
 call :find_pids_by_port %BACKEND_PORT%
-if not defined RESULT_PIDS (echo %GREEN%[backend stopped]%RESET%) else (echo %RED%[stop failed]%RESET%)
+if not defined RESULT_PIDS (
+    echo %GREEN%[backend stopped]%RESET%
+) else (
+    echo %RED%[stop failed]%RESET%   PIDs still on :%BACKEND_PORT%: !RESULT_PIDS!
+    set "LAST_RESULT=fail"
+)
 goto :eof
 
 :stop_frontend
+set "LAST_RESULT=ok"
 call :find_pids_by_port %FRONTEND_PORT%
 if not defined RESULT_PIDS (
     echo %GRAY%[frontend not running]%RESET%
@@ -224,10 +269,19 @@ if not defined RESULT_PIDS (
 ) else (
     echo %YELLOW%[lingering node, force killing]%RESET%
     for %%P in (!RESULT_PIDS!) do call :kill_pid %%P
+    ping -n 2 127.0.0.1 >nul
+    call :find_pids_by_port %FRONTEND_PORT%
+    if defined RESULT_PIDS (
+        echo %RED%[stop failed]%RESET%   PIDs still on :%FRONTEND_PORT%: !RESULT_PIDS!
+        set "LAST_RESULT=fail"
+    ) else (
+        echo %GREEN%[frontend stopped]%RESET%
+    )
 )
 goto :eof
 
 :stop_all
+set "LAST_RESULT=ok"
 call :stop_backend
 call :stop_frontend
 echo %GREEN%[all stopped]%RESET%
@@ -295,6 +349,8 @@ call :print_banner
 call :print_menu
 if "%CHOICE%"=="" set "CHOICE=0"
 
+set "LAST_RESULT=ok"
+
 if "%CHOICE%"=="1" call :start_backend
 if "%CHOICE%"=="2" call :start_frontend
 if "%CHOICE%"=="3" (
@@ -315,8 +371,12 @@ if "%CHOICE%"=="9" (
 
 if "%CHOICE%"=="0" goto :exit_script
 
-echo.
-pause
+REM Only pause when the last action failed; otherwise the user wants to chain
+REM the next action (e.g. start-backend, then start-frontend) without a wait.
+if /I not "%LAST_RESULT%"=="ok" (
+    echo.
+    pause
+)
 goto :menu_loop
 
 :exit_script
