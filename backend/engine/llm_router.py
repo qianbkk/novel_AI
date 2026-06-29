@@ -1,75 +1,69 @@
-"""Runtime LLM router — reads Provider + RoleAssignment from DB at call time.
-Replaces novel_AI/api_client.py's import-time env var approach.
-ponytail: sets module globals on api_client. Single-user, no concurrent runs."""
+"""Runtime LLM router — reads Provider + RoleAssignment from DB and
+configures a backend.engine.llm.router.LLMRouter.
+
+P1-E rewrite: no more monkey-patching the old api_client module globals.
+The router is a fully-fledged backend.engine.llm.router.LLMRouter that
+holds all state internally; configure() pushes DB-driven config into it.
+"""
 from __future__ import annotations
 from typing import Optional
 
-_ACTIVE_ROUTER: Optional[LLMRouter] = None
+from .llm.router import LLMRouter as _EngineRouter
 
 
-def set_active_router(router: LLMRouter):
+_ACTIVE_ROUTER: Optional[_EngineRouter] = None
+
+
+def set_active_router(router: _EngineRouter) -> None:
     global _ACTIVE_ROUTER
     _ACTIVE_ROUTER = router
 
 
-def get_active_router() -> Optional[LLMRouter]:
+def get_active_router() -> Optional[_EngineRouter]:
     return _ACTIVE_ROUTER
 
 
-def call_llm(
-    agent_name: str,
-    system_prompt: str,
-    user_prompt: str,
-    max_tokens: int = 4096,
-    temperature: float = 0.7,
-    override_provider: str | None = None,
-    override_model: str | None = None,
-    use_cache: bool = False,
-    cached_system: str | None = None,
-) -> tuple:
-    """Same signature as api_client.call_llm — dispatches through active router."""
-    router = _ACTIVE_ROUTER
-    if router:
-        return router.call_llm(
-            agent_name, system_prompt, user_prompt,
-            max_tokens, temperature,
-            override_provider, override_model,
-            use_cache, cached_system,
-        )
-    from api_client import call_llm as fallback
-    return fallback(
-        agent_name, system_prompt, user_prompt,
-        max_tokens, temperature,
-        override_provider, override_model,
-        use_cache, cached_system,
-    )
+def reset_active_router() -> None:
+    """Drop the active router. Used by tests and after-process teardown."""
+    global _ACTIVE_ROUTER
+    _ACTIVE_ROUTER = None
 
 
 class LLMRouter:
-    """Builds provider config from DB, monkey-patches into api_client globals.
-    ponytail: safe because graph runs sequentially in single-user mode."""
+    """Reads Provider + RoleAssignment from the database and pushes the
+    resulting config into a backend.engine.llm.router.LLMRouter instance.
+
+    The constructor does NOT touch the DB — call load_routes() + install()
+    explicitly. This keeps the side effect surface small and lets tests
+    bypass the DB by passing in a pre-configured router directly.
+    """
 
     def __init__(self, project_id: str):
         self.project_id = project_id
         self._routes: dict[str, dict] | None = None
+        # The actual provider-aware router that does the calls.
+        self._engine = _EngineRouter(project_id=project_id)
 
-    def load_routes(self):
-        """Fetch all RoleAssignment + Provider rows from DB."""
+    # ---- DB-driven configuration ----
+    def load_routes(self) -> None:
+        """Read RoleAssignment × Provider rows. Sets self._routes."""
         from app.database import SessionLocal
         from app.models import Provider, RoleAssignment
 
         db = SessionLocal()
         try:
-            rows = db.query(RoleAssignment, Provider).join(
-                Provider, RoleAssignment.provider_id == Provider.id
-            ).all()
-            routes = {}
+            rows = (
+                db.query(RoleAssignment, Provider)
+                .join(Provider, RoleAssignment.provider_id == Provider.id)
+                .all()
+            )
+            routes: dict[str, dict] = {}
             for ra, p in rows:
                 routes[ra.role_key] = {
-                    "type": p.provider_type,
-                    "key": p.api_key,
-                    "base": p.api_base or "",
-                    "model": ra.model_override or p.default_model,
+                    "type":  p.provider_type,
+                    "key":   p.api_key or "",
+                    "base":  p.api_base or "",
+                    "model": ra.model_override or p.default_model or "",
                     "extra": p.extra_json or {},
                     "proxy": p.needs_proxy,
                 }
@@ -77,77 +71,66 @@ class LLMRouter:
         finally:
             db.close()
 
-    def install(self):
-        """Push DB config into api_client module globals.
-        Call once before running the graph for this project."""
+    def install(self) -> _EngineRouter:
+        """Push DB config into the engine router and make it the active one.
+
+        Returns the configured engine router so callers can hold a reference.
+        """
         if self._routes is None:
             self.load_routes()
-        import api_client as ac
 
-        # Override MODEL_ROUTES so agent→model routing uses DB
+        routes: dict[str, tuple[str, str]] = {}
+        api_keys: dict[str, str] = {}
         for role_key, r in (self._routes or {}).items():
-            ac.MODEL_ROUTES[role_key] = (r["type"], r["model"])
-
-        # Override API key constants — Python resolves globals at call time,
-        # so setting module attrs works even though they were initialized
-        # from env vars at import time.
-        seen: set[str] = set()
-        for r in (self._routes or {}).values():
-            pt = r["type"]
-            if pt in seen:
-                continue
-            seen.add(pt)
-            if pt == "anthropic":
-                ac.ANTHROPIC_API_KEY = r["key"]
-            elif pt == "deepseek":
-                ac.DEEPSEEK_API_KEY = r["key"]
+            routes[role_key] = (r["type"], r["model"])
+            # Map provider type → the env-style key the engine router stores.
+            if r["type"] == "anthropic":
+                api_keys["anthropic"] = r["key"]
+            elif r["type"] == "deepseek":
+                api_keys["deepseek"] = r["key"]
                 if r["base"]:
-                    ac.DEEPSEEK_API_BASE = r["base"]
-            elif pt == "gemini":
-                ac.GEMINI_API_KEY = r["key"]
-            elif pt == "kimi":
-                ac.KIMI_API_KEY = r["key"]
-                if r["base"]:
-                    ac.KIMI_API_BASE = r["base"]
-            elif pt == "minimax":
-                ac.MINIMAX_API_KEY = r["key"]
-                gid = r["extra"].get("group_id")
+                    api_keys.setdefault("deepseek_api_base", r["base"])
+            elif r["type"] == "gemini":
+                api_keys["gemini"] = r["key"]
+            elif r["type"] == "kimi":
+                api_keys["kimi"] = r["key"]
+            elif r["type"] == "minimax":
+                api_keys["minimax"] = r["key"]
+                gid = r["extra"].get("group_id") if r["extra"] else None
                 if gid:
-                    ac.MINIMAX_GROUP_ID = str(gid)
-            elif pt == "custom":
-                ac.CUSTOM_API_KEY = r["key"]
-                ac.CUSTOM_API_BASE = r["base"]
-                ac.CUSTOM_MODEL_ID = r["model"]
+                    api_keys["minimax_group_id"] = str(gid)
+            elif r["type"] == "custom":
+                api_keys["custom"] = r["key"]
+                if r["base"]:
+                    api_keys["custom_api_base"] = r["base"]
+                if r["model"]:
+                    api_keys["custom_model_id"] = r["model"]
 
-    def call_llm(
-        self,
-        agent_name: str,
-        system_prompt: str,
-        user_prompt: str,
-        max_tokens: int = 4096,
-        temperature: float = 0.7,
-        override_provider: str | None = None,
-        override_model: str | None = None,
-        use_cache: bool = False,
-        cached_system: str | None = None,
-    ) -> tuple:
-        """Delegate to api_client.call_llm after ensuring config is installed.
-        ponytail: on each call, push the route config for this agent.
-        A full install() is done once in graph.py before graph execution."""
-        import api_client as ac
-        return ac.call_llm(
-            agent_name, system_prompt, user_prompt,
-            max_tokens, temperature,
-            override_provider, override_model,
-            use_cache, cached_system,
-        )
+        self._engine.configure(routes=routes, api_keys=api_keys)
+        set_active_router(self._engine)
+        # Also wire the writer agent to use this router.
+        try:
+            from .agents.writer import set_active_router as set_writer_router
+            set_writer_router(self._engine)
+        except ImportError:
+            pass
+        return self._engine
+
+    @property
+    def engine(self) -> _EngineRouter:
+        return self._engine
+
+    def get_stats(self) -> dict:
+        return self._engine.get_stats()
+
+    def reset_stats(self) -> None:
+        self._engine.reset_stats()
 
     def build_runnable_config(self) -> dict:
-        """Build LangGraph RunnableConfig for this project.
-        thread_id = project_id enables SqliteSaver checkpoint isolation."""
+        """LangGraph RunnableConfig with thread_id = project_id."""
         return {
             "configurable": {
-                "thread_id": self.project_id,
+                "thread_id":  self.project_id,
                 "project_id": self.project_id,
             }
         }
