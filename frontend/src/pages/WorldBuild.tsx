@@ -45,12 +45,15 @@ export default function WorldBuild() {
 
   useEffect(() => {
     if (!projectId) return;
-    api.getProject(projectId).then((p) => {
-      setProject(p);
-      if (p.status === "ready") {
-        api.getWorldbuildResult(projectId).then(setResult);
-      }
-    });
+    // 加载项目信息。失败时显式设 error 状态，避免 page 永远卡在「加载中…」
+    api.getProject(projectId)
+      .then((p) => {
+        setProject(p);
+        if (p.status === "ready") {
+          api.getWorldbuildResult(projectId).then(setResult).catch((e) => setError(String(e)));
+        }
+      })
+      .catch((e) => setError(String(e)));
     return () => eventSourceRef.current?.close();
   }, [projectId]);
 
@@ -101,7 +104,27 @@ export default function WorldBuild() {
     };
   }
 
-  if (!project) return <p className="loading-text">加载中…</p>;
+  // 加载失败时给出明确提示 + 重试入口，避免「加载中…」死循环
+  if (!project) {
+    if (error) {
+      return (
+        <div className="card">
+          <div className="banner banner-danger">{error}</div>
+          <p className="text-muted" style={{ marginTop: 12, fontSize: 12.5 }}>
+            后端没起来？默认地址 <span className="text-mono">http://localhost:8123</span>
+          </p>
+          <button
+            className="btn btn-primary"
+            style={{ marginTop: 12 }}
+            onClick={() => window.location.reload()}
+          >
+            重试
+          </button>
+        </div>
+      );
+    }
+    return <p className="loading-text">加载中…</p>;
+  }
 
   return (
     <div>

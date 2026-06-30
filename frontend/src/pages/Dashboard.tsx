@@ -157,24 +157,29 @@ export default function Dashboard() {
   const rootRef = useRef<HTMLDivElement | null>(null);
   useReveal(rootRef);
 
+  async function loadAll() {
+    setError(null);
+    try {
+      const ps = await api.listProjects();
+      setProjects(ps);
+      const entries = await Promise.all(
+        ps.map(async (p) => {
+          try {
+            const chs = await api.listChapters(p.id);
+            return [p.id, chs] as const;
+          } catch {
+            return [p.id, [] as ChapterListItem[]] as const;
+          }
+        }),
+      );
+      setChapterMap(Object.fromEntries(entries));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   useEffect(() => {
-    api
-      .listProjects()
-      .then(async (ps) => {
-        setProjects(ps);
-        const entries = await Promise.all(
-          ps.map(async (p) => {
-            try {
-              const chs = await api.listChapters(p.id);
-              return [p.id, chs] as const;
-            } catch {
-              return [p.id, [] as ChapterListItem[]] as const;
-            }
-          }),
-        );
-        setChapterMap(Object.fromEntries(entries));
-      })
-      .catch((e) => setError(String(e)));
+    loadAll();
   }, []);
 
   const totalWords = useMemo(
@@ -188,9 +193,11 @@ export default function Dashboard() {
         <div>
           <h1 className="page-header__title">我的项目</h1>
           <div className="page-header__sub">
-            {projects
-              ? `共 ${projects.length} 个项目 · ${Object.values(chapterMap).flat().length} 章 · ${totalWords.toLocaleString()} 字`
-              : "加载中…"}
+            {error
+              ? "项目加载失败"
+              : projects
+                ? `共 ${projects.length} 个项目 · ${Object.values(chapterMap).flat().length} 章 · ${totalWords.toLocaleString()} 字`
+                : "加载中…"}
           </div>
         </div>
         <div className="page-header__actions">
@@ -205,8 +212,14 @@ export default function Dashboard() {
 
       {error && (
         <div className="banner banner-danger">
-          {error} — 后端没起来？默认地址{" "}
-          <span className="text-mono">http://localhost:8123</span>
+          <div>{error} — 后端没起来？默认地址 <span className="text-mono">http://localhost:8123</span></div>
+          <button
+            className="btn"
+            style={{ marginTop: 10 }}
+            onClick={loadAll}
+          >
+            重试
+          </button>
         </div>
       )}
 
