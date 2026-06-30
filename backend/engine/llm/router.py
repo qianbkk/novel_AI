@@ -83,6 +83,49 @@ class _HTTPClientError(httpx.HTTPError):
         self.status_code = status_code
 
 
+# ── Proxy mount map ──
+# P3 wiring: Provider.needs_proxy=True → engine.llm.router.LLMRouter.set_proxy_map()
+# lets a configured proxy URL apply to a specific provider's HTTP client.
+_proxy_mounts: dict[str, httpx.Client] = {}  # proxy_url -> mounted client
+_proxy_lock = threading.Lock()
+
+
+def _get_proxied_client(provider: str, base_url: str, timeout: int = 120) -> httpx.Client:
+    """If a proxy is configured for `provider`, return an httpx.Client with
+    proxy mounts that intercept calls to that provider's host.
+
+    Falls back to the regular pool client if no proxy is configured.
+    """
+    proxy_url = _proxy_mounts.get(provider)
+    if not proxy_url:
+        return _get_client(timeout)
+
+    # Key proxied client by (proxy_url, timeout) to avoid re-init
+    key = (provider, proxy_url, timeout)
+    with _proxy_lock:
+        if key not in _proxy_mounts:
+            # httpx.Client with proxy via mounts (httpx doesn't support 'proxies=' kwarg)
+            client = httpx.Client(
+                timeout=timeout,
+                limits=httpx.Limits(max_connections=10, max_keepalive_connections=5),
+            )
+            # Mount proxy for the host portion of base_url
+            try:
+                from urllib.parse import urlparse
+                host = urlparse(base_url).netloc
+                if host:
+                    client.mount(f"https://{host}", httpx.Client(proxy=proxy_url, timeout=timeout))
+                    client.mount(f"http://{host}", httpx.Client(proxy=proxy_url, timeout=timeout))
+            except Exception:
+                pass
+            _proxy_mounts[key] = client
+        return _proxy_mounts[key]
+
+
+# Module-level proxy map exposed to LLMRouter.set_proxy_map
+_PROVIDER_PROXY: dict[str, str] = {}
+
+
 @retry(
     stop=stop_after_attempt(3),
     wait=wait_exponential(min=1, max=10),
@@ -147,6 +190,13 @@ class LLMRouter:
             self.budget.update(budget)
         if api_keys:
             self.api_keys.update(api_keys)
+
+    def set_proxy_map(self, provider_proxy: dict[str, str]) -> None:
+        """Wire per-provider proxy URLs (P3). Keys: 'anthropic' | 'deepseek' |
+        'gemini' | 'kimi' | 'minimax' | 'custom'. Values: full proxy URL like
+        'http://127.0.0.1:7890'. Driven by Provider.needs_proxy=True."""
+        global _PROVIDER_PROXY
+        _PROVIDER_PROXY = dict(provider_proxy)
 
     def get_stats(self) -> dict:
         with self._stats_lock:
@@ -217,7 +267,11 @@ class LLMRouter:
         if Anthropic is None:
             raise RuntimeError("anthropic package not installed; pip install anthropic")
         api_key = self.api_keys.get("anthropic", "")
-        client = Anthropic(api_key=api_key)
+        # P3: 通过 ANTHROPIC_BASE_URL 反代（如 anthropic provider.needs_proxy=True + ANTHROPIC_PROXY 设置）
+        client = Anthropic(
+            api_key=api_key,
+            base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
+        )
         if use_cache and cached_system:
             system = [
                 {"type": "text", "text": cached_system, "cache_control": {"type": "ephemeral"}},
@@ -253,7 +307,8 @@ class LLMRouter:
             ],
             "max_tokens": max_tokens, "temperature": temperature,
         }
-        c = _get_client(120)
+        c = (_get_proxied_client("deepseek", "https://api.deepseek.com")
+             if _PROVIDER_PROXY.get("deepseek") else _get_client(120))
         r = _post_with_retry(c, "https://api.deepseek.com/chat/completions",
                              headers=headers, json=payload)
         data = r.json()
@@ -276,7 +331,8 @@ class LLMRouter:
             "contents": [{"parts": [{"text": user_prompt}]}],
             "generationConfig": {"maxOutputTokens": max_tokens, "temperature": temperature},
         }
-        c = _get_client(180)
+        c = (_get_proxied_client("gemini", url) if _PROVIDER_PROXY.get("gemini")
+             else _get_client(180))
         r = _post_with_retry(c, url, json=payload)
         data = r.json()
         text = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -296,7 +352,8 @@ class LLMRouter:
             ],
             "max_tokens": max_tokens, "temperature": temperature,
         }
-        c = _get_client(120)
+        c = (_get_proxied_client("kimi", "https://api.moonshot.cn")
+             if _PROVIDER_PROXY.get("kimi") else _get_client(120))
         r = _post_with_retry(c, "https://api.moonshot.cn/v1/chat/completions",
                              headers=headers, json=payload)
         data = r.json()
@@ -322,7 +379,8 @@ class LLMRouter:
             "messages": [{"sender_type": "USER", "sender_name": "用户", "text": user_prompt}],
             "bot_setting": [{"bot_name": "AI助手", "content": system_prompt}],
         }
-        c = _get_client(120)
+        c = (_get_proxied_client("minimax", "https://api.minimax.chat")
+             if _PROVIDER_PROXY.get("minimax") else _get_client(120))
         r = _post_with_retry(c, url, headers=headers, json=payload)
         data = r.json()
         choices = data.get("choices", [{}])
@@ -357,7 +415,8 @@ class LLMRouter:
             "max_tokens": max_tokens, "temperature": temperature,
         }
         endpoint = f"{api_base.rstrip('/')}/chat/completions"
-        c = _get_client(180)
+        c = (_get_proxied_client("custom", api_base) if _PROVIDER_PROXY.get("custom")
+             else _get_client(180))
         r = _post_with_retry(c, endpoint, headers=headers, json=payload)
         data = r.json()
         text    = data["choices"][0]["message"]["content"]

@@ -1,33 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { ChapterListItem, Character, ChapterSearchResult, RepetitionWarning } from "../types";
+import type {
+  ChapterListItem, ChapterFull, ChapterCharacter,
+  Character, ChapterSearchResult, RepetitionWarning,
+} from "../types";
 import { useReveal } from "../hooks/useReveal";
 
-// 从章节 preview 中启发式推断衔接锁四个字段
-function deriveConnectionLock(c: ChapterListItem, all: ChapterListItem[]) {
-  const prev = [...all].reverse().find((x) => x.chapter_no === c.chapter_no - 1);
-  const text = c.content_preview || "";
+// 衔接锁四个字段：场景布置 / 角色登场 / 物品状态 / 前章收尾
+function deriveSceneLayout(text: string): string {
+  return text.split(/[。！？!?]/)[0]?.slice(0, 36) || "—";
+}
 
-  // 场景布置：取 preview 第一句（到第一个句号或 30 字内）
-  const sceneLayout = text.split(/[。！？!?]/)[0]?.slice(0, 36) || "—";
-
-  // 角色登场：从 preview 里过一遍 role 名，对上就当作登场
-  const appearance: string[] = [];
-
-  // 物品状态：粗略匹配 "灵石"、"剑"、"丹" 等常见物件关键词
+function deriveItemState(text: string): string {
   const itemKeywords = ["灵石", "剑", "玉佩", "丹药", "符", "丹", "阵", "卷轴", "宝", "法器", "丹炉"];
   const matched = itemKeywords.filter((k) => text.includes(k));
-
-  // 前章收尾：上一章 preview 的最后一句
-  const prevCliff = prev ? (prev.content_preview || "").slice(-30) : "—";
-
-  return {
-    sceneLayout,
-    appearance,
-    itemState: matched.length > 0 ? matched.join("、") : "—",
-    prevCliff,
-  };
+  return matched.length > 0 ? matched.join("、") : "—";
 }
 
 export default function Chapters() {
@@ -40,15 +28,19 @@ export default function Chapters() {
   const [content, setContent] = useState("");
   const [saving, setSaving] = useState(false);
   const [repetitionWarnings, setRepetitionWarnings] = useState<RepetitionWarning[]>([]);
+  const [lastSavedChapterId, setLastSavedChapterId] = useState<string | null>(null);
 
   const [query, setQuery] = useState("");
   const [characterId, setCharacterId] = useState("");
   const [searchResults, setSearchResults] = useState<ChapterSearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
 
-  // 衔接锁下拉：只展开一个（接入原生 <details>/<summary> 后仍由 React 受控，
-  // 只在 user-initiated 的章节切换时同步 DOM open 属性，避免动画冲突）
+  // 单章详情抽屉：缓存展开时加载的完整章节内容
+  const [chapterDetail, setChapterDetail] = useState<ChapterFull | null>(null);
+  const [chapterDetailLoading, setChapterDetailLoading] = useState(false);
+
   const [expandedLock, setExpandedLock] = useState<string | null>(null);
+  const [charactersByChapter, setCharactersByChapter] = useState<Record<string, ChapterCharacter[]>>({});
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   useReveal(rootRef);
@@ -65,6 +57,31 @@ export default function Chapters() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
+  // 展开章节衔接锁时，按需加载出场人物（真图谱）
+  useEffect(() => {
+    if (!expandedLock || !projectId) return;
+    if (charactersByChapter[expandedLock]) return;
+    api.getChapterCharacters(projectId, expandedLock)
+      .then((chars) => {
+        setCharactersByChapter((prev) => ({ ...prev, [expandedLock]: chars }));
+      })
+      .catch(() => {
+        setCharactersByChapter((prev) => ({ ...prev, [expandedLock]: [] }));
+      });
+  }, [expandedLock, projectId, charactersByChapter]);
+
+  // 打开单章详情
+  async function openChapterDetail(chapterId: string) {
+    if (!projectId) return;
+    setChapterDetailLoading(true);
+    try {
+      const full = await api.getChapter(projectId, chapterId);
+      setChapterDetail(full);
+    } finally {
+      setChapterDetailLoading(false);
+    }
+  }
+
   async function handleSave() {
     if (!projectId || !content.trim()) return;
     setSaving(true);
@@ -72,6 +89,7 @@ export default function Chapters() {
     try {
       const res = await api.createChapter(projectId, { chapter_no: chapterNo, title, content });
       setRepetitionWarnings(res.repetition_warnings);
+      setLastSavedChapterId(res.chapter_id);
       setTitle("");
       setContent("");
       setChapterNo((n) => n + 1);
@@ -96,7 +114,6 @@ export default function Chapters() {
     return c ? `第${c.chapter_no}章 ${c.title || ""}` : id;
   }
 
-  // 倒序排列用于显示（最新在前）
   const chaptersDesc = useMemo(() => [...chapters].sort((a, b) => b.chapter_no - a.chapter_no), [chapters]);
 
   return (
@@ -150,6 +167,16 @@ export default function Chapters() {
                 {chapterLabel(w.compared_chapter_id)} · 相似度 {w.similarity}
               </div>
             ))}
+          </div>
+        )}
+
+        {lastSavedChapterId && !repetitionWarnings.length && (
+          <div className="banner banner-success" style={{ fontSize: 12 }}>
+            ✅ 已保存第{chapterNo - 1}章 ·{" "}
+            <a onClick={() => openChapterDetail(lastSavedChapterId)}
+               style={{ cursor: "pointer", textDecoration: "underline" }}>
+              查看完整正文
+            </a>
           </div>
         )}
 
@@ -230,7 +257,7 @@ export default function Chapters() {
         </div>
         <h3 className="card__title">已保存章节 · 衔接锁</h3>
         <div className="text-muted" style={{ fontSize: 11.5, marginTop: -10, marginBottom: 12 }}>
-          点击章节号可展开"章节衔接锁"：场景布置 / 角色登场 / 物品状态 / 前章收尾
+          点击章节号可展开"章节衔接锁"：场景布置 / 角色登场（来自真实图谱） / 物品状态 / 前章收尾
         </div>
         {chapters.length === 0 ? (
           <div className="empty-state">
@@ -241,16 +268,21 @@ export default function Chapters() {
           </div>
         ) : (
           chaptersDesc.map((c) => {
-            const lock = deriveConnectionLock(c, chapters);
+            const prev = chapters.find((x) => x.chapter_no === c.chapter_no - 1);
+            const text = c.content_preview || "";
+            const sceneLayout = deriveSceneLayout(text);
+            const itemState = deriveItemState(text);
+            const prevCliff = prev ? (prev.content_preview || "").slice(-30) : "—";
             const hasPrevChapter = c.chapter_no > 1;
             const isOpen = expandedLock === c.id;
+            const realChars = charactersByChapter[c.id];
+            const characterNames = realChars?.map((cc) => cc.character_name).filter(Boolean) as string[] | undefined;
             return (
               <details
                 key={c.id}
                 className="lock-disclosure reveal"
                 open={isOpen}
                 onToggle={(e) => {
-                  // 受控同步：原生 toggle 事件 → React state
                   const target = e.currentTarget;
                   setExpandedLock(target.open ? c.id : null);
                 }}
@@ -266,14 +298,16 @@ export default function Chapters() {
                   <div className="conn-lock__pane">
                     <div className="conn-lock__head">场景布置</div>
                     <ul className="conn-lock__list">
-                      <li className="conn-lock__item">{lock.sceneLayout}</li>
+                      <li className="conn-lock__item">{sceneLayout}</li>
                     </ul>
                   </div>
                   <div className="conn-lock__pane">
                     <div className="conn-lock__head">角色登场 / 离场</div>
                     <ul className="conn-lock__list">
-                      {lock.appearance.length > 0 ? (
-                        lock.appearance.map((n) => (
+                      {characterNames === undefined ? (
+                        <li className="conn-lock__item conn-lock__item--empty">加载中…</li>
+                      ) : characterNames.length > 0 ? (
+                        characterNames.map((n) => (
                           <li className="conn-lock__item" key={n}>{n}</li>
                         ))
                       ) : (
@@ -284,14 +318,14 @@ export default function Chapters() {
                   <div className="conn-lock__pane">
                     <div className="conn-lock__head">物品关联状态</div>
                     <ul className="conn-lock__list">
-                      <li className="conn-lock__item">{lock.itemState}</li>
+                      <li className="conn-lock__item">{itemState}</li>
                     </ul>
                   </div>
                   <div className="conn-lock__pane">
                     <div className="conn-lock__head">前章收尾 / 后章悬念</div>
                     <ul className="conn-lock__list">
                       <li className={`conn-lock__item ${!hasPrevChapter ? "conn-lock__item--empty" : ""}`}>
-                        {hasPrevChapter ? lock.prevCliff : "（本书第一章，无前章）"}
+                        {hasPrevChapter ? prevCliff : "（本书第一章，无前章）"}
                       </li>
                     </ul>
                   </div>
@@ -301,6 +335,36 @@ export default function Chapters() {
           })
         )}
       </div>
+
+      {/* 单章详情抽屉 */}
+      {chapterDetailLoading && (
+        <div className="banner banner-info" style={{ marginTop: 16 }}>加载章节详情中…</div>
+      )}
+      {chapterDetail && !chapterDetailLoading && (
+        <div className="card mt-24">
+          <div className="flex-between" style={{ marginBottom: 12 }}>
+            <h3 className="card__title" style={{ margin: 0 }}>
+              第{chapterDetail.chapter_no}章 · {chapterDetail.title || "（无标题）"}
+            </h3>
+            <button className="btn btn-ghost" onClick={() => setChapterDetail(null)}>关闭</button>
+          </div>
+          {chapterDetail.characters.length > 0 && (
+            <div className="chapter-detail-chars">
+              <span className="text-faint" style={{ fontSize: 12 }}>出场人物：</span>
+              {chapterDetail.characters.map((cc) => (
+                <span key={cc.id} className="legislation-card__chip" style={{ marginRight: 6 }}>
+                  {cc.character_name}
+                  {cc.character_role ? ` · ${cc.character_role}` : ""}
+                </span>
+              ))}
+            </div>
+          )}
+          <pre className="log-console" style={{
+            marginTop: 12, maxHeight: 480, whiteSpace: "pre-wrap",
+            fontFamily: "var(--font-body)", lineHeight: 1.7, fontSize: 13.5,
+          }}>{chapterDetail.content}</pre>
+        </div>
+      )}
     </div>
   );
 }

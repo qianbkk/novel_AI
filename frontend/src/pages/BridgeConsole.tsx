@@ -122,10 +122,10 @@ export default function BridgeConsole() {
     setActiveLabel(label);
     setExitCode(null);
     setError(null);
-    appendLog(`$ ${command}${args.length ? ` ${args.join(" ")}` : ""}`);
+    appendLog(`$ ${command}${args.length ? ` ${args.join(" ")}` : ""}` + (outlineMode !== "batch" ? ` [mode=${outlineMode}]` : ""));
 
     try {
-      const run = await api.triggerBridge(projectId, command, args);
+      const run = await api.triggerBridge(projectId, command, args, outlineMode);
       const es = new EventSource(api.bridgeStreamUrl(projectId, run.id));
       eventSourceRef.current = es;
 

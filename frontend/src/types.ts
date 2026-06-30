@@ -143,6 +143,7 @@ export interface BridgeRun {
   command: string;
   status: "pending" | "running" | "done" | "failed";
   exit_code: number | null;
+  outline_mode?: string;  // batch | card | talk
 }
 
 export interface BridgeLogLine {
@@ -191,4 +192,76 @@ export interface StageEvent {
   progress_percent?: number;
   consistency_warnings?: ConsistencyWarning[];
   error?: string;
+}
+
+// ─── 规则中心（RuleCenter）───
+export interface RuleConfig {
+  project_id: string;
+  style: "webnovel" | "literary" | "wuxia";
+  taboos: string[];
+  template: string;
+  extra?: Record<string, unknown>;
+  updated_at?: string | null;
+}
+
+export interface PostProcessResult {
+  tool: "logic" | "venom" | "deai";
+  chapter_no?: number | null;
+  summary: string;
+  findings: { line?: string; [k: string]: unknown }[];
+  score?: number | null;
+  cost_usd: number;
+  generated_at: string;
+}
+
+// ─── 章节详情 + 出场人物 ───
+export interface ChapterCharacter {
+  id: string;
+  character_id: string;
+  character_name?: string | null;
+  character_role?: string | null;
+}
+
+export interface ChapterFull {
+  id: string;
+  chapter_no: number;
+  title: string | null;
+  content: string;
+  created_at: string;
+  characters: ChapterCharacter[];
+}
+
+// ─── 伏笔状态 ───
+export interface ForeshadowingRow {
+  id: string;
+  content: string;
+  importance: string;
+  status: "未铺垫" | "已铺垫" | "已回收";
+  linked_character_id: string | null;
+  planted_chapter_hint?: string | null;
+  payoff_chapter_hint?: string | null;
+}
+
+// ─── AI 参与度 ───
+export interface AiAssistLevel {
+  project_id: string;
+  ai_assist_level: "ai_assisted" | "human_primary" | "unset";
+}
+
+// ─── 预算（修正：后端返回单个对象，不是数组）───
+export interface BridgeBudget {
+  available: boolean;
+  budget_limit_usd?: number | null;
+  total_cost_usd: number;
+  record_count: number;
+  records: Array<{
+    ts: string;
+    chapter: number;
+    arc: number;
+    agent: string;
+    model: string;
+    input_tokens: number;
+    output_tokens: number;
+    cost_usd: number;
+  }>;
 }

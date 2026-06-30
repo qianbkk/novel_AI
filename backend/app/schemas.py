@@ -85,6 +85,7 @@ class RoleAssignmentUpdate(BaseModel):
 class BridgeRunRequest(BaseModel):
     command: str
     args: list[str] = []
+    outline_mode: Optional[str] = None  # batch | card | talk
 
 
 class BridgeRunOut(BaseModel):
@@ -120,3 +121,77 @@ class ReviewRequest(BaseModel):
     chapter_number: Optional[int] = None
     content: Optional[str] = None
     note: Optional[str] = None
+
+
+# ─── 规则中心（RuleCenter）───
+class RuleConfigOut(BaseModel):
+    project_id: str
+    style: str
+    taboos: list[str] = []
+    template: str = "run.章节撰写"
+    extra: dict[str, Any] = {}
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+
+class RuleConfigUpsert(BaseModel):
+    style: Optional[str] = None
+    taboos: Optional[list[str]] = None
+    template: Optional[str] = None
+    extra: Optional[dict[str, Any]] = None
+
+
+class PostProcessRequest(BaseModel):
+    """RuleCenter 后处理工具调用：logic 评估 / venom 毒舌查漏 / deai 去AI痕迹"""
+    tool: str                        # logic | venom | deai
+    chapter_no: Optional[int] = None # 不传则对最新一章
+    style: Optional[str] = None      # 上下文风格（默认 webnovel）
+    taboos: Optional[list[str]] = None
+
+
+class PostProcessResult(BaseModel):
+    tool: str
+    chapter_no: Optional[int] = None
+    summary: str
+    findings: list[dict[str, Any]] = []
+    score: Optional[float] = None
+    cost_usd: float = 0.0
+    generated_at: datetime
+
+
+# ─── 章节扩展 ───
+class ChapterCharacterOut(BaseModel):
+    id: str
+    character_id: str
+    character_name: Optional[str] = None
+    character_role: Optional[str] = None
+
+    class Config:
+        from_attributes = True
+
+
+class ChapterFull(BaseModel):
+    id: str
+    chapter_no: int
+    title: Optional[str] = None
+    content: str
+    created_at: datetime
+    characters: list[ChapterCharacterOut] = []
+
+    class Config:
+        from_attributes = True
+
+
+# ─── 伏笔状态 ───
+class ForeshadowingStatusUpdate(BaseModel):
+    status: str   # 未铺垫 | 已铺垫 | 已回收
+
+
+# ─── Project AI 参与度 ───
+class AiAssistLevelUpdate(BaseModel):
+    ai_assist_level: str   # ai_assisted | human_primary | unset
+
+
+# ─── outline_mode 已合并到 BridgeRunRequest ───

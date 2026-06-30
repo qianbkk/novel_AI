@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { Project } from "../types";
+import type { Project, PostProcessResult, RuleConfig } from "../types";
 import { useReveal } from "../hooks/useReveal";
 
 const STYLE_PRESETS = [
   { key: "webnovel", label: "网文轻快", sample: "节奏明快，爽点密集，对话口语化", chips: ["爽点", "金手指", "短句对白"] },
   { key: "literary", label: "文学正剧", sample: "克制笔法，意在言外，留白充分", chips: ["静观", "白描", "意识流"] },
   { key: "wuxia", label: "武侠古风", sample: "半文半白，意境先行，招式诗化", chips: ["招式诗化", "江湖气", "四字结构"] },
-];
+] as const;
 
 const TABOO_LIBRARY = [
   { tag: "AI 高频词", list: ["不禁", "然而", "然而事实上", "值得注意的是", "总而言之", "综上所述"] },
@@ -23,13 +23,37 @@ const PROMPT_TEMPLATES = [
   { name: "fingerprint.文风指纹", body: "采样最近 10 章，输出用词偏好、句长偏好、转折偏好三元组…" },
 ];
 
-const POST_TOOLS = [
-  { key: "logic", label: "逻辑评估报告", desc: "扫描章节逻辑，对比「经典小说」结构生成报告" },
-  { key: "venom", label: "逻辑查漏（毒舌模式）", desc: "AI 以极度严苛视角寻找文中不合理处" },
-  { key: "deai", label: "去 AI 痕迹化", desc: "过滤高频 AI 词汇，重构机械化句式" },
+const POST_TOOLS: Array<{
+  key: "logic" | "venom" | "deai";
+  label: string;
+  desc: string;
+  agent_hint: string;
+}> = [
+  { key: "logic", label: "逻辑评估报告", desc: "扫描章节逻辑，对比「世界立法」生成报告", agent_hint: "checker_main" },
+  { key: "venom", label: "逻辑查漏（毒舌模式）", desc: "AI 以极度严苛视角寻找文中不合理处", agent_hint: "checker_cross1" },
+  { key: "deai", label: "去 AI 痕迹化", desc: "扫描 AI 高频词，给出替换方案", agent_hint: "rewriter" },
 ];
 
+// 离线兜底：localStorage 仍可用作「先在 UI 编辑、暂未保存到后端」的临时态
 const STORAGE_KEY = (id: string) => `firstdraft:rules:${id}`;
+
+type Saved = { style: string; taboos: string[]; template: string };
+function loadSaved(projectId: string): Saved | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY(projectId));
+    if (!raw) return null;
+    return JSON.parse(raw) as Saved;
+  } catch {
+    return null;
+  }
+}
+function saveSaved(projectId: string, data: Saved) {
+  try {
+    localStorage.setItem(STORAGE_KEY(projectId), JSON.stringify(data));
+  } catch {
+    // ignore
+  }
+}
 
 // 极简 Web Audio 落笔声（无需加载音频文件）
 function playTick(audioCtxRef: React.MutableRefObject<AudioContext | null>, freq = 320, dur = 0.08) {
@@ -57,60 +81,62 @@ function playTick(audioCtxRef: React.MutableRefObject<AudioContext | null>, freq
   }
 }
 
-type Saved = { style: string; taboos: string[]; template: string };
-function loadSaved(projectId: string): Saved | null {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY(projectId));
-    if (!raw) return null;
-    return JSON.parse(raw) as Saved;
-  } catch {
-    return null;
-  }
-}
-function saveSaved(projectId: string, data: Saved) {
-  try {
-    localStorage.setItem(STORAGE_KEY(projectId), JSON.stringify(data));
-  } catch {
-    // 配额或隐私模式：忽略
-  }
-}
-
 export default function RuleCenter() {
   const { projectId } = useParams<{ projectId: string }>();
   const [project, setProject] = useState<Project | null>(null);
-  const [style, setStyle] = useState<string>("webnovel");
-  const [taboos, setTaboos] = useState<string[]>(["不禁", "然而事实上", "值得注意的是"]);
+  const [style, setStyle] = useState<"webnovel" | "literary" | "wuxia">("webnovel");
+  const [taboos, setTaboos] = useState<string[]>([]);
   const [template, setTemplate] = useState<string>(PROMPT_TEMPLATES[1].name);
   const [toolOutputs, setToolOutputs] = useState<Record<string, string>>({});
   const [running, setRunning] = useState<string | null>(null);
   const [flashKey, setFlashKey] = useState<string | null>(null);
+  const [lastResults, setLastResults] = useState<Record<string, PostProcessResult>>({});
+  const [error, setError] = useState<string | null>(null);
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  const [remoteLoaded, setRemoteLoaded] = useState(false);
+
   const rootRef = useRef<HTMLDivElement | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const dialogInputRef = useRef<HTMLInputElement | null>(null);
-  const [savedAt, setSavedAt] = useState<number | null>(null);
 
   useReveal(rootRef);
 
+  // ── 初始加载：先读远端，再回退到 localStorage，再回退到默认 ──
   useEffect(() => {
     if (!projectId) return;
-    const saved = loadSaved(projectId);
-    if (saved) {
-      setStyle(saved.style);
-      setTaboos(saved.taboos);
-      setTemplate(saved.template);
-      setSavedAt(Date.now());
-    }
     api.getProject(projectId).then(setProject).catch(() => {});
+    api.getRules(projectId)
+      .then((cfg: RuleConfig) => {
+        setStyle(cfg.style);
+        setTaboos(cfg.taboos || []);
+        setTemplate(cfg.template || PROMPT_TEMPLATES[1].name);
+        setRemoteLoaded(true);
+        setSavedAt(cfg.updated_at ? new Date(cfg.updated_at).getTime() : Date.now());
+      })
+      .catch(() => {
+        // 后端不可用 → 走 localStorage
+        const saved = loadSaved(projectId);
+        if (saved) {
+          setStyle(saved.style as "webnovel" | "literary" | "wuxia");
+          setTaboos(saved.taboos);
+          setTemplate(saved.template);
+          setSavedAt(Date.now());
+        }
+      });
   }, [projectId]);
 
-  // 状态变更自动持久化
+  // ── 状态变更 → 防抖写后端 + 同步 localStorage ──
   useEffect(() => {
-    if (!projectId) return;
-    saveSaved(projectId, { style, taboos, template });
-    setSavedAt(Date.now());
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, style, taboos, template]);
+    if (!projectId || !remoteLoaded) return;
+    const t = window.setTimeout(() => {
+      saveSaved(projectId, { style, taboos, template });
+      api.putRules(projectId, { style, taboos, template })
+        .then(() => setSavedAt(Date.now()))
+        .catch((e) => setError(String(e)));
+    }, 400);
+    return () => window.clearTimeout(t);
+  }, [projectId, style, taboos, template, remoteLoaded]);
 
   function openDialog() {
     const d = dialogRef.current;
@@ -141,24 +167,42 @@ export default function RuleCenter() {
     playTick(audioCtxRef, 180, 0.10);
   }
 
-  function runTool(key: string) {
+  // ── 真实后处理：POST /projects/{id}/rules/post-process ──
+  async function runTool(key: "logic" | "venom" | "deai") {
+    if (!projectId) return;
     setRunning(key);
-    setToolOutputs((prev) => ({ ...prev, [key]: "" }));
+    setError(null);
     playTick(audioCtxRef, 220, 0.05);
-    window.setTimeout(() => {
-      const output =
-        `[${key}] 占位输出 — 当前 API 未暴露规则中心后处理端点。\n` +
-        `对接计划：POST /projects/${projectId}/rules/post-process\n` +
-        `请求体：{ tool: "${key}", style: "${style}", taboos: ${JSON.stringify(taboos)} }`;
-      setToolOutputs((prev) => ({ ...prev, [key]: output }));
-      setRunning(null);
+    try {
+      const res = await api.postProcess(projectId, {
+        tool: key,
+        style,
+        taboos,
+        // 不传 chapter_no → 后端取最新一章
+      });
+      setLastResults((prev) => ({ ...prev, [key]: res }));
+      const out = [
+        `摘要：${res.summary}` + (res.score ? `  评分：${res.score}/10` : ""),
+        `成本：$${res.cost_usd.toFixed(4)}  章节：第${res.chapter_no}章`,
+        "",
+        ...res.findings.map((f) => "  " + (f.line || JSON.stringify(f))),
+      ].join("\n");
+      setToolOutputs((prev) => ({ ...prev, [key]: out }));
       setFlashKey(key);
       playTick(audioCtxRef, 520, 0.12);
       window.setTimeout(() => setFlashKey(null), 1500);
-    }, 1200);
+    } catch (e) {
+      setError(String(e));
+      setToolOutputs((prev) => ({
+        ...prev,
+        [key]: `[${key}] 后处理失败：${e}`,
+      }));
+    } finally {
+      setRunning(null);
+    }
   }
 
-  // 模板 smoke test
+  // 模板 smoke test（前端即可，无需后端）
   function smokeTestTemplate() {
     const tpl = PROMPT_TEMPLATES.find((t) => t.name === template);
     if (!tpl) return;
@@ -193,17 +237,19 @@ export default function RuleCenter() {
             <span
               className="text-faint"
               style={{ fontSize: 11, fontFamily: "var(--font-mono)" }}
-              title="已写入 localStorage"
+              title={remoteLoaded ? "已同步到后端 + localStorage" : "仅本地兜底（后端不可达）"}
             >
-              ✓ 已持久化
+              {remoteLoaded ? "✓ 已同步到后端" : "⚠ 离线兜底"}
             </span>
           )}
         </div>
       </div>
 
+      {error && <div className="banner banner-danger">{error}</div>}
+
       <div className="banner banner-info">
-        规则中心是叙事工程的指挥中枢。条目已自动写入浏览器 localStorage；后端提供{" "}
-        <span className="text-mono">/projects/:id/rules</span> 后即可一键同步。
+        规则中心是叙事工程的指挥中枢。当前生效配置：
+        <span className="text-mono"> style={style} · template={template} · taboos={taboos.length} 项</span>
       </div>
 
       {/* 文笔风格 */}
@@ -333,11 +379,12 @@ export default function RuleCenter() {
         </div>
       </div>
 
-      {/* 后处理工具箱 */}
+      {/* 后处理工具箱 — 真接后端 */}
       <div className="card mt-24 reveal">
         <div className="rule-section">
           <span className="rule-section__num">肆</span>
           <span className="rule-section__title">质量后处理工具箱</span>
+          <span className="text-faint" style={{ marginLeft: 8, fontSize: 11 }}>→ POST /projects/&#123;id&#125;/rules/post-process</span>
         </div>
 
         <div className="rule-grid">
@@ -348,9 +395,14 @@ export default function RuleCenter() {
             >
               <div className="legislation-card__head">
                 <span className="legislation-card__title">{t.label}</span>
-                <span className="legislation-card__kicker">{t.key}</span>
+                <span className="legislation-card__kicker">{t.agent_hint}</span>
               </div>
               <span className="legislation-card__desc">{t.desc}</span>
+              {lastResults[t.key] && (
+                <div className="text-faint" style={{ fontSize: 11, marginTop: 4 }}>
+                  上次：第{lastResults[t.key].chapter_no}章 · ${lastResults[t.key].cost_usd.toFixed(4)}
+                </div>
+              )}
               <div className="button-row" style={{ marginTop: 4 }}>
                 <button
                   className="btn btn-primary"

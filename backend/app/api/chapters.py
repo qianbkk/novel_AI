@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from ..database import get_db
-from ..models import Chapter
-from ..schemas import ChapterCreate
+from ..models import Chapter, ChapterCharacter, Character
+from ..schemas import ChapterCreate, ChapterFull
 from ..rag.retrieval import add_chapter, semantic_search_chapters
 
 router = APIRouter(prefix="/projects/{project_id}/chapters", tags=["chapters"])
@@ -49,18 +49,60 @@ async def search_chapters(
     return await semantic_search_chapters(project_id, query, character_id, top_k, db)
 
 
-@router.get("/{chapter_id}")
+@router.get("/{chapter_id}", response_model=ChapterFull)
 def get_chapter(project_id: str, chapter_id: str, db: Session = Depends(get_db)):
+    """单章详情（含完整正文 + 出场人物列表）。"""
     chapter = db.get(Chapter, chapter_id)
     if not chapter or chapter.project_id != project_id:
         raise HTTPException(404, "chapter not found")
-    return {
-        "id": chapter.id,
-        "chapter_no": chapter.chapter_no,
-        "title": chapter.title,
-        "content": chapter.content,
-        "created_at": chapter.created_at,
-    }
+    # 关联出场人物
+    edges = (
+        db.query(ChapterCharacter, Character)
+        .join(Character, ChapterCharacter.character_id == Character.id)
+        .filter(ChapterCharacter.chapter_id == chapter_id)
+        .all()
+    )
+    characters = [
+        {
+            "id": edge.ChapterCharacter.id,
+            "character_id": edge.Character.id,
+            "character_name": edge.Character.name,
+            "character_role": edge.Character.role,
+        }
+        for edge in edges
+    ]
+    return ChapterFull(
+        id=chapter.id,
+        chapter_no=chapter.chapter_no,
+        title=chapter.title,
+        content=chapter.content,
+        created_at=chapter.created_at,
+        characters=characters,
+    )
+
+
+@router.get("/{chapter_id}/characters")
+def get_chapter_characters(project_id: str, chapter_id: str,
+                           db: Session = Depends(get_db)):
+    """某章出场的角色列表（来自 ChapterCharacter 图谱边）。"""
+    chapter = db.get(Chapter, chapter_id)
+    if not chapter or chapter.project_id != project_id:
+        raise HTTPException(404, "chapter not found")
+    rows = (
+        db.query(ChapterCharacter, Character)
+        .join(Character, ChapterCharacter.character_id == Character.id)
+        .filter(ChapterCharacter.chapter_id == chapter_id)
+        .all()
+    )
+    return [
+        {
+            "id": edge.ChapterCharacter.id,
+            "character_id": edge.Character.id,
+            "character_name": edge.Character.name,
+            "character_role": edge.Character.role,
+        }
+        for edge in rows
+    ]
 
 
 @router.post("")

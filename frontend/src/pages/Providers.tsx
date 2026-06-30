@@ -166,6 +166,11 @@ export default function Providers() {
             />
             需要代理
           </label>
+          {form.needs_proxy && (
+            <div className="banner banner-info" style={{ fontSize: 12, padding: "8px 12px", marginTop: 4 }}>
+              请在 backend 进程的 <span className="text-mono">{form.provider_type.toUpperCase()}_PROXY</span> 环境变量里填代理 URL（如 <span className="text-mono">http://127.0.0.1:7890</span>），后端 LLM 路由会自动读取。
+            </div>
+          )}
         </div>
         <div className="button-row">
           <button className="btn btn-primary" onClick={handleSubmit} disabled={saving || !form.name.trim()}>

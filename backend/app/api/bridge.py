@@ -100,7 +100,13 @@ async def run_bridge(
 
     # ponytail: run in-process via BackgroundTasks (uvicorn + TestClient 都能正确跟踪)
     queue = get_run_queue(bridge_run.id)
-    background_tasks.add_task(_run_bridge_async, bridge_run.id, project_id, command, payload.args or [], queue)
+    # outline_mode (batch/card/talk) 透传给 orchestrator
+    outline_mode = (payload.outline_mode or "batch").strip().lower()
+    background_tasks.add_task(
+        _run_bridge_async,
+        bridge_run.id, project_id, command, payload.args or [],
+        queue, outline_mode,
+    )
     return bridge_run
 
 
@@ -180,7 +186,9 @@ def review(project_id: str, payload: ReviewRequest, db: Session = Depends(get_db
         raise HTTPException(400, str(exc)) from exc
 
 
-async def _run_bridge_async(run_id: str, project_id: str, command: str, args: list[str], queue):
+async def _run_bridge_async(run_id: str, project_id: str, command: str,
+                            args: list[str], queue,
+                            outline_mode: str = "batch"):
     """Run graph command in-process. Called via asyncio.create_task from the endpoint."""
     from engine.graph import run_graph_task
     from datetime import datetime
@@ -193,11 +201,22 @@ async def _run_bridge_async(run_id: str, project_id: str, command: str, args: li
                 return
             bridge_run.status = "running"
             db.commit()
-            queue.put({"event": "start", "run_id": run_id, "command": command})
+            queue.put({"event": "start", "run_id": run_id, "command": command,
+                       "outline_mode": outline_mode})
 
-            exit_code, stdout_text = await asyncio.to_thread(
-                run_graph_task, project_id, command, args, run_id, queue
-            )
+            # outline_mode 走 env-style 注入；graph.run_graph_task 读 os.environ
+            import os
+            _prev_mode = os.environ.get("NOVEL_OUTLINE_MODE")
+            os.environ["NOVEL_OUTLINE_MODE"] = outline_mode
+            try:
+                exit_code, stdout_text = await asyncio.to_thread(
+                    run_graph_task, project_id, command, args, run_id, queue
+                )
+            finally:
+                if _prev_mode is None:
+                    os.environ.pop("NOVEL_OUTLINE_MODE", None)
+                else:
+                    os.environ["NOVEL_OUTLINE_MODE"] = _prev_mode
 
             bridge_run.exit_code = exit_code
             bridge_run.stdout_text = stdout_text

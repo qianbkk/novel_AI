@@ -4,8 +4,14 @@ configures a backend.engine.llm.router.LLMRouter.
 P1-E rewrite: no more monkey-patching the old api_client module globals.
 The router is a fully-fledged backend.engine.llm.router.LLMRouter that
 holds all state internally; configure() pushes DB-driven config into it.
+
+P3 add: needs_proxy wiring — when Provider.needs_proxy=True, the
+configured proxy URL (from env: <PROVIDER>_PROXY) is mounted onto the
+provider-specific httpx.Client. This makes region-restricted providers
+(deepseek / anthropic behind GFW) usable through a proxy.
 """
 from __future__ import annotations
+import os
 from typing import Optional
 
 from .llm.router import LLMRouter as _EngineRouter
@@ -107,6 +113,23 @@ class LLMRouter:
                     api_keys["custom_model_id"] = r["model"]
 
         self._engine.configure(routes=routes, api_keys=api_keys)
+
+        # Wire provider.needs_proxy → engine LLMRouter proxy URL
+        # （anthropic / deepseek / kimi 等可能因地区需要走代理；HTTP 客户端按 provider 设置）
+        if self._routes:
+            proxy_by_provider: dict[str, str] = {}
+            for role_key, r in self._routes.items():
+                if r.get("proxy") and r.get("base"):
+                    # base 字段在 anthropic/deepseek 不直接用，但 provider 的 proxy=True
+                    # 表示 "此 provider 需要走代理"。代理 URL 从环境变量读：
+                    # ANTHROPIC_PROXY / DEEPSEEK_PROXY / GEMINI_PROXY / KIMI_PROXY / MINIMAX_PROXY
+                    env_key = f"{r['type'].upper()}_PROXY"
+                    proxy_url = os.environ.get(env_key, "").strip()
+                    if proxy_url:
+                        proxy_by_provider[r["type"]] = proxy_url
+            if proxy_by_provider:
+                self._engine.set_proxy_map(proxy_by_provider)
+
         set_active_router(self._engine)
         # Wire all agents that hold their own active-router reference.
         # Each agent reads from `get_active_router()` on every call, so this

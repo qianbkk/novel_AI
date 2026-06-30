@@ -3,6 +3,8 @@ import type {
   JobStatus,
   WorldBuildResult,
   ChapterListItem,
+  ChapterFull,
+  ChapterCharacter,
   ChapterCreateResult,
   ChapterSearchResult,
   Provider,
@@ -10,7 +12,12 @@ import type {
   BridgeRun,
   BridgeStatus,
   BridgePendingItem,
+  BridgeBudget,
   NovelAIBinding,
+  RuleConfig,
+  PostProcessResult,
+  ForeshadowingRow,
+  AiAssistLevel,
 } from "../types";
 
 // 后端地址：默认本机 8123 端口，部署到别的地方时改 frontend/.env 里的 VITE_API_BASE 即可
@@ -59,6 +66,12 @@ export const api = {
 
   listChapters: (projectId: string) => request<ChapterListItem[]>(`/projects/${projectId}/chapters`),
 
+  getChapter: (projectId: string, chapterId: string) =>
+    request<ChapterFull>(`/projects/${projectId}/chapters/${chapterId}`),
+
+  getChapterCharacters: (projectId: string, chapterId: string) =>
+    request<ChapterCharacter[]>(`/projects/${projectId}/chapters/${chapterId}/characters`),
+
   createChapter: (projectId: string, payload: { chapter_no: number; title?: string; content: string }) =>
     request<ChapterCreateResult>(`/projects/${projectId}/chapters`, {
       method: "POST",
@@ -98,10 +111,10 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  triggerBridge: (projectId: string, command: string, args: string[] = []) =>
+  triggerBridge: (projectId: string, command: string, args: string[] = [], outlineMode?: string) =>
     request<BridgeRun>(`/projects/${projectId}/bridge/run`, {
       method: "POST",
-      body: JSON.stringify({ command, args }),
+      body: JSON.stringify({ command, args, outline_mode: outlineMode }),
     }),
 
   bridgeStreamUrl: (projectId: string, bridgeRunId: string) => {
@@ -132,7 +145,7 @@ export const api = {
   getBridgePending: (projectId: string) => request<BridgePendingItem[]>(`/projects/${projectId}/bridge/pending`),
 
   getBridgeBudget: (projectId: string) =>
-    request<Record<string, unknown>[]>(`/projects/${projectId}/bridge/budget`),
+    request<BridgeBudget>(`/projects/${projectId}/bridge/budget`),
 
   submitReview: (
     projectId: string,
@@ -141,5 +154,51 @@ export const api = {
     request<Record<string, unknown>>(`/projects/${projectId}/bridge/review`, {
       method: "POST",
       body: JSON.stringify(payload),
+    }),
+
+  // ─── 规则中心 ───
+  getRules: (projectId: string) =>
+    request<RuleConfig>(`/projects/${projectId}/rules`),
+
+  putRules: (projectId: string, payload: {
+    style?: "webnovel" | "literary" | "wuxia";
+    taboos?: string[];
+    template?: string;
+    extra?: Record<string, unknown>;
+  }) =>
+    request<RuleConfig>(`/projects/${projectId}/rules`, {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }),
+
+  postProcess: (projectId: string, payload: {
+    tool: "logic" | "venom" | "deai";
+    chapter_no?: number;
+    style?: string;
+    taboos?: string[];
+  }) =>
+    request<PostProcessResult>(`/projects/${projectId}/rules/post-process`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  // ─── 伏笔状态流转 ───
+  listForeshadowings: (projectId: string) =>
+    request<ForeshadowingRow[]>(`/projects/${projectId}/foreshadowings`),
+
+  updateForeshadowingStatus: (projectId: string, foreshadowingId: string, status: string) =>
+    request<ForeshadowingRow>(`/projects/${projectId}/foreshadowings/${foreshadowingId}/status`, {
+      method: "PUT",
+      body: JSON.stringify({ status }),
+    }),
+
+  // ─── AI 参与度声明 ───
+  getAiAssistLevel: (projectId: string) =>
+    request<AiAssistLevel>(`/projects/${projectId}/ai-assist-level`),
+
+  putAiAssistLevel: (projectId: string, level: "ai_assisted" | "human_primary" | "unset") =>
+    request<AiAssistLevel>(`/projects/${projectId}/ai-assist-level`, {
+      method: "PUT",
+      body: JSON.stringify({ ai_assist_level: level }),
     }),
 };

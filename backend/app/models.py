@@ -275,3 +275,19 @@ class GenerationJob(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     project = relationship("Project", back_populates="jobs")
+
+
+class RuleConfig(Base):
+    """项目级规则中心配置：文笔风格 / 禁忌词 / 提示词模板 / 后处理开关。
+    持久化到 DB，让 BridgeConsole 写章节时真正能读到这些约束（不只是 localStorage）。"""
+    __tablename__ = "rule_configs"
+
+    id = Column(String, primary_key=True, default=gen_id)
+    project_id = Column(String, ForeignKey("projects.id"), unique=True)
+    style = Column(String, default="webnovel")           # webnovel | literary | wuxia
+    taboos_json = Column(JSON, nullable=True)           # list[str]
+    template = Column(String, default="run.章节撰写")     # 当前激活的 prompt 模板名
+    extra_json = Column(JSON, nullable=True)            # 预留：未来加更多维度
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    project = relationship("Project")
