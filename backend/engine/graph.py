@@ -270,7 +270,8 @@ def build_project_graph(project_id: str, queue: Queue | None = None) -> Any:
         {"save": "save_and_track", "rewrite": "rewrite", "escalate": "human_escalation"})
     g.add_conditional_edges("save_and_track", route_after_save,
         {"next_task": "load_arc_tasks", "done": END})
-    g.add_edge("human_escalation", END)
+    # P3 fix: human_escalation 后回到 load_arc_tasks 继续下一章（不再 END）
+    g.add_edge("human_escalation", "load_arc_tasks")
     return g.compile(checkpointer=checkpointer)
 
 
@@ -331,6 +332,15 @@ def run_graph_task(
             except ImportError:
                 capture.write("[engine] WARN: planner agent not yet ported (P2)\n")
                 exit_code = 0
+        elif command == "bootstrap":
+            try:
+                from .tools.bootstrap import run_bootstrap
+                with redirect_stdout(capture):
+                    run_bootstrap(novel_id=project_id)
+                exit_code = 0
+            except Exception as e:
+                capture.write(f"[engine] bootstrap failed: {e}\n")
+                exit_code = 1
         elif command in ("run", "resume"):
             chapters = int(args[0]) if args else 10
             from .orchestrator import run_orchestrator
@@ -421,9 +431,9 @@ def run_graph_task(
                 exit_code = 1
         elif command == "init_arc":
             try:
-                from .tools.bootstrap import run_bootstrap
+                from .agents.init_arc import build_state_from_setting
                 with redirect_stdout(capture):
-                    run_bootstrap(novel_id=project_id)
+                    build_state_from_setting(project_id)
                 exit_code = 0
             except Exception as e:
                 capture.write(f"[engine] init_arc failed: {e}\n")
