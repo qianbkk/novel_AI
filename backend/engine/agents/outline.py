@@ -123,3 +123,92 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
 
     print(f"  ✅ {len(tasks)}章任务，成本${cost:.4f}")
     return tasks, cost
+
+
+# ══════════════════════════════════════════
+# card 模式 — 抽卡探索（生成 3 个候选分支）
+# ══════════════════════════════════════════
+CARD_OUTLINE_SYSTEM = """你是一位网文策划，为同一弧生成 3 个不同走向的候选大纲分支。
+每个分支都是完整可执行的章节任务列表，但侧重点不同：
+- A 分支：偏爽点密集（每 5 章一个爽点）
+- B 分支：偏悬疑反转（每 7 章一个反转）
+- C 分支：偏情感共鸣（重角色互动）
+
+【共同约束】
+- 章节定位：铺垫|发展|爽点|弧高潮|过渡
+- 结尾钩子类型从以下选择：悬念钩|危机钩|信息钩|情感钩|反转钩|升级钩|对抗钩
+- 爽点类型从以下选择（无爽点时填null）：打脸|升级|逆袭|揭秘|报复|碾压|救场
+- 字数：普通2000-2200，爽点2200-2500，弧高潮3000-3300
+
+严格输出JSON，格式：
+{
+  "candidates": [
+    {"branch": "A", "flavor": "爽点密集", "tasks": [...]},
+    {"branch": "B", "flavor": "悬疑反转", "tasks": [...]},
+    {"branch": "C", "flavor": "情感共鸣", "tasks": [...]}
+  ]
+}
+tasks 数组每个元素结构同 batch 模式。"""
+
+
+def run_outline_card(arc: dict, start_chapter: int, setting: dict,
+                     memory: dict) -> tuple[list, float]:
+    """抽卡探索模式：生成 3 个候选分支，每个分支是一组完整的 chapter tasks。
+
+    P3 阶段：调一次 LLM 拿到 3 个候选；第一个候选的 tasks 被默认采纳进
+    chapter_task_queue，另外 2 个作为 outline_candidates 留给前端三选一。
+    """
+    # 复用 batch 模式作为 A 分支（保证一致性），另外 B/C 用 LLM 生成不同 flavor
+    batch_tasks, batch_cost = run_outline(arc, start_chapter, setting, memory)
+
+    # P3 stub：实际实现需要给 LLM 发 3 次不同 prompt。这里 mock 出 3 个分支
+    candidates = [
+        {
+            "branch": "A",
+            "flavor": "爽点密集",
+            "tasks": batch_tasks,
+        },
+        {
+            "branch": "B",
+            "flavor": "悬疑反转",
+            "tasks": batch_tasks,  # P3 stub: 实际应该是 LLM 重新生成的悬念版
+        },
+        {
+            "branch": "C",
+            "flavor": "情感共鸣",
+            "tasks": batch_tasks,  # P3 stub: 实际应该是 LLM 重新生成的情感版
+        },
+    ]
+    return candidates, batch_cost
+
+
+# ══════════════════════════════════════════
+# talk 模式 — 交互头脑风暴
+# ══════════════════════════════════════════
+def run_outline_talk(arc: dict, start_chapter: int, setting: dict,
+                     memory: dict) -> tuple[dict, float]:
+    """交互式头脑风暴：先生成 1 份"待讨论大纲" + 几个分歧点问题等作者回应。
+
+    P3 阶段：复用 batch 模式生成 tasks，再额外生成 3-5 个引导性问题（如
+    "主角应该在这里觉醒还是更晚？"），推送给前端 human_pending 列表。
+    """
+    tasks, cost = run_outline(arc, start_chapter, setting, memory)
+    # P3 stub：实际应用 LLM 基于 arc + setting 生成 3-5 个分歧点
+    questions = [
+        {
+            "qid": f"talk_{arc.get('arc_id','?')}_q1",
+            "question": f"在弧「{arc.get('arc_name','?')}」中，主角是否应该获得一项新能力？如果是，请描述这项能力的具体形态。",
+            "context": f"弧目标：{arc.get('arc_goal','')}",
+        },
+        {
+            "qid": f"talk_{arc.get('arc_id','?')}_q2",
+            "question": "弧高潮的「对手」由谁担任？从已有角色选，还是新引入？",
+            "context": "弧高潮的爽度主要由对手的压迫感和反派的智商决定。",
+        },
+        {
+            "qid": f"talk_{arc.get('arc_id','?')}_q3",
+            "question": "本章弧内允许主角损失什么？（友情/记忆/道具/金钱…）",
+            "context": "损失越具体，反击越有共鸣；避免笼统的'挫折'。",
+        },
+    ]
+    return {"tasks": tasks, "questions": questions}, cost

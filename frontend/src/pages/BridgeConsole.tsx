@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { BridgeLogLine, BridgePendingItem, BridgeStatus, ChapterListItem, Project } from "../types";
+import type {
+  BridgeLogLine, BridgePendingItem, BridgeStatus, BridgeBudget,
+  ChapterListItem, Project,
+} from "../types";
 import { useReveal } from "../hooks/useReveal";
 
 type PanelData = BridgeStatus | BridgePendingItem[] | Record<string, unknown>[] | Record<string, unknown> | null;
@@ -43,6 +46,8 @@ export default function BridgeConsole() {
   const [chapters, setChapters] = useState<ChapterListItem[]>([]);
   const [outlineMode, setOutlineMode] = useState<string>("batch");
   const [plotStep, setPlotStep] = useState<number>(0); // 当前 chapter 在七要素中的进度
+  const [budget, setBudget] = useState<BridgeBudget | null>(null);
+  const [budgetLoading, setBudgetLoading] = useState(false);
   const eventSourceRef = useRef<EventSource | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -136,11 +141,27 @@ export default function BridgeConsole() {
       };
 
       es.addEventListener("log", (e) => handleEvent("log", e as MessageEvent));
+      // start: 命令开始（来自 _run_bridge_async 推的 {"event": "start", "command": ..., "outline_mode": ...}）
+      es.addEventListener("start", (e) => {
+        const payload: BridgeLogLine = JSON.parse((e as MessageEvent).data);
+        appendLog(`[start] ${payload.command || "?"}${payload.outline_mode ? ` [mode=${payload.outline_mode}]` : ""}`);
+      });
       es.addEventListener("auto_pull_setting_start", (e) => handleEvent("auto_pull_setting_start", e as MessageEvent));
       es.addEventListener("auto_pull_setting_done", (e) => handleEvent("auto_pull_setting_done", e as MessageEvent));
-      es.addEventListener("auto_import_chapters_start", (e) => handleEvent("auto_import_chapters_start", e as MessageEvent));
-      es.addEventListener("auto_import_chapters_done", (e) => handleEvent("auto_import_chapters_done", e as MessageEvent));
-      es.addEventListener("auto_chain_error", (e) => handleEvent("auto_chain_error", e as MessageEvent));
+      es.addEventListener("auto_import_chapters_start", (e) => {
+        appendLog("[auto_import_chapters_start] 正在从 orchestrator 输出目录拉取章节…");
+      });
+      es.addEventListener("auto_import_chapters_done", (e) => {
+        const payload: BridgeLogLine = JSON.parse((e as MessageEvent).data);
+        const count = Array.isArray(payload.imported) ? payload.imported.length : 0;
+        appendLog(`[auto_import_chapters_done] 导入 ${count} 章`);
+      });
+      // auto_chain_error: 自动链上一步失败时（planner→pull / run→import）触发
+      es.addEventListener("auto_chain_error", (e) => {
+        const payload: BridgeLogLine = JSON.parse((e as MessageEvent).data);
+        setError(`自动链错误：${payload.message || "unknown"}`);
+        appendLog(`[auto_chain_error] ${payload.message || "unknown"}`);
+      });
       es.addEventListener("node_start", (e) => {
         const payload: BridgeLogLine = JSON.parse((e as MessageEvent).data);
         if (payload.node) setActiveNode(payload.node);
@@ -150,6 +171,14 @@ export default function BridgeConsole() {
         const payload: BridgeLogLine = JSON.parse((e as MessageEvent).data);
         if (payload.node && activeNode === payload.node) setActiveNode(null);
         handleEvent("node_end", e as MessageEvent);
+      });
+      // complete: 命令执行完毕（来自 _run_bridge_async 推的 {"event": "complete", "status": ...}）
+      es.addEventListener("complete", (e) => {
+        const payload: BridgeLogLine = JSON.parse((e as MessageEvent).data);
+        appendLog(`[complete] status=${payload.status || "?"}`);
+        if (payload.status === "done") {
+          api.listChapters(projectId!).then(setChapters).catch(() => {});
+        }
       });
       es.addEventListener("done", (e) => {
         const payload: BridgeLogLine = JSON.parse((e as MessageEvent).data);
@@ -165,7 +194,9 @@ export default function BridgeConsole() {
       });
       es.addEventListener("error", (e) => {
         try {
-          handleEvent("error", e as MessageEvent);
+          const payload: BridgeLogLine = JSON.parse((e as MessageEvent).data);
+          setError(`命令失败：${payload.message || "unknown"}${payload.traceback ? `\n${payload.traceback}` : ""}`);
+          appendLog(`[error] ${payload.message || "unknown"}`);
         } catch {
           appendLog("[error] SSE 连接中断");
         }
@@ -199,6 +230,25 @@ export default function BridgeConsole() {
     } catch (e) {
       setError(String(e));
       appendLog(`[error] ${String(e)}`);
+    }
+  }
+
+  async function fetchBudget() {
+    if (!projectId) return;
+    setError(null);
+    setBudgetLoading(true);
+    appendLog("$ 预算报告");
+    try {
+      const data = await api.getBridgeBudget(projectId);
+      setBudget(data);
+      setPanelTitle("预算报告");
+      setPanelData(data as PanelData);
+      appendLog(`[预算报告] 已用 $${data.total_cost_usd.toFixed(4)} · ${data.record_count} 条记录`);
+    } catch (e) {
+      setError(String(e));
+      appendLog(`[error] ${String(e)}`);
+    } finally {
+      setBudgetLoading(false);
     }
   }
 
@@ -474,8 +524,8 @@ export default function BridgeConsole() {
           <button className="btn" disabled={running} onClick={() => runControl("查看状态", () => api.getBridgeStatus(projectId))}>
             查看状态
           </button>
-          <button className="btn" disabled={running} onClick={() => runControl("预算报告", () => api.getBridgeBudget(projectId))}>
-            预算报告
+          <button className="btn" disabled={running || budgetLoading} onClick={fetchBudget}>
+            {budgetLoading ? "拉取中…" : "预算报告"}
           </button>
           <button className="btn" disabled={running} onClick={() => runControl("待审核", () => api.getBridgePending(projectId))}>
             待审核
@@ -504,10 +554,89 @@ export default function BridgeConsole() {
       </div>
 
       {/* ============ 数据面板（保留） ============ */}
-      {panelTitle && (
+      {panelTitle && !(budget && panelTitle === "预算报告") && (
         <div className="card mt-24">
           <h3 className="card__title">{panelTitle}</h3>
           <pre className="json-panel">{formatPayload(panelData)}</pre>
+        </div>
+      )}
+
+      {/* ============ BridgeBudget 专用面板 ============ */}
+      {budget && (
+        <div className="card mt-24">
+          <div className="flex-between" style={{ marginBottom: 14 }}>
+            <h3 className="card__title" style={{ margin: 0 }}>预算报告</h3>
+            <span className="text-faint" style={{ fontSize: 11 }}>共 {budget.record_count} 条 LLM 调用记录</span>
+          </div>
+          {(() => {
+            const used = budget.total_cost_usd;
+            const limit = budget.budget_limit_usd ?? 0;
+            const pct = limit > 0 ? Math.min(100, Math.round((used / limit) * 100)) : 0;
+            const color = pct < 50 ? "var(--accent)" : pct < 80 ? "#E5A341" : "#E06C5F";
+            return (
+              <>
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 6 }}>
+                  <span style={{ fontFamily: "var(--font-display)", fontSize: 22, color }}>
+                    ${used.toFixed(4)}
+                  </span>
+                  <span className="text-faint" style={{ fontSize: 12 }}>
+                    / ${limit.toFixed(0)} ({pct}%)
+                  </span>
+                  {pct >= 80 && (
+                    <span className="badge-soft badge" style={{ background: "#E06C5F22", color: "#E06C5F" }}>
+                      {pct >= 95 ? "🚨 临界" : "⚠️ 接近上限"}
+                    </span>
+                  )}
+                </div>
+                <div className="progress-track" style={{ height: 8, marginBottom: 16 }}>
+                  <div className="progress-fill" style={{ width: `${pct}%`, background: color }} />
+                </div>
+
+                {budget.records.length > 0 && (
+                  <div className="budget-records">
+                    <h4 className="module-heading" style={{ fontSize: 13, marginBottom: 8 }}>
+                      调用明细（按时间倒序 · 最新 20 条）
+                    </h4>
+                    <div style={{ maxHeight: 320, overflowY: "auto" }}>
+                      <table className="budget-table" style={{
+                        width: "100%", fontSize: 12, borderCollapse: "collapse",
+                        fontFamily: "var(--font-mono)",
+                      }}>
+                        <thead>
+                          <tr style={{ borderBottom: "1px solid var(--border-strong)", textAlign: "left" }}>
+                            <th style={{ padding: "4px 6px" }}>时间</th>
+                            <th style={{ padding: "4px 6px" }}>角色</th>
+                            <th style={{ padding: "4px 6px" }}>模型</th>
+                            <th style={{ padding: "4px 6px", textAlign: "right" }}>章节</th>
+                            <th style={{ padding: "4px 6px", textAlign: "right" }}>in/out</th>
+                            <th style={{ padding: "4px 6px", textAlign: "right" }}>费用</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {[...budget.records].reverse().slice(0, 20).map((r, i) => (
+                            <tr key={i} style={{ borderBottom: "1px solid var(--border)" }}>
+                              <td style={{ padding: "4px 6px", color: "var(--text-faint)" }}>
+                                {(r.ts || "").slice(11, 19)}
+                              </td>
+                              <td style={{ padding: "4px 6px" }}>{r.agent}</td>
+                              <td style={{ padding: "4px 6px", color: "var(--text-faint)" }}>{r.model}</td>
+                              <td style={{ padding: "4px 6px", textAlign: "right" }}>{r.chapter || "-"}</td>
+                              <td style={{ padding: "4px 6px", textAlign: "right", color: "var(--text-faint)" }}>
+                                {r.input_tokens}/{r.output_tokens}
+                              </td>
+                              <td style={{ padding: "4px 6px", textAlign: "right", color }}>
+                                ${r.cost_usd.toFixed(4)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </div>
       )}
 

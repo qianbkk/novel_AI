@@ -32,7 +32,9 @@ from .agents.checker    import run_checker
 from .agents.rewriter   import run_rewriter
 from .agents.tracker    import run_tracker
 from .agents.summarizer import run_summarizer
-from .agents.outline    import run_outline
+from .agents.outline    import (
+    run_outline, run_outline_card, run_outline_talk,
+)
 from .memory.manager import get_l2
 
 # ── Paths (relative to backend/) ──
@@ -136,12 +138,40 @@ def node_load_arc_tasks(state: OrchestratorState) -> OrchestratorState:
     memory = get_l2(state.get("novel_id", "default"))
     start  = state.get("current_chapter", 0) + 1
 
-    log(f"📋 拆解弧{arc.get('arc_id', arc_idx+1)}「{arc.get('arc_name','')}」", state)
+    # P3 大纲模式路由：batch/card/talk 走不同 outline 变体
+    # env NOVEL_OUTLINE_MODE 由 backend/app/api/bridge.py 注入
+    outline_mode = os.environ.get("NOVEL_OUTLINE_MODE", "batch").lower()
+    log(f"📋 拆解弧{arc.get('arc_id', arc_idx+1)}「{arc.get('arc_name','')}」[mode={outline_mode}]", state)
+
+    tasks: list = []
     try:
-        tasks, cost = run_outline(arc, start, setting, memory)
+        if outline_mode == "card":
+            # card 模式：抽卡探索 — 生成 3 个候选分支让作者挑
+            candidates, cost = run_outline_card(arc, start, setting, memory)
+            _add_cost(state, cost)
+            # 把所有候选展开成 chapter_task_queue，第一个候选被默认采纳；
+            # 其余两个作为 human_pending 推给前端做"三选一"
+            tasks = candidates[0]["tasks"] if candidates else \
+                    [_placeholder_task(arc_idx, i, arc) for i in range(10)]
+            state.setdefault("outline_candidates", []).append({
+                "arc_id": arc.get("arc_id", arc_idx+1),
+                "arc_name": arc.get("arc_name", ""),
+                "candidates": candidates,
+            })
+            log(f"  🎴 生成 {len(candidates)} 个候选分支（card 模式）", state)
+        elif outline_mode == "talk":
+            # talk 模式：交互头脑风暴 — 先输出 1 个大纲 + 一些"分歧点"等作者回应
+            result, cost = run_outline_talk(arc, start, setting, memory)
+            _add_cost(state, cost)
+            tasks = result.get("tasks", [_placeholder_task(arc_idx, i, arc) for i in range(10)])
+            state.setdefault("talk_questions", []).extend(result.get("questions", []))
+            log(f"  💬 生成大纲 + {len(result.get('questions', []))} 个待讨论点（talk 模式）", state)
+        else:
+            # batch 默认：传统批量
+            tasks, cost = run_outline(arc, start, setting, memory)
+            _add_cost(state, cost)
     except Exception as e:
         log(f"ERR outline failed: {e}", state)
-        # Stub fallback: build 10 placeholder tasks
         tasks = [_placeholder_task(arc_idx, i, arc) for i in range(10)]
         cost = 0.0
     _add_cost(state, cost)

@@ -148,6 +148,7 @@ export interface BridgeRun {
 
 export interface BridgeLogLine {
   event: "log" | "done" | "error"
+       | "start" | "complete"
        | "auto_pull_setting_start" | "auto_pull_setting_done"
        | "auto_import_chapters_start" | "auto_import_chapters_done"
        | "auto_chain_error"
@@ -157,6 +158,11 @@ export interface BridgeLogLine {
   exit_code?: number;
   data?: unknown;
   node?: string;  // node_start / node_end 事件携带
+  command?: string;       // start 事件携带
+  outline_mode?: string;  // start 事件携带
+  status?: string;        // complete 事件携带
+  imported?: unknown;     // auto_import_chapters_done 事件携带
+  traceback?: string;     // error 事件携带
 }
 
 export interface BridgeStatus {

@@ -106,6 +106,10 @@ class OrchestratorState(TypedDict):
     human_pending: List[HumanTask]
     tracker_pending: List[Dict]
 
+    # 大纲模式产物
+    outline_candidates: List[Dict]   # card 模式：每弧 3 个候选分支
+    talk_questions: List[Dict]       # talk 模式：每弧引导性问题
+
     # 元数据
     style_samples: List[str]
     style_samples_source: str   # external|internal
@@ -148,6 +152,8 @@ def create_initial_state(
         audit_mode="full",
         human_pending=[],
         tracker_pending=[],
+        outline_candidates=[],
+        talk_questions=[],
         style_samples=[],
         style_samples_source="external",
         last_p0_chapter=0,

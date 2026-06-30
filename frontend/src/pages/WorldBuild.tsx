@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { Project, WorldBuildResult, StageEvent, MapNode } from "../types";
+import type { Project, WorldBuildResult, StageEvent, MapNode, ForeshadowingRow } from "../types";
 
 // 跟后端 worldbuild/stages.py 里的 STAGES 保持一致——原型阶段先手动同步，
 // 更稳妥的做法是让后端在 /worldbuild/start 的响应里把阶段清单带回来，
@@ -416,15 +416,67 @@ export default function WorldBuild() {
                   <h3 className="module-heading">
                     <span className="module-heading__index">M03</span>
                     伏笔系统
-                    <span className="module-heading__sub">回收提醒 · 重要性分级</span>
+                    <span className="module-heading__sub">回收提醒 · 重要性分级 · 状态流转</span>
                   </h3>
-                  {result.foreshadowings.map((f) => (
-                    <div className="entity-card" key={f.id}>
-                      <span className={`badge ${f.importance === "high" ? "badge-stamp" : "badge-soft"}`}>{f.importance}</span>{" "}
-                      <span className="entity-card__meta">{f.status}</span>
-                      <div className="entity-card__desc">{f.content}</div>
-                    </div>
-                  ))}
+                  {result.foreshadowings.length === 0 && (
+                    <div className="empty-state">还没有伏笔</div>
+                  )}
+                  {result.foreshadowings.map((f) => {
+                    const STATUS_FLOW: Array<{ key: ForeshadowingRow["status"]; label: string; color: string }> = [
+                      { key: "未铺垫", label: "未铺垫", color: "badge-soft" },
+                      { key: "已铺垫", label: "已铺垫", color: "badge-soft" },
+                      { key: "已回收", label: "已回收", color: "badge-stamp" },
+                    ];
+                    return (
+                      <div className="entity-card" key={f.id} style={{ marginBottom: 10 }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                          <span className={`badge ${f.importance === "high" ? "badge-stamp" : "badge-soft"}`}>
+                            {f.importance || "中"}
+                          </span>
+                          <span className={`badge ${STATUS_FLOW.find((s) => s.key === f.status)?.color || "badge-soft"}`}>
+                            {f.status || "未铺垫"}
+                          </span>
+                          {f.planted_chapter_hint && (
+                            <span className="text-faint" style={{ fontSize: 11 }}>
+                              铺垫 {f.planted_chapter_hint}
+                            </span>
+                          )}
+                          {f.payoff_chapter_hint && (
+                            <span className="text-faint" style={{ fontSize: 11 }}>
+                              回收 {f.payoff_chapter_hint}
+                            </span>
+                          )}
+                        </div>
+                        <div className="entity-card__desc" style={{ marginTop: 6 }}>{f.content}</div>
+                        <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                          {STATUS_FLOW.filter((s) => s.key !== f.status).map((s) => (
+                            <button
+                              key={s.key}
+                              className="btn btn-ghost"
+                              style={{ fontSize: 11, padding: "4px 10px" }}
+                              onClick={async () => {
+                                if (!projectId) return;
+                                try {
+                                  await api.updateForeshadowingStatus(projectId, f.id, s.key);
+                                  // 局部更新 result
+                                  setResult((prev) => prev ? {
+                                    ...prev,
+                                    foreshadowings: prev.foreshadowings.map((x) =>
+                                      x.id === f.id ? { ...x, status: s.key } : x
+                                    ),
+                                  } : prev);
+                                } catch (e) {
+                                  setError(`伏笔状态更新失败：${String(e)}`);
+                                }
+                              }}
+                            >
+                              → {s.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               )}
 
