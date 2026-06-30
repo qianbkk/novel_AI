@@ -22,6 +22,9 @@ export default function App() {
 
   return (
     <div className="app-shell">
+      <a className="skip-link" href="#main-content">
+        跳到主内容
+      </a>
       <aside className="app-sidebar">
         <div className="sidebar-brand">
           <div className="sidebar-brand__name">
@@ -112,7 +115,8 @@ export default function App() {
         </div>
       </aside>
 
-      <main className="app-main">
+      <main className="app-main" id="main-content" tabIndex={-1}>
+        <div className="page-fade" key={location.pathname}>
         <Routes>
           <Route path="/" element={<Dashboard />} />
           <Route path="/new" element={<NewProject />} />
@@ -123,6 +127,7 @@ export default function App() {
           <Route path="/projects/:projectId/bridge" element={<BridgeConsole />} />
           <Route path="/projects/:projectId/rules" element={<RuleCenter />} />
         </Routes>
+        </div>
       </main>
     </div>
   );

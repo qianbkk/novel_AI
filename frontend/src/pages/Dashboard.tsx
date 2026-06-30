@@ -215,9 +215,24 @@ export default function Dashboard() {
       {projects && projects.length === 0 && (
         <div className="card">
           <div className="empty-state">
-            还没有项目
+            <div className="empty-state__icon" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="1.5"
+                strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </div>
+            <div className="empty-state__title">还没有项目</div>
             <div className="empty-state__hint">
-              点右上角"新建小说"，填个标题和题材，从世界构建开始
+              点右上角「新建小说」，填个标题和题材，从世界构建开始
+            </div>
+            <div className="empty-state__action">
+              <button
+                className="btn btn-primary"
+                onClick={() => navigate("/new")}
+              >
+                + 新建小说
+              </button>
             </div>
           </div>
         </div>

@@ -65,6 +65,8 @@ export interface Foreshadowing {
   linked_character_id: string | null;
   importance: string;
   status: string;
+  planted_chapter_hint?: string | null;
+  payoff_chapter_hint?: string | null;
 }
 
 export interface Currency {
@@ -270,4 +272,5 @@ export interface BridgeBudget {
     output_tokens: number;
     cost_usd: number;
   }>;
+  [key: string]: unknown;
 }

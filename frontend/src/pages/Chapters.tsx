@@ -6,6 +6,8 @@ import type {
   Character, ChapterSearchResult, RepetitionWarning,
 } from "../types";
 import { useReveal } from "../hooks/useReveal";
+import { useToast } from "../components/Toast";
+import { Dialog } from "../components/Dialog";
 
 // 衔接锁四个字段：场景布置 / 角色登场 / 物品状态 / 前章收尾
 function deriveSceneLayout(text: string): string {
@@ -43,6 +45,7 @@ export default function Chapters() {
   const [charactersByChapter, setCharactersByChapter] = useState<Record<string, ChapterCharacter[]>>({});
 
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const toast = useToast();
   useReveal(rootRef);
 
   async function refreshChapters() {
@@ -94,6 +97,9 @@ export default function Chapters() {
       setContent("");
       setChapterNo((n) => n + 1);
       await refreshChapters();
+      toast.success(`第 ${chapterNo - 1} 章已保存`, `共 ${content.length.toLocaleString()} 字`);
+    } catch (e) {
+      toast.error("保存失败", String(e));
     } finally {
       setSaving(false);
     }
@@ -150,12 +156,18 @@ export default function Chapters() {
           </div>
         </div>
         <div className="field">
-          <label>正文</label>
+          <div className="flex-between" style={{ marginBottom: 6 }}>
+            <label style={{ marginBottom: 0 }}>正文</label>
+            <span className="text-mono text-faint tabular-nums" style={{ fontSize: 11.5 }}>
+              {content.length.toLocaleString()} 字
+            </span>
+          </div>
           <textarea
-            rows={8}
+            rows={12}
             value={content}
             onChange={(e) => setContent(e.target.value)}
             placeholder="粘贴或输入这一章的正文…保存后会自动标记出场人物、embed 全文并跑一次重复度检测"
+            style={{ fontFamily: "var(--font-body)", lineHeight: 1.8 }}
           />
         </div>
 
@@ -261,9 +273,17 @@ export default function Chapters() {
         </div>
         {chapters.length === 0 ? (
           <div className="empty-state">
-            还没有章节
+            <div className="empty-state__icon" aria-hidden="true">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" strokeWidth="1.5"
+                strokeLinecap="round" strokeLinejoin="round">
+                <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+                <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+              </svg>
+            </div>
+            <div className="empty-state__title">还没有章节</div>
             <div className="empty-state__hint">
-              从写作控制台点"写 N 章"，写完会自动出现在这里
+              从写作控制台点「写 N 章」，写完会自动出现在这里
             </div>
           </div>
         ) : (
@@ -336,35 +356,39 @@ export default function Chapters() {
         )}
       </div>
 
-      {/* 单章详情抽屉 */}
-      {chapterDetailLoading && (
-        <div className="banner banner-info" style={{ marginTop: 16 }}>加载章节详情中…</div>
-      )}
-      {chapterDetail && !chapterDetailLoading && (
-        <div className="card mt-24">
-          <div className="flex-between" style={{ marginBottom: 12 }}>
-            <h3 className="card__title" style={{ margin: 0 }}>
-              第{chapterDetail.chapter_no}章 · {chapterDetail.title || "（无标题）"}
-            </h3>
-            <button className="btn btn-ghost" onClick={() => setChapterDetail(null)}>关闭</button>
-          </div>
-          {chapterDetail.characters.length > 0 && (
-            <div className="chapter-detail-chars">
-              <span className="text-faint" style={{ fontSize: 12 }}>出场人物：</span>
-              {chapterDetail.characters.map((cc) => (
-                <span key={cc.id} className="legislation-card__chip" style={{ marginRight: 6 }}>
-                  {cc.character_name}
-                  {cc.character_role ? ` · ${cc.character_role}` : ""}
-                </span>
-              ))}
-            </div>
-          )}
-          <pre className="log-console" style={{
-            marginTop: 12, maxHeight: 480, whiteSpace: "pre-wrap",
-            fontFamily: "var(--font-body)", lineHeight: 1.7, fontSize: 13.5,
-          }}>{chapterDetail.content}</pre>
-        </div>
-      )}
+      {/* 单章详情 Dialog */}
+      <Dialog
+        open={!!chapterDetail || chapterDetailLoading}
+        onClose={() => setChapterDetail(null)}
+        title={chapterDetail ? `第 ${chapterDetail.chapter_no} 章 · ${chapterDetail.title || "（无标题）"}` : "加载中…"}
+        sub={chapterDetail ? `${chapterDetail.content.length.toLocaleString()} 字 · ${chapterDetail.created_at}` : undefined}
+        actions={
+          <button className="btn" onClick={() => setChapterDetail(null)}>关闭</button>
+        }
+      >
+        {chapterDetailLoading && (
+          <div className="loading-text">加载章节详情…</div>
+        )}
+        {chapterDetail && !chapterDetailLoading && (
+          <>
+            {chapterDetail.characters.length > 0 && (
+              <div style={{ marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+                <span className="text-faint" style={{ fontSize: 12 }}>出场人物：</span>
+                {chapterDetail.characters.map((cc) => (
+                  <span key={cc.id} className="legislation-card__chip">
+                    {cc.character_name}
+                    {cc.character_role ? ` · ${cc.character_role}` : ""}
+                  </span>
+                ))}
+              </div>
+            )}
+            <pre className="log-console" style={{
+              maxHeight: "60vh", whiteSpace: "pre-wrap",
+              fontFamily: "var(--font-body)", lineHeight: 1.8, fontSize: 13.5,
+            }}>{chapterDetail.content}</pre>
+          </>
+        )}
+      </Dialog>
     </div>
   );
 }
