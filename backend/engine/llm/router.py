@@ -164,6 +164,7 @@ class LLMRouter:
             "gemini":    os.getenv("GEMINI_API_KEY", ""),
             "kimi":      os.getenv("KIMI_API_KEY", ""),
             "minimax":   os.getenv("MINIMAX_API_KEY", ""),
+            # 旧版 XiyuTech MiniMax 才需要 GroupId；新版 MiniMax-M3 不需要
             "minimax_group_id": os.getenv("MINIMAX_GROUP_ID", ""),
             "custom":    os.getenv("CUSTOM_API_KEY", ""),
             "custom_api_base":   os.getenv("CUSTOM_API_BASE", ""),
@@ -366,28 +367,46 @@ class LLMRouter:
         return text, cost
 
     def _minimax(self, agent, system_prompt, user_prompt, model, max_tokens, temperature):
+        # 2026.6 update: 切换到新版 MiniMax endpoint（api.minimaxi.com）。
+        # 鉴权方式：Bearer <MINIMAX_API_KEY>，不再需要 GroupId。
+        # Payload/响应格式：标准 OpenAI chat.completions。
         api_key = self.api_keys.get("minimax", "")
-        group_id = self.api_keys.get("minimax_group_id", "")
-        if not api_key or not group_id:
-            raise ValueError("MINIMAX_API_KEY 和 MINIMAX_GROUP_ID 均需在 .env 中设置")
-        url = f"https://api.minimax.chat/v1/text/chatcompletion_pro?GroupId={group_id}"
+        if not api_key:
+            raise ValueError("MINIMAX_API_KEY 未设置")
+        # 允许用 MINIMAX_BASE_URL env 覆盖默认 endpoint
+        base_url = os.environ.get("MINIMAX_BASE_URL") or "https://api.minimaxi.com/v1"
+        url = f"{base_url.rstrip('/')}/text/chatcompletion_v2"
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        actual_model = model or "MiniMax-M3"
         payload = {
-            "model": model or "abab6.5s-chat",
-            "tokens_to_generate": max_tokens,
+            "model": actual_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user",   "content": user_prompt},
+            ],
+            "max_tokens": max_tokens,
             "temperature": temperature,
-            "messages": [{"sender_type": "USER", "sender_name": "用户", "text": user_prompt}],
-            "bot_setting": [{"bot_name": "AI助手", "content": system_prompt}],
+            # M3 默认开启深度思考，会把 reasoning_content 当成 content 返回但实际 content 为空。
+            # 显式禁用：让模型直接给最终回答。
+            "thinking": {"type": "disabled"},
         }
-        c = (_get_proxied_client("minimax", "https://api.minimax.chat")
+        c = (_get_proxied_client("minimax", base_url)
              if _PROVIDER_PROXY.get("minimax") else _get_client(120))
         r = _post_with_retry(c, url, headers=headers, json=payload)
         data = r.json()
-        choices = data.get("choices", [{}])
-        text = choices[0].get("messages", [{}])[-1].get("text", "") if choices else ""
+        # chat.completions 格式
+        choices = data.get("choices", [])
+        if not choices:
+            raise ValueError(f"MiniMax 返回无 choices: {data}")
+        msg = choices[0].get("message", {}) or {}
+        text = msg.get("content", "") or ""
+        if not text and "reasoning_content" in msg:
+            # M3 思考模型：reasoning_content 不算正文，找 content
+            text = msg.get("content", "") or ""
         if not text:
-            text = data.get("reply", "")
-        usage   = data.get("usage", {})
+            # 兜底：有些 M 系列字段在 delta 或 text 字段
+            text = choices[0].get("text", "") or data.get("reply", "")
+        usage   = data.get("usage", {}) or {}
         in_tok  = usage.get("prompt_tokens", 0)
         out_tok = usage.get("completion_tokens", 0)
         cost = (in_tok + out_tok) * 0.0014 / 1000

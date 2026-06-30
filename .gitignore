@@ -46,3 +46,6 @@ test_output/
 # dev.bat runtime output (port logs, launcher .cmd)
 .runlogs/
 PID
+
+# Backend runtime logs (see backend/app/logging_setup.py)
+backend/logs/

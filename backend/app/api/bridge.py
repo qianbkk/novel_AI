@@ -13,8 +13,11 @@ from engine.graph import run_graph_task
 from ..bridge.reports import apply_review, read_budget_log, read_pending, read_status
 from ..bridge.setting_sync import pull_setting_package, push_setting_concept
 from ..database import SessionLocal, get_db
+from ..logging_setup import get_logger
 from ..models import BridgeRun, GenerationJob, NovelAIBinding, Project, Provider, RoleAssignment
 from ..schemas import BridgeRunOut, BridgeRunRequest, NovelAIBindingOut, NovelAIBindingUpsert, ReviewRequest
+
+log = get_logger("novel_ai.bridge")
 
 router = APIRouter(prefix="/projects/{project_id}/bridge", tags=["bridge"])
 
@@ -151,6 +154,16 @@ async def import_chapters(project_id: str, db: Session = Depends(get_db)):
     return await import_chapters_from_novel_ai(project_id, binding.novel_ai_dir, db)
 
 
+@router.post("/reimport-chapters")
+async def reimport_chapters(project_id: str, db: Session = Depends(get_db)):
+    """强制重新导入章节：用最新的 txt + meta 覆盖 DB 已有行（修复章节管理显示问题）。
+    普通 /import-chapters 是幂等的，会跳过已存在行；
+    这个端点专用于修复标题 / 内容 / 摘要。"""
+    _, binding = _get_project_and_binding(project_id, db)
+    from ..bridge.chapter_import import _force_reimport
+    return await _force_reimport(project_id, binding.novel_ai_dir, db)
+
+
 @router.get("/status")
 def status(project_id: str, db: Session = Depends(get_db)):
     _, binding = _get_project_and_binding(project_id, db)
@@ -192,12 +205,15 @@ async def _run_bridge_async(run_id: str, project_id: str, command: str,
     """Run graph command in-process. Called via asyncio.create_task from the endpoint."""
     from engine.graph import run_graph_task
     from datetime import datetime
+    log.info("bridge run start: run_id=%s project=%s cmd=%s args=%s",
+             run_id, project_id, command, args)
     lock = _get_project_lock(project_id)
     async with lock:
         db = SessionLocal()
         try:
             bridge_run = db.get(BridgeRun, run_id)
             if not bridge_run:
+                log.warning("bridge run %s 不存在，跳过", run_id)
                 return
             bridge_run.status = "running"
             db.commit()
@@ -223,6 +239,8 @@ async def _run_bridge_async(run_id: str, project_id: str, command: str,
             bridge_run.finished_at = datetime.utcnow()
             bridge_run.status = "done" if exit_code == 0 else "failed"
             db.commit()
+            log.info("bridge run done: run_id=%s exit=%s stdout_len=%d",
+                     run_id, exit_code, len(stdout_text or ""))
 
             if exit_code == 0 and command == "planner":
                 queue.put({"event": "auto_pull_setting_start"})

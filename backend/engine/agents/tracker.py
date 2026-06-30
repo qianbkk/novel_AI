@@ -137,18 +137,36 @@ def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: s
     # 约束与伏笔进 constraints 层
     constr = current_memory.get("constraints", {})
     for c in updates.get("new_constraints", []):
+        # P3 fix: 模型可能返回 dict 也可能直接返回字符串，统一处理
+        if isinstance(c, dict):
+            desc = c.get("desc", str(c))
+            exp  = c.get("expires_at_chapter", task["chapter_number"] + 20)
+            reason = c.get("reason", "")
+        else:
+            desc = str(c)
+            exp  = task["chapter_number"] + 20
+            reason = ""
         fb = constr.setdefault("forbidden_constraints", [])
-        fb.append({"id": f"c{len(fb)+1}", "desc": c.get("desc", ""),
-                   "expires_at_chapter": c.get("expires_at_chapter", task["chapter_number"] + 20),
-                   "reason": c.get("reason", "")})
+        fb.append({"id": f"c{len(fb)+1}", "desc": desc,
+                   "expires_at_chapter": exp, "reason": reason})
     for fact in updates.get("new_facts", []):
+        if isinstance(fact, dict):
+            fact_text = fact.get("fact", str(fact))
+        else:
+            fact_text = str(fact)
         facts = constr.setdefault("established_facts", [])
-        facts.append({"fact": fact, "established_at_chapter": task["chapter_number"]})
+        facts.append({"fact": fact_text, "established_at_chapter": task["chapter_number"]})
     for fp in updates.get("new_foreshadowing", []):
+        if isinstance(fp, dict):
+            desc = fp.get("desc", "")
+            target_arc = fp.get("target_arc")
+        else:
+            desc = str(fp)
+            target_arc = None
         planted = constr.setdefault("foreshadowing_planted", [])
-        planted.append({"desc": fp.get("desc", "") if isinstance(fp, dict) else str(fp),
+        planted.append({"desc": desc,
                         "planted_at_chapter": task["chapter_number"],
-                        "target_arc": fp.get("target_arc") if isinstance(fp, dict) else None})
+                        "target_arc": target_arc})
 
     # 更新 meta
     meta = current_memory.get("meta", {})
