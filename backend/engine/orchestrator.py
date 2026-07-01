@@ -501,7 +501,12 @@ def run_orchestrator(state: OrchestratorState, max_chapters: int = 10) -> Orches
     print(f"🚀 Orchestrator | 目标{max_chapters}章 | 起始Ch{state.get('current_chapter',0)+1}")
     print(f"   {state.get('novel_id')} | 预算${state.get('budget_used_usd',0):.2f}/${state.get('budget_limit_usd',500):.0f}")
     print(f"{'='*60}\n")
-    for event in app.stream(state, {"recursion_limit": 250}):
+    # graph 用 checkpointer 编译 → 必须传 config.configurable.thread_id
+    # 否则 LangGraph 报 "Checkpointer requires one or more of the following
+    # 'configurable' keys: thread_id, ..." → exit_code=1（你独立验证）
+    thread_id = state.get("novel_id") or "default"
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 250}
+    for event in app.stream(state, config):
         node_name = list(event.keys())[0]
         new_state = event[node_name]
         if node_name == "save_and_track":
