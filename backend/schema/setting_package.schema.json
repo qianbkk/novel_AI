@@ -1,0 +1,131 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://novel_ai.local/schema/setting_package.schema.json",
+  "title": "Novel AI Setting Package",
+  "description": "engine/agents/planner.py 输出的设定包结构。生产方 (planner) 和消费方 (app/bridge/setting_sync.py) 必须都遵守本 schema。改字段必须先改本文件。",
+  "type": "object",
+  "required": [
+    "novel_id", "platform", "genre",
+    "title_candidates", "tagline", "protagonist",
+    "world_setting", "power_system", "key_characters",
+    "arc_outline", "foreshadowing_seeds"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "novel_id":           {"type": "string", "minLength": 1},
+    "platform":           {"type": "string", "enum": ["fanqie", "jjwxc", "qidian", "other"]},
+    "genre":              {"type": "string", "minLength": 1},
+    "budget_limit_usd":   {"type": "number", "minimum": 0, "default": 500.0},
+
+    "title_candidates": {
+      "type": "array", "minItems": 1, "maxItems": 5,
+      "items": {"type": "string", "minLength": 2, "maxLength": 60}
+    },
+    "tagline": {"type": "string", "maxLength": 100},
+
+    "protagonist": {
+      "type": "object",
+      "required": ["name", "background", "personality", "awakening_trigger"],
+      "properties": {
+        "name":               {"type": "string", "minLength": 1, "maxLength": 20},
+        "age":                {"type": "integer", "minimum": 0, "maximum": 9999},
+        "background":         {"type": "string", "minLength": 1},
+        "personality":        {"type": "string", "minLength": 1},
+        "speech_quirks":      {"type": "array", "items": {"type": "string"}},
+        "awakening_trigger":  {"type": "string", "minLength": 1},
+        "initial_power_level":{"type": "string", "minLength": 1}
+      }
+    },
+
+    "world_setting": {
+      "type": "object",
+      "required": ["hidden_world_name", "surface_world_name", "hidden_world_history"],
+      "properties": {
+        "hidden_world_name":    {"type": "string", "minLength": 1},
+        "hidden_world_history": {"type": "string", "minLength": 50},
+        "surface_world_name":   {"type": "string", "minLength": 1},
+        "unique_elements":      {"type": "array", "items": {"type": "string"}}
+      }
+    },
+
+    "power_system": {
+      "type": "object",
+      "required": ["name", "levels"],
+      "properties": {
+        "name":        {"type": "string", "minLength": 1},
+        "currency":    {"type": "string"},
+        "description": {"type": "string"},
+        "levels": {
+          "type": "array", "minItems": 1, "maxItems": 12,
+          "items": {
+            "type": "object",
+            "required": ["level", "name"],
+            "properties": {
+              "level":           {"type": "integer", "minimum": 1},
+              "name":            {"type": "string", "minLength": 1},
+              "point_threshold": {"type": "number", "minimum": 0},
+              "ability":         {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+
+    "key_characters": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "properties": {
+          "name":         {"type": "string", "minLength": 1, "maxLength": 20},
+          "role":         {"type": "string"},
+          "speech_quirks":{"type": "array", "items": {"type": "string"}},
+          "background":   {"type": "string"}
+        }
+      }
+    },
+
+    "arc_outline": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["arc_id", "arc_name", "arc_goal", "estimated_chapters"],
+        "properties": {
+          "arc_id":                     {"type": "integer", "minimum": 1},
+          "arc_name":                   {"type": "string", "minLength": 1},
+          "arc_goal":                   {"type": "string", "minLength": 1},
+          "estimated_chapters":         {"type": "integer", "minimum": 1},
+          "arc_climax_description":     {"type": "string"},
+          "arc_climax_chapter_offset":  {"type": "integer", "minimum": 0},
+          "emotion_curve":              {"type": "string"},
+          "new_characters_introduced":  {"type": "array", "items": {"type": "string"}},
+          "arc_ending_state":           {"type": "string"},
+          "is_final_arc":               {"type": "boolean"}
+        }
+      }
+    },
+
+    "foreshadowing_seeds": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["content"],
+        "properties": {
+          "content":            {"type": "string", "minLength": 5},
+          "target_arc":         {"type": "integer", "minimum": 1},
+          "linked_character":   {"type": "string"},
+          "importance":         {"type": "string", "enum": ["high", "medium", "low"]}
+        }
+      }
+    },
+
+    "golden_chapter_hooks": {
+      "type": "object",
+      "properties": {
+        "chapter_1_opening":      {"type": "string"},
+        "chapter_1_shuang_point": {"type": "string"},
+        "chapter_3_cliffhanger":  {"type": "string"}
+      }
+    }
+  }
+}

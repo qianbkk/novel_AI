@@ -99,6 +99,16 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
     raw = json.loads(setting_path.read_text(encoding="utf-8"))
     log.info("pull-setting project=%s, top_keys=%s", project_id, list(raw.keys()))
 
+    # v3: 校验 setting_package.json 是否符合 schema。fail-fast，
+    # 否则「LLM 漏字段」会让 DB 静默缺失（之前 world_view=0 字 / 伏笔=0
+    # 的根因之一）。planner 端已经校验过一次，这里再守一道防止手工改文件。
+    try:
+        from ..schema_validator import validate_setting_package, SchemaError
+        validate_setting_package(raw)
+    except SchemaError as e:
+        log.error("pull-setting: %s", e)
+        raise
+
     # 0. WorldSetting 行
     world = db.query(WorldSetting).filter_by(project_id=project_id).first()
     if world is None:

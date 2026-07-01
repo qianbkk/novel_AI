@@ -3,15 +3,24 @@
 v1：novel_AI 原 planner_agent.py 通过 api_client.call_llm。
 P2 移植：用 backend.engine.llm_router.get_active_router()，
        复用同进程 LLMRouter；MODEL_ROUTES["planner"] 决定 model。
+v3：写入前 validate against backend/schema/setting_package.schema.json
+    （防止字段名漂移再次让 5 张表全空）
 """
 from __future__ import annotations
 import json
+import sys
 from pathlib import Path
+
+# 把 backend 加进 path 以便 import app.schema_validator
+_BACKEND_ROOT = Path(__file__).resolve().parents[2]
+if str(_BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_ROOT))
 
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
 from ..config.paths import NOVEL_CONFIG_PATH, SETTING_PATH_STR
 from ..utils import parse_llm_json_response
+from app.schema_validator import validate_setting_package, SchemaError
 
 
 def _find_novel_config() -> Path:
@@ -175,6 +184,14 @@ def run_planner(args, output_dir: str) -> dict:
     setting.setdefault("platform", cfg.get("platform", "fanqie"))
     setting.setdefault("genre", cfg.get("genre", "玄幻"))
     setting.setdefault("budget_limit_usd", cfg.get("budget_limit_usd", 500.0))
+
+    # v3: 写盘前 validate，防止「LLM 漏字段」再次让 pull_setting 后 5 张表全空
+    try:
+        validate_setting_package(setting)
+    except SchemaError as e:
+        # 把 schema 错误显式打到 stdout，让 BridgeConsole 能看到
+        print(f"   ❌ setting_package schema 校验失败: {e}")
+        raise
 
     out_path = Path(output_dir) / "setting_package.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)

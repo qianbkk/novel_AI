@@ -31,19 +31,44 @@ def _derive_title(n: int, meta: dict, content: str) -> str:
     # 兜底：从正文第一句「真正的话」摘——跳过：
     #   1. 空行
     #   2. 纯 scene label 行（"【xxx】"，不带正文的）
-    #   3. 「第N章 标题」/「第N卷 xxx」类重复标题
+    #   3. 「第N章 标题」/「第N卷 xxx」类重复标题（包括"【卷名】第N章 标题"复合形式）
+    #   4. Markdown 标题行（"# 第七章 xxx"）
     import re
-    title_re = re.compile(r"^第\d+[章卷]\s*\S+")
+    # 章节标题的 4 种已知 junk 形式
+    junk_patterns = [
+        re.compile(r"^第\d+[章卷]\s*\S+"),                       # "第N章 标题"
+        re.compile(r"^【[^】]+】第\d+[章卷]\s*\S+"),              # "【卷名】第N章 标题"
+        re.compile(r"^#{1,6}\s+第?\d*[章卷]?\s*\S*"),             # "# 第七章 标题" / "## 标题"
+        re.compile(r"^#{1,6}\s+\S+"),                            # 通用 markdown heading
+        re.compile(r"^---+$"),                                    # "---" 分隔线
+    ]
     for line in content.splitlines():
         line = line.strip()
         if not line or len(line) <= 4:
             continue
         if line.startswith("【") and line.endswith("】") and " " not in line and len(line) <= 30:
             continue
-        if title_re.match(line):
+        if any(p.match(line) for p in junk_patterns):
             continue
         return f"第{n}章·{line[:24]}"
     return f"第{n}章"
+
+
+def _build_summary(meta: dict, content: str) -> str:
+    """从 meta 派生章节 summary。meta.chapter_goal 优先；缺则用 status/word_count 兜底；
+    全无则用正文首句。绝不返回空字符串。"""
+    goal = (meta.get("chapter_goal") or "").strip()
+    if goal:
+        return goal[:120]
+    status = (meta.get("status") or "").strip()
+    if status == "human_required":
+        return "本章评分未达标（status=human_required），需人工补全。"
+    # 兜底：正文首句非空
+    for line in (content or "").splitlines():
+        s = line.strip()
+        if s and not s.startswith("【") and len(s) > 8:
+            return s[:120]
+    return f"本章 {len(content or '')} 字，正文已生成。"
 
 
 async def import_chapters_from_novel_ai(project_id: str, novel_ai_dir: str, db: Session) -> list[dict]:
@@ -68,12 +93,13 @@ async def import_chapters_from_novel_ai(project_id: str, novel_ai_dir: str, db: 
 
         # 派生一个像样的标题，避免显示"【修改后正文】"
         derived_title = _derive_title(n, meta, content)
+        derived_summary = _build_summary(meta, content)
 
         if existing:
             # 覆盖：保留 id，更新内容 + 标题 + 摘要
             existing.title = derived_title
             existing.content = content
-            existing.summary = (meta.get("chapter_goal") or "")[:120]
+            existing.summary = derived_summary
             db.commit()
             imported.append({
                 "chapter_id": existing.id,
@@ -110,11 +136,12 @@ async def _force_reimport(project_id: str, novel_ai_dir: str, db: Session) -> li
         meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
 
         derived_title = _derive_title(n, meta, content)
+        derived_summary = _build_summary(meta, content)
         existing = db.query(Chapter).filter_by(project_id=project_id, chapter_no=n).first()
         if existing:
             existing.title = derived_title
             existing.content = content
-            existing.summary = (meta.get("chapter_goal") or "")[:120]
+            existing.summary = derived_summary
             if not existing.created_at:
                 existing.created_at = datetime.utcnow()
             db.commit()

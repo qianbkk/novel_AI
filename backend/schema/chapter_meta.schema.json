@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema.json",
+  "$id": "https://novel_ai.local/schema/chapter_meta.schema.json",
+  "title": "Chapter Meta (per-chapter novel_AI/output/chapters/ch_NNNN_meta.json)",
+  "description": "engine/agents/* 写出来的章节 meta 文件结构。\nimport_chapters 必须按本 schema 读；planner 不得输出不符合的 meta。",
+  "type": "object",
+  "required": ["chapter_number"],
+  "additionalProperties": true,
+  "properties": {
+    "chapter_number": {"type": "integer", "minimum": 1},
+    "status":         {"type": "string", "enum": ["pass", "pass_with_note", "rewrite_required", "human_required"]},
+    "score":          {"type": "number", "minimum": 0, "maximum": 10},
+    "verdict":        {"type": "string"},
+    "rewrite_count":  {"type": "integer", "minimum": 0},
+    "word_count":     {"type": "integer", "minimum": 0},
+    "dimensions":     {"type": "object"},
+    "chapter_role":   {"type": "string", "minLength": 1},
+    "chapter_goal":   {"type": "string", "minLength": 1}
+  }
+}
