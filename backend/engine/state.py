@@ -164,9 +164,18 @@ def create_initial_state(
 
 
 def save_state(state: OrchestratorState, path: str) -> None:
-    """Serialize state to JSON file (UTF-8, indented for diff-friendliness)."""
+    """Serialize state to JSON file (UTF-8, indented for diff-friendliness).
+
+    自动更新 last_updated 为当前时间——之前不更新导致 state 看起来"冻结"
+    （用户视角：bridge/status 显示 last_updated 17 小时前，但实际 engine
+    还在跑）。P5 fix。
+    """
+    from datetime import datetime
+    # 复制一份避免修改入参（TypedDict 实际是 dict）
+    payload = dict(state)
+    payload["last_updated"] = datetime.now().isoformat()
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+        json.dump(payload, f, ensure_ascii=False, indent=2)
 
 
 def load_state(path: str) -> OrchestratorState:

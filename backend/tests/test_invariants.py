@@ -670,3 +670,53 @@ class TestTrackerUsesParseWithDictDefault:
         assert '"rewrite_priority"' in snippet or 'rewrite_priority' in snippet, (
             "checklist 解析必须返回包含 rewrite_priority 的 dict，否则下游崩溃"
         )
+
+
+# ───────────────────────────────────────────
+# L: save_state 必须更新 last_updated（state 不能再"看起来冻结"）
+# ───────────────────────────────────────────
+class TestSaveStateUpdatesLastUpdated:
+    """历史 bug（你独立验证）：
+      state.last_updated 17 小时没动，但 engine 实际在跑 ch53→ch58。
+      根因：save_state 序列化前没更新 state["last_updated"]，bridge/status
+      给用户看到的 last_updated 永远是最初那次 create_initial_state 的时间。
+      → 监控 / 用户视角"engine 没动"，但实际在跑。
+
+    修复：save_state 自动把 last_updated 设为 datetime.now().isoformat()。
+    """
+
+    def test_save_state_updates_last_updated(self, tmp_path):
+        import time as time_mod
+        from engine.state import save_state
+        state_path = tmp_path / "state.json"
+        initial = {
+            "current_chapter": 50,
+            "current_phase": "writing",
+            "last_updated": "2025-01-01T00:00:00",  # 故意写旧值
+        }
+        save_state(initial, str(state_path))
+        time_mod.sleep(0.05)  # 让时间过一点
+        # 第二次 save
+        initial["current_chapter"] = 51
+        save_state(initial, str(state_path))
+        import json
+        on_disk = json.loads(state_path.read_text(encoding="utf-8"))
+        # 关键断言：last_updated 必须不是初始的旧值
+        assert on_disk["last_updated"] != "2025-01-01T00:00:00", (
+            f"save_state 没更新 last_updated（仍是 {on_disk['last_updated']!r}）。"
+            f"用户视角会看到 state 永远冻结"
+        )
+        # current_chapter 也应反映
+        assert on_disk["current_chapter"] == 51
+
+    def test_save_state_does_not_mutate_input(self, tmp_path):
+        """save_state 不能修改入参 state 的 last_updated（避免脏写）。"""
+        from engine.state import save_state
+        state_path = tmp_path / "state.json"
+        before_ts = "2025-01-01T00:00:00"
+        state = {"current_chapter": 0, "last_updated": before_ts}
+        save_state(state, str(state_path))
+        # 入参的 last_updated 不应该被改
+        assert state["last_updated"] == before_ts, (
+            f"save_state 不应修改入参，但 last_updated 现在是 {state['last_updated']!r}"
+        )
