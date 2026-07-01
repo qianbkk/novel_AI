@@ -41,7 +41,9 @@ F = "❌"
 results: list = []
 
 
-def test(name: str):
+def _test(name: str):
+    """手动跑测试的装饰器工厂。改名 + __test__ = False 是为了避免 pytest 自动收集
+    这个工厂本身（它接受位置参数，会触发 collection error）。"""
     def dec(fn):
         def wrap():
             try:
@@ -53,6 +55,8 @@ def test(name: str):
                 print(f"  {F} {name}: {e}")
         return wrap
     return dec
+# 关键：让 pytest 跳过这个工厂函数（不自动收集）
+__test__ = False  # noqa: F811
 
 
 # 一次性建表 + 准备一个项目
@@ -105,7 +109,7 @@ chapter_id = make_chapter(project_id)
 client = TestClient(app)
 
 
-@test("GET /projects/{id}/rules — 默认配置")
+@_test("GET /projects/{id}/rules — 默认配置")
 def t1():
     r = client.get(f"/projects/{project_id}/rules")
     assert r.status_code == 200, r.text
@@ -115,7 +119,7 @@ def t1():
     assert cfg["taboos"] == []
 
 
-@test("PUT /projects/{id}/rules — 写入配置")
+@_test("PUT /projects/{id}/rules — 写入配置")
 def t2():
     r = client.put(f"/projects/{project_id}/rules", json={
         "style": "literary",
@@ -131,13 +135,13 @@ def t2():
     assert r2.json()["style"] == "literary"
 
 
-@test("PUT /projects/{id}/rules — 校验 style 非法值")
+@_test("PUT /projects/{id}/rules — 校验 style 非法值")
 def t3():
     r = client.put(f"/projects/{project_id}/rules", json={"style": "invalid"})
     assert r.status_code == 400
 
 
-@test("PUT /projects/{id}/rules — taboos 去重")
+@_test("PUT /projects/{id}/rules — taboos 去重")
 def t4():
     client.put(f"/projects/{project_id}/rules", json={
         "taboos": ["A", "A", "B", " ", "C"]
@@ -148,7 +152,7 @@ def t4():
     assert cfg["taboos"] == ["A", "B", "C"]
 
 
-@test("POST /projects/{id}/rules/post-process — logic")
+@_test("POST /projects/{id}/rules/post-process — logic")
 def t5():
     r = client.post(f"/projects/{project_id}/rules/post-process", json={
         "tool": "logic",
@@ -164,7 +168,7 @@ def t5():
     assert body["cost_usd"] >= 0
 
 
-@test("POST /projects/{id}/rules/post-process — venom / deai")
+@_test("POST /projects/{id}/rules/post-process — venom / deai")
 def t6():
     for tool in ("venom", "deai"):
         r = client.post(f"/projects/{project_id}/rules/post-process", json={"tool": tool})
@@ -172,19 +176,19 @@ def t6():
         assert r.json()["tool"] == tool
 
 
-@test("POST /projects/{id}/rules/post-process — 未知 tool 拒绝")
+@_test("POST /projects/{id}/rules/post-process — 未知 tool 拒绝")
 def t7():
     r = client.post(f"/projects/{project_id}/rules/post-process", json={"tool": "unknown"})
     assert r.status_code == 400
 
 
-@test("POST /projects/{id}/rules/post-process — 无章节 404")
+@_test("POST /projects/{id}/rules/post-process — 无章节 404")
 def t8():
     r = client.post(f"/projects/{project_id}/rules/post-process", json={"tool": "logic", "chapter_no": 999})
     assert r.status_code == 404
 
 
-@test("GET /projects/{id}/chapters/{ch_id} — 单章详情")
+@_test("GET /projects/{id}/chapters/{ch_id} — 单章详情")
 def t9():
     r = client.get(f"/projects/{project_id}/chapters/{chapter_id}")
     assert r.status_code == 200, r.text
@@ -194,7 +198,7 @@ def t9():
     assert isinstance(body["characters"], list)
 
 
-@test("GET /projects/{id}/chapters/{ch_id}/characters — 出场人物")
+@_test("GET /projects/{id}/chapters/{ch_id}/characters — 出场人物")
 def t10():
     r = client.get(f"/projects/{project_id}/chapters/{chapter_id}/characters")
     # 当前 characters 表里可能还没有陆承 → 可能是空数组
@@ -202,14 +206,14 @@ def t10():
     assert isinstance(r.json(), list)
 
 
-@test("GET /projects/{id}/foreshadowings — 列表")
+@_test("GET /projects/{id}/foreshadowings — 列表")
 def t11():
     r = client.get(f"/projects/{project_id}/foreshadowings")
     assert r.status_code == 200
     assert r.json() == []  # 没有 seed 数据
 
 
-@test("PUT /projects/{id}/ai-assist-level — 更新")
+@_test("PUT /projects/{id}/ai-assist-level — 更新")
 def t12():
     r = client.put(f"/projects/{project_id}/ai-assist-level",
                    json={"ai_assist_level": "human_primary"})
@@ -221,14 +225,14 @@ def t12():
     assert r2.status_code == 400
 
 
-@test("GET /projects/{id}/ai-assist-level — 默认值")
+@_test("GET /projects/{id}/ai-assist-level — 默认值")
 def t13():
     r = client.get(f"/projects/{project_id}/ai-assist-level")
     assert r.status_code == 200
     assert r.json()["ai_assist_level"] in ("ai_assisted", "human_primary", "unset")
 
 
-@test("LLM 路由：set_proxy_map + PROVIDER_PROXY 模块状态")
+@_test("LLM 路由：set_proxy_map + PROVIDER_PROXY 模块状态")
 def t14():
     from engine.llm import router as r_mod
     from engine.llm.router import LLMRouter
@@ -238,7 +242,7 @@ def t14():
                                     "anthropic": "http://127.0.0.1:7890"}
 
 
-@test("LLM 路由：proxied client 创建")
+@_test("LLM 路由：proxied client 创建")
 def t15():
     from engine.llm.router import _get_proxied_client, _PROVIDER_PROXY
     # 没配置 proxy 时返回普通 client
@@ -250,7 +254,7 @@ def t15():
     assert c2 is not None
 
 
-@test("Schema: BridgeRunRequest 含 outline_mode")
+@_test("Schema: BridgeRunRequest 含 outline_mode")
 def t16():
     from app.schemas import BridgeRunRequest
     p = BridgeRunRequest(command="run", args=["10"], outline_mode="card")
@@ -260,7 +264,7 @@ def t16():
     assert p2.outline_mode is None
 
 
-@test("engine.graph.run_graph_task — outline_mode 透传（stub fallback）")
+@_test("engine.graph.run_graph_task — outline_mode 透传（stub fallback）")
 def t17():
     # 不真正起 orchestrator，直接验证 schema + 入参
     from app.schemas import BridgeRunRequest

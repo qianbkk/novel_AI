@@ -225,3 +225,61 @@ class TestBuildSummary:
     def test_first_real_sentence_fallback(self):
         s = self.build({}, "雅间门被推开时，林尘正盯着窗外街景出神。")
         assert "雅间" in s
+
+
+# ───────────────────────────────────────────
+# F: 字数预算（写入路径 length fix — 防止 50 章字数千差万别）
+# ───────────────────────────────────────────
+class TestLengthBudget:
+    """call_with_length_budget 是写入路径的字数控制，区别于 call() 的"写到哪算哪"。
+
+    历史 bug：50 章生成后 22 章 out-of-range (1800-2700)，因为 writer agent
+    写完不知道字数。校验路径（事后重写）只能擦屁股，不能预防。
+    """
+
+    def test_method_exists(self):
+        from engine.llm.router import LLMRouter
+        assert hasattr(LLMRouter, "call_with_length_budget"), (
+            "LLMRouter 必须有 call_with_length_budget 方法，否则下次跑 50 章还会超界"
+        )
+
+    def test_signature_documented(self):
+        """方法签名必须有 target_chars / tolerance / max_continues 三个参数"""
+        import inspect
+        from engine.llm.router import LLMRouter
+        sig = inspect.signature(LLMRouter.call_with_length_budget)
+        for param in ["target_chars", "tolerance", "max_continues"]:
+            assert param in sig.parameters, f"call_with_length_budget 必须有 {param} 参数"
+
+
+# ───────────────────────────────────────────
+# G: 整体测试目录 collection 不能报错
+# ───────────────────────────────────────────
+class TestPytestCollection:
+    """历史 bug：`pytest tests/` 在 collection 阶段会报 1 个 error，
+    因为 test_alignment_smoke.py 里有个 def test(name: str) 装饰器工厂
+    撞 pytest 自动收集规则。修复：改名 _test + __test__ = False。"""
+
+    def test_all_tests_dir_collects_cleanly(self):
+        """跑 pytest --collect-only 应该 0 collection error。
+        关键：test_alignment_smoke.py 里的 def test(name: str) 装饰器工厂
+        如果被 pytest 自动收集就会触发 collection error（参数不匹配）。
+        修复：rename + __test__ = False。
+        """
+        import subprocess
+        # 用 sub-process 跑收集（不重入自己）
+        result = subprocess.run(
+            ["python", "-m", "pytest", "tests/", "--collect-only", "-q",
+             "--ignore=tests/test_invariants.py"],
+            capture_output=True, text=True, cwd=str(BACKEND),
+            timeout=60,
+        )
+        out = (result.stdout + result.stderr).lower()
+        # 检查"X error"模式（pytest collection error 的标志）
+        import re
+        m = re.search(r"(\d+)\s+errors?", out)
+        if m:
+            err_count = int(m.group(1))
+            assert err_count == 0, (
+                f"pytest tests/ 有 {err_count} collection errors:\n{out[-1000:]}"
+            )

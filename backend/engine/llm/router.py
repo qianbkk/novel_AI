@@ -444,3 +444,87 @@ class LLMRouter:
         out_tok = u.get("completion_tokens", 0)
         self._record(agent, 0.0, in_tok, out_tok)
         return text, 0.0
+
+    # ─────────────────────────────────────────────
+    # Length-budget call (写入路径 length fix)
+    # ─────────────────────────────────────────────
+    def call_with_length_budget(
+        self,
+        agent_name: str,
+        system_prompt: str,
+        user_prompt: str,
+        target_chars: int,
+        tolerance: int = 200,
+        max_tokens: int | None = None,
+        temperature: float = 0.4,
+        *,
+        max_continues: int = 2,
+    ) -> tuple[str, float]:
+        """**写入路径**的字数控制：调 LLM 生成 + 强制 truncate 到 budget + 续写到 target。
+
+        为什么有这个方法：
+          `call()` 只让 LLM 自己写到哪算哪，事后校验几乎必然超 / 不足。
+          这套机制是**生成时**控长度：
+            1. 第一次调 LLM，让它"先写一稿"
+            2. 超过 `target + tolerance` 字符 → 截断 + ask_continuation
+            3. 续写时 prompt 明确写"你前一篇被截断了，请从截断点继续写，剩余 N 字以内"
+            4. 最多 max_continues 次（默认 2），最后一次不够也接受
+
+        Returns: (full_text, total_cost_usd)
+        """
+        budget = target_chars
+        soft_max = target_chars + tolerance
+        accumulated = ""
+        total_cost = 0.0
+        already_written = 0
+
+        for i in range(max_continues + 1):
+            remaining = budget - already_written
+            if remaining <= 0:
+                break
+            # 第一次按全目标发；之后只发「剩余 N 字」
+            if i == 0:
+                sys_p = system_prompt
+                user_p = user_prompt
+                cap = max_tokens or int(target_chars * 1.4)  # 写入路径不超太多
+            else:
+                sys_p = system_prompt
+                tail = accumulated[-600:]  # 给 LLM 续写上下文
+                user_p = (
+                    f"【你上一次写了 {already_written} 字（截至上一段末尾）。"
+                    f"本章共需 {budget} 字（允许 {budget-tolerance}~{budget+tolerance}）。"
+                    f"还剩约 {remaining} 字要写。\n"
+                    f"以下是上次最后 600 字：\n{tail}\n\n"
+                    f"请**接上**上文最后一句续写，**不要再重写**已有内容，"
+                    f"写够约 {remaining} 字后停。\n"
+                    f"要求：① 直接续写，不要前言 ② 不要写「第N章」/「【卷名】」/'# 标题'/「---」开头"
+                )
+                cap = int(remaining * 1.4)
+
+            text, cost = self.call(
+                agent_name=agent_name,
+                system_prompt=sys_p,
+                user_prompt=user_p,
+                max_tokens=cap,
+                temperature=temperature,
+            )
+            total_cost += cost
+            text = text.strip()
+
+            if i == 0:
+                accumulated = text
+            else:
+                # 续写：append 到已有文本
+                accumulated = accumulated.rstrip() + "\n\n" + text
+
+            already_written = len(accumulated)
+
+            # 第一次如果已经在 budget 内，直接返回
+            if already_written >= budget - tolerance:
+                # 截断到 soft_max（避免超太多）
+                if already_written > soft_max:
+                    accumulated = accumulated[:soft_max]
+                return accumulated, total_cost
+
+        return accumulated, total_cost
+
