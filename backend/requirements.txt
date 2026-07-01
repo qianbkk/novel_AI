@@ -6,6 +6,10 @@ pydantic-settings==2.5.2
 httpx==0.27.2
 sse-starlette==2.1.3
 
+# JSON Schema validation (fail-fast at import time of app.schema_validator).
+# 历史 bug: 该项未声明时 validator 会静默跳过校验，导致 5 张表全空类 bug 再现。
+jsonschema>=4.0
+
 # LangGraph pipeline + LLM clients
 # langgraph >= 0.2 is the API surface our engine uses; do not rely on the
 # transitive dependency from langgraph-checkpoint-sqlite.

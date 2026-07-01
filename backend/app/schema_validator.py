@@ -18,6 +18,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import jsonschema  # required at import time — fail-fast if missing
+
 from .logging_setup import get_logger
 
 log = get_logger("novel_ai.schema")
@@ -61,11 +63,6 @@ def get_chapter_meta_schema() -> dict:
 
 
 def _check(data: Any, schema: dict, name: str) -> None:
-    try:
-        import jsonschema
-    except ImportError:
-        log.warning("jsonschema 未安装，跳过 %s 校验（pip install jsonschema）", name)
-        return
     v = jsonschema.Draft7Validator(schema)
     errs = sorted(v.iter_errors(data), key=lambda e: list(e.path))
     if errs:

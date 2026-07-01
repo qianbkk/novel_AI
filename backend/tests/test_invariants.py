@@ -296,6 +296,61 @@ class TestLengthBudget:
 
 
 # ───────────────────────────────────────────
+# H: schema_validator 必须是 fail-fast，不能 try/except ImportError 静默跳过
+# ───────────────────────────────────────────
+class TestSchemaValidatorFailFast:
+    """历史 bug（你独立验证）:
+      - jsonschema 没声明在 requirements.txt，README 也没提
+      - schema_validator._check() 用 try/except ImportError 包住 import，
+        命中后只 warn + return，校验被静默跳过
+      - 在全新环境下 audit_project A1/G2 假通过，pytest 3 个测试 DID NOT RAISE
+    修复：
+      - jsonschema 写进 requirements.txt
+      - import jsonschema 提到模块顶层（import time fail-fast）
+      - _check() 不再 try/except ImportError
+    本测试锁死：
+      1) jsonschema 必须已经在 schema_validator 模块 namespace 里
+      2) _check() 源码里不能再有 try/except ImportError
+    """
+
+    def test_jsonschema_imported_at_module_level(self):
+        """如果 jsonschema 是 lazy-import（try/except 内部 import），
+        不会出现在模块 namespace。这一项检查直接防止再有人包 try/except。"""
+        import app.schema_validator as mod
+        assert "jsonschema" in mod.__dict__, (
+            "jsonschema 必须从模块顶层 import，否则又会出现"
+            "「缺依赖静默跳过」的回归（独立验证场景：干净环境假通过）"
+        )
+
+    def test_check_has_no_import_error_fallback(self):
+        """_check() 源码里不能出现 `except ImportError`，
+        否则会静默跳过校验（历史 bug 现场）。"""
+        import inspect
+        from app.schema_validator import _check
+        src = inspect.getsource(_check)
+        assert "except ImportError" not in src, (
+            "_check() 不应有 except ImportError，否则 jsonschema 缺失时"
+            "会静默跳过校验 → audit_project A1/G2 假通过"
+        )
+
+    def test_module_top_level_imports_jsonschema(self):
+        """schema_validator.py 的源码顶层必须 `import jsonschema`，
+        而不是包在 try/except 内部懒加载。"""
+        import inspect
+        from app import schema_validator as mod
+        src = inspect.getsource(mod)
+        # 提取顶层（不缩进的）import 行
+        top_imports = [
+            line.strip() for line in src.splitlines()
+            if line and not line.startswith((" ", "\t")) and line.startswith(("import ", "from "))
+        ]
+        assert any("jsonschema" in line for line in top_imports), (
+            f"schema_validator.py 顶层必须有 `import jsonschema`，"
+            f"否则又会被 try/except 包成静默跳过。当前顶层 import: {top_imports}"
+        )
+
+
+# ───────────────────────────────────────────
 # G: 整体测试目录 collection 不能报错
 # ───────────────────────────────────────────
 class TestPytestCollection:
