@@ -296,6 +296,82 @@ class TestLengthBudget:
 
 
 # ───────────────────────────────────────────
+# I: rewriter P0/P1/P2 也必须接 _call_with_budget（与 writer 对称）
+# ───────────────────────────────────────────
+class TestRewriterLengthBudget:
+    """历史 bug（你独立验证）: rewriter 三条路径都还在用 router.call()，
+    字数要求只在 prompt 里说，LLM 不遵守就写飞。checker 五个维度全不看字数，
+    重写后 4500 字的章节能直接落档。
+
+    与 writer 的 run_writer 必须对称：同样是生成路径，必须接入同一种预防式控制。
+    """
+
+    @pytest.fixture(autouse=True)
+    def import_rewriter(self):
+        import inspect as _inspect
+        from engine.agents import rewriter as rewriter_mod
+        self.mod = rewriter_mod
+        self.inspect = _inspect
+
+    def test_run_p0_uses_length_budget(self):
+        src = self.inspect.getsource(self.mod.run_p0)
+        assert "_call_with_budget" in src, (
+            "run_p0 必须调 _call_with_budget，否则 P0 重写后还是字数无控"
+        )
+        # 真调用（缩进过的代码行），不算注释里的字面量
+        code_lines = [
+            line for line in src.splitlines()
+            if line.startswith(("    ", "\t")) and not line.lstrip().startswith("#")
+        ]
+        for line in code_lines:
+            assert "router.call(" not in line, (
+                f"run_p0 真代码行不能 router.call()——那是无 length budget 的旧路径。命中行: {line!r}"
+            )
+
+    def test_run_p1_uses_length_budget(self):
+        src = self.inspect.getsource(self.mod.run_p1)
+        assert "_call_with_budget" in src, (
+            "run_p1 必须调 _call_with_budget，否则 P1 重写后还是字数无控"
+        )
+        code_lines = [
+            line for line in src.splitlines()
+            if line.startswith(("    ", "\t")) and not line.lstrip().startswith("#")
+        ]
+        for line in code_lines:
+            assert "router.call(" not in line, (
+                f"run_p1 真代码行不能 router.call()——那是无 length budget 的旧路径。命中行: {line!r}"
+            )
+
+    def test_run_p2_uses_length_budget(self):
+        src = self.inspect.getsource(self.mod.run_p2)
+        assert "_call_with_budget" in src, (
+            "run_p2 必须调 _call_with_budget，否则 P2 润色后还是字数无控"
+        )
+        code_lines = [
+            line for line in src.splitlines()
+            if line.startswith(("    ", "\t")) and not line.lstrip().startswith("#")
+        ]
+        for line in code_lines:
+            assert "router.call(" not in line, (
+                f"run_p2 真代码行不能 router.call()——那是无 length budget 的旧路径。命中行: {line!r}"
+            )
+
+    def test_parse_target_chars_helper_exists(self):
+        """_parse_target_chars 必须存在，且从 task.target_length "2000-2200" 取中位数。"""
+        assert hasattr(self.mod, "_parse_target_chars"), (
+            "rewriter 必须有 _parse_target_chars helper（解析 task.target_length）"
+        )
+        # 范围字符串 → 中位数
+        assert self.mod._parse_target_chars({"target_length": "2000-2200"}) == 2100
+        # 纯数字字符串 → 自身
+        assert self.mod._parse_target_chars({"target_length": "2300"}) == 2300
+        # 缺失 → 默认 "2000-2200" 中位数 = 2100（与 writer.run_writer 一致）
+        assert self.mod._parse_target_chars({}) == 2100
+        # 异常值 → fallback 到 default 2200（无 - 时走 int() 路径）
+        assert self.mod._parse_target_chars({"target_length": "xxx"}) == 2200
+
+
+# ───────────────────────────────────────────
 # H: schema_validator 必须是 fail-fast，不能 try/except ImportError 静默跳过
 # ───────────────────────────────────────────
 class TestSchemaValidatorFailFast:
