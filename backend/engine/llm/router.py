@@ -521,10 +521,48 @@ class LLMRouter:
 
             # 第一次如果已经在 budget 内，直接返回
             if already_written >= budget - tolerance:
-                # 截断到 soft_max（避免超太多）
+                # 截断到 soft_max（避免超太多），用句号边界感知避免切在字中间
                 if already_written > soft_max:
-                    accumulated = accumulated[:soft_max]
+                    accumulated = _truncate_at_sentence_boundary(accumulated, soft_max)
                 return accumulated, total_cost
 
         return accumulated, total_cost
+
+
+def _truncate_at_sentence_boundary(text: str, max_chars: int) -> str:
+    """在 max_chars 之内截断 text，**优先停在句末标点处**。
+
+    为什么不直接 `text[:max_chars]`：
+      LLM 不会在字中间停——它会自然停在「。」上。
+      但我们写完后硬切到 max_chars 经常会切在字中间，
+      留下「...林尘走进药铺，林」这种半句话。
+      章节结尾半句话会被前端 / 出版平台直接拒绝。
+
+    策略：往回找最近的「句末标点 + 引号」（支持。"！？"等成对标点）。
+    如果在 [max_chars - 200, max_chars] 范围内找不到，就 fallback 到硬切
+    （总比无限回退好）。
+    """
+    if len(text) <= max_chars:
+        return text
+
+    # 句末标点：中英文 + 配对引号
+    sentence_end_chars = "。！？.!?\"」』"
+
+    # 搜索窗口：从 max_chars 往回搜 200 字（容许一点弹性）
+    search_start = max(0, max_chars - 200)
+    candidate = text[search_start:max_chars]
+
+    # 找最靠右的句末标点
+    last_end = -1
+    for i, ch in enumerate(candidate):
+        if ch in sentence_end_chars:
+            last_end = i
+
+    if last_end == -1:
+        # 找不到句末标点 → 硬切（fallback）
+        return text[:max_chars]
+
+    # last_end 是 candidate 内的索引，转回 text 全局索引
+    cut_pos = search_start + last_end + 1  # +1 是要包含这个标点
+    return text[:cut_pos]
 

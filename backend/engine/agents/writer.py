@@ -6,6 +6,11 @@ Migrated from novel_AI/agents/writer_agent.py. P2 expansion:
   - Now uses backend.engine.memory.manager for context retrieval
     (real L2 hot/cold + L5 + style samples).
   - Prompt Cache prefix kept (Anthropic only).
+
+P3 expansion: 字数控制接入生成路径。
+  - 旧：`router.call()` 写到哪算哪，事后校验（擦屁股）
+  - 新：`router.call_with_length_budget()` 写入路径截断+续写（预防）
+  - 配 _truncate_at_sentence_boundary 避免硬切在字中间
 """
 from __future__ import annotations
 import os
@@ -29,17 +34,20 @@ def set_active_router(router: LLMRouter) -> None:
     _ACTIVE_ROUTER = router
 
 
-def _call_llm(agent_name: str, system: str, user: str, max_tokens: int,
-              temperature: float, *, use_cache: bool = False,
-              cached_system: str | None = None) -> Tuple[str, float]:
+def _get_router() -> LLMRouter:
     """Bridge: backend has no global api_client; the active router does the call."""
     if _ACTIVE_ROUTER is None:
         # P1 fallback: a fresh, env-only router. Works for the smoke test path
         # where there is no DB-driven config.
-        router = LLMRouter()
-    else:
-        router = _ACTIVE_ROUTER
-    return router.call(
+        return LLMRouter()
+    return _ACTIVE_ROUTER
+
+
+def _call_llm(agent_name: str, system: str, user: str, max_tokens: int,
+              temperature: float, *, use_cache: bool = False,
+              cached_system: str | None = None) -> Tuple[str, float]:
+    """Plain call (no length control). Used for non-writing agents."""
+    return _get_router().call(
         agent_name=agent_name,
         system_prompt=system,
         user_prompt=user,
@@ -47,6 +55,22 @@ def _call_llm(agent_name: str, system: str, user: str, max_tokens: int,
         temperature=temperature,
         use_cache=use_cache,
         cached_system=cached_system,
+    )
+
+
+def _call_with_budget(agent_name: str, system: str, user: str,
+                      target_chars: int, *, temperature: float = 0.82,
+                      tolerance: int = 200,
+                      max_continues: int = 2) -> Tuple[str, float]:
+    """Length-budget call (写入路径字数控制). 写作 agent 专用."""
+    return _get_router().call_with_length_budget(
+        agent_name=agent_name,
+        system_prompt=system,
+        user_prompt=user,
+        target_chars=target_chars,
+        tolerance=tolerance,
+        temperature=temperature,
+        max_continues=max_continues,
     )
 
 
@@ -163,7 +187,13 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 
 
 def run_writer(task: dict, memory: dict, setting_core: dict) -> tuple[str, float]:
-    """Generate chapter body. Returns (text, cost_usd)."""
+    """Generate chapter body. Returns (text, cost_usd).
+
+    P3: 字数控制已接入生成路径（不再是事后校验）。
+    - 从 task.target_length（如 "2000-2200"）取中位数作为 target_chars
+    - 用 call_with_length_budget 而非 call：写入路径 truncate + 续写
+    - 截断时优先停在「。」「！」「？」处（_truncate_at_sentence_boundary）
+    """
     novel_id = setting_core.get("novel_id", "default")
 
     # P1: in-memory context; P2: real L2 retrieval
@@ -180,16 +210,24 @@ def run_writer(task: dict, memory: dict, setting_core: dict) -> tuple[str, float
 
     system_dynamic, user_prompt = build_writer_prompt(task, context, setting_core)
 
+    # 解析 target_length → target_chars（取范围中位数）
     target = str(task.get("target_length", "2000-2200"))
-    max_words = int(target.split("-")[-1]) if "-" in target else (int(target) if target.isdigit() else 2200)
-    max_tokens = max(3000, int(max_words * 2.2))
+    if "-" in target:
+        try:
+            lo, hi = target.split("-")
+            target_chars = (int(lo) + int(hi)) // 2
+        except (ValueError, TypeError):
+            target_chars = 2200
+    else:
+        target_chars = int(target) if target.isdigit() else 2200
 
-    return _call_llm(
+    # 写入路径 length-budget call（替代原 router.call()）
+    return _call_with_budget(
         agent_name="writer",
         system=system_dynamic,
         user=user_prompt,
-        max_tokens=max_tokens,
+        target_chars=target_chars,
         temperature=0.82,
-        use_cache=True,
-        cached_system=WRITER_CACHE_PREFIX,
+        tolerance=200,
+        max_continues=2,
     )

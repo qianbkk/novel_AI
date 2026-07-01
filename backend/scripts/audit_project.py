@@ -293,6 +293,16 @@ def audit_chapters(a: Auditor, db):
         f"{len(short)} 章: {short[:3]}"
     )
 
+    # F3. 字数上限 — 防止"生成路径 length budget 失效"回归
+    # 历史 bug: 50 章生成时 22 章 out of [1800, 2700]（22%），其中
+    # 1 章 6120 字。即便 call_with_length_budget 接通了，audit 也要持续盯。
+    too_long = [(c.chapter_no, len(c.content or "")) for c in chs if len(c.content or "") > 2700]
+    a.check(
+        not too_long,
+        f"F3: 全部 chapter ≤ 2700 字（生成路径 length budget 约束）",
+        f"{len(too_long)} 章超界: {too_long[:3]}"
+    )
+
 
 def audit_chapter_meta_files(a: Auditor):
     """G. meta.json 文件 schema 校验（防止 B 类再现：LLM 漏字段 import 时静默）"""

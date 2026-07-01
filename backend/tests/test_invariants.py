@@ -251,6 +251,49 @@ class TestLengthBudget:
         for param in ["target_chars", "tolerance", "max_continues"]:
             assert param in sig.parameters, f"call_with_length_budget 必须有 {param} 参数"
 
+    def test_truncate_at_sentence_boundary_module_level(self):
+        """_truncate_at_sentence_boundary 是模块级函数，能 import。
+        历史 bug: 之前硬切在「林」中间，章节结尾半句话。"""
+        from engine.llm.router import _truncate_at_sentence_boundary
+
+        # 1) 短文本不切
+        assert _truncate_at_sentence_boundary("短的", 100) == "短的"
+
+        # 2) 在句号处切
+        text = "林尘走进药铺。" + "他买了一些丹药。" * 100
+        result = _truncate_at_sentence_boundary(text, 100)
+        # 结果必须以「。」结尾
+        assert result.endswith("。"), f"应该停在句号，实际: {result[-20:]!r}"
+        # 结果长度 <= max_chars
+        assert len(result) <= 100, f"超过 max_chars: {len(result)}"
+
+        # 3) 强制问号/感叹号也认
+        text2 = "你好！" + "世界" * 200
+        result2 = _truncate_at_sentence_boundary(text2, 50)
+        assert result2.endswith("！"), f"应停感叹号，实际: {result2[-20:]!r}"
+
+        # 4) 找不到句末标点 → fallback 硬切（不能无限回退）
+        no_punct = "x" * 200
+        result3 = _truncate_at_sentence_boundary(no_punct, 100)
+        assert len(result3) == 100
+        assert result3 == "x" * 100
+
+    def test_writer_uses_length_budget_path(self):
+        """run_writer 必须接的是 _call_with_budget，不是 _call_llm。
+
+        历史 bug (你独立验证的): call_with_length_budget 之前只接在
+        scripts/rewrite_length.py，没接生成路径。"""
+        import inspect
+        from engine.agents import writer as writer_mod
+        src = inspect.getsource(writer_mod.run_writer)
+        # 必须用 _call_with_budget（不是 _call_llm）
+        assert "_call_with_budget" in src, (
+            "run_writer 必须调 _call_with_budget，否则下次 50 章还是超字数"
+        )
+        assert "_call_llm(" not in src, (
+            "run_writer 不应直接调 _call_llm（那是无 length budget 的旧路径）"
+        )
+
 
 # ───────────────────────────────────────────
 # G: 整体测试目录 collection 不能报错
