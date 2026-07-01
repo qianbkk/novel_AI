@@ -164,6 +164,29 @@ async def reimport_chapters(project_id: str, db: Session = Depends(get_db)):
     return await _force_reimport(project_id, binding.novel_ai_dir, db)
 
 
+@router.post("/strip-junk-headers")
+async def strip_junk_headers(project_id: str, db: Session = Depends(get_db)):
+    """清理章节 txt 文件里的"假标题"残留头（【修改后正文】/【卷名】第N章 标题/重复第N章 行）。
+    一次跑 3 个常见 case：ch1 占位 / ch42 卷首 / ch50 重复标题。
+    修完 txt 后自动 reimport 把 DB 同步。"""
+    import subprocess, sys
+    from pathlib import Path
+    # 调用 scripts.strip_chapter_headers
+    scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
+    proc = subprocess.run(
+        [sys.executable, "-m", "scripts.strip_chapter_headers"],
+        cwd=scripts_dir.parent,  # backend dir
+        capture_output=True, text=True,
+    )
+    log.info("strip-junk-headers: rc=%s, stdout=%s",
+             proc.returncode, proc.stdout[:500])
+    return {
+        "return_code": proc.returncode,
+        "stdout": proc.stdout,
+        "stderr": proc.stderr,
+    }
+
+
 @router.get("/status")
 def status(project_id: str, db: Session = Depends(get_db)):
     _, binding = _get_project_and_binding(project_id, db)
