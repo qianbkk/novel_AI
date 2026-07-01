@@ -20,8 +20,10 @@ import type {
   AiAssistLevel,
 } from "../types";
 
-// 后端地址：默认本机 8123 端口，部署到别的地方时改 frontend/.env 里的 VITE_API_BASE 即可
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8123";
+// 后端地址：默认 8132（开发用），部署时改 frontend/.env 里的 VITE_API_BASE
+// 注：本地开发后端通常跑在 8132 端口，因为 8123 经常被测试残留进程占着，
+// 强抢会失败。统一走 8132 避免「前端 404、后端没起来」这种误判。
+const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8132";
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const resp = await fetch(`${API_BASE}${path}`, {

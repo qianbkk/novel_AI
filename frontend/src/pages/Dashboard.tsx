@@ -212,7 +212,7 @@ export default function Dashboard() {
 
       {error && (
         <div className="banner banner-danger">
-          <div>{error} — 后端没起来？默认地址 <span className="text-mono">http://localhost:8123</span></div>
+          <div>{error} — 后端没起来？默认地址 <span className="text-mono">http://localhost:8132</span></div>
           <button
             className="btn"
             style={{ marginTop: 10 }}

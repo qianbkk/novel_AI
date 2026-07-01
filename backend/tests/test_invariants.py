@@ -457,3 +457,104 @@ class TestPytestCollection:
             assert err_count == 0, (
                 f"pytest tests/ 有 {err_count} collection errors:\n{out[-1000:]}"
             )
+
+
+# ───────────────────────────────────────────
+# J: 前端默认 backend 端口必须可联通 + 全 6 个契约 path 都注册
+# ───────────────────────────────────────────
+class TestFrontendBackendPortConsistency:
+    """历史 bug（你独立验证）：
+      - 前端默认 http://localhost:8123，但实际 active 后端在 8132（8123 僵尸）
+      - 前端 client.ts 调用的 6 个 path（rules / foreshadowings / chapter
+        characters / ai-assist-level）在 8123 上 404，在 8132 上 200
+      - 前端 → 8123 → 404 → 前端误以为后端没起来
+    修复：
+      - frontend/.env: VITE_API_BASE=http://localhost:8132
+      - frontend/src/api/client.ts: 默认端口改 8132
+      - frontend/src/App.tsx / Dashboard.tsx / WorldBuild.tsx: 错误提示里的
+        "默认地址" 也跟改到 8132
+    本测试锁死：
+      1) frontend 默认 URL 必须跟当前可联通 backend 一致
+      2) backend 必须注册前端需要的 6 个 path（防 router 删漏）
+    """
+
+    @pytest.fixture(autouse=True)
+    def frontend_paths(self):
+        from pathlib import Path
+        fe = BACKEND.parent / "frontend"
+        self.fe_src = fe / "src"
+        self.fe_env = fe / ".env"
+
+    def test_frontend_default_url_is_reachable(self):
+        """前端默认 URL 必须能联通后端（health=200）。
+        通过读 client.ts 提取默认 URL（fallback 部分），如果 VITE_API_BASE
+        没设就用它；测试也读 .env 看是否覆盖。
+        """
+        import re
+        client = (self.fe_src / "api" / "client.ts").read_text(encoding="utf-8")
+        # 提取 `|| "http://localhost:XXXX"` fallback
+        m = re.search(r'\|\|\s*"(http://localhost:\d+)"', client)
+        assert m, "client.ts 必须有 `|| \"http://localhost:XXXX\"` fallback"
+        default_url = m.group(1)
+        import httpx
+        try:
+            r = httpx.get(f"{default_url}/health", timeout=2.0)
+            assert r.status_code == 200, (
+                f"前端默认 {default_url} 不可达 (status={r.status_code})。"
+                f"前端实际打开会全 404。改 frontend/.env 或 client.ts 默认端口。"
+            )
+        except httpx.ConnectError as e:
+            pytest.fail(
+                f"前端默认 {default_url} 连不上：{e}。"
+                f"前端实际打开会全 404。"
+            )
+
+    def test_backend_registers_frontend_contract_paths(self):
+        """后端必须注册前端 client.ts 实际调用的 6 个契约 path。
+        通过读 client.ts 提取所有 `${API_BASE}/projects/...` 路径，再实测
+        后端（读默认 URL 推断）。这里直接实测 backend 8132 上注册情况。
+        """
+        import httpx
+        import re
+        # 读 client.ts 提取所有 paths
+        client = (self.fe_src / "api" / "client.ts").read_text(encoding="utf-8")
+        # 匹配 `request<...>(`...${...}/projects/...`,` 里的 `/projects/...` 部分
+        paths = set(re.findall(r'`[^`]*?(/projects/[^`]+?)`', client))
+        # 过滤掉动态插值的部分，留下基础 path 模板
+        # 简化为只关心 6 个核心契约 path
+        required = {
+            "/projects/{project_id}/rules",
+            "/projects/{project_id}/foreshadowings",
+            "/projects/{project_id}/foreshadowings/{foreshadowing_id}/status",
+            "/projects/{project_id}/chapters/{chapter_id}/characters",
+            "/projects/{project_id}/ai-assist-level",
+        }
+        # 路径模板里要 pid；测试用真实 pid 占位
+        pid_real = "c12345678901234567890123456789012"
+        openapi = httpx.get("http://localhost:8132/openapi.json", timeout=2.0).json()
+        backend_paths = set(openapi.get("paths", {}).keys())
+        # 检查 6 个契约 path 在后端 openapi 里
+        for p in required:
+            assert p in backend_paths, (
+                f"前端调 {p}，后端 openapi 没注册这条 → 必然 404"
+            )
+
+    def test_no_hardcoded_8123_in_user_facing_strings(self):
+        """错误提示文案不能再硬编码 :8123，否则改默认端口后用户看到错地址。"""
+        for path in [
+            self.fe_src / "App.tsx",
+            self.fe_src / "pages" / "Dashboard.tsx",
+            self.fe_src / "pages" / "WorldBuild.tsx",
+        ]:
+            if not path.exists():
+                continue
+            content = path.read_text(encoding="utf-8")
+            # 排除注释里说明旧值的字样
+            for line in content.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("//") or stripped.startswith("*"):
+                    continue
+                assert ":8123" not in line, (
+                    f"{path.name}:{line!r} 还硬编码 :8123 — "
+                    f"用户改 backend 端口后会看到错地址"
+                )

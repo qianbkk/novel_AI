@@ -111,7 +111,7 @@ export default function WorldBuild() {
         <div className="card">
           <div className="banner banner-danger">{error}</div>
           <p className="text-muted" style={{ marginTop: 12, fontSize: 12.5 }}>
-            后端没起来？默认地址 <span className="text-mono">http://localhost:8123</span>
+            后端没起来？默认地址 <span className="text-mono">http://localhost:8132</span>
           </p>
           <button
             className="btn btn-primary"
