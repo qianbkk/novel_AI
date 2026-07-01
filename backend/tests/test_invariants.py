@@ -558,3 +558,115 @@ class TestFrontendBackendPortConsistency:
                     f"{path.name}:{line!r} 还硬编码 :8123 — "
                     f"用户改 backend 端口后会看到错地址"
                 )
+
+
+# ───────────────────────────────────────────
+# K: parse_llm_json_response 必须做类型保护（防止 tracker 类 bug 复发）
+# ───────────────────────────────────────────
+class TestParseLLMJsonResponseTypeGuard:
+    """历史 bug（你独立验证）：
+      error_log 60+ 次报 `'list' object has no attribute 'get'` ——
+      几乎每章 tracker 都中招。
+      根因：LLM 偶尔返回 list/None/str，但 tracker.py:83
+        updates = parse_llm_json_response(resp, {})
+      默认 default={} 是 dict，但 parse 出 list → 后续 updates.get(...) 崩溃
+      → 错误被 orchestrator:378 吞掉，state 只记一行字面量，章节照样保存。
+    修复（系统级）：
+      parse_llm_json_response 加 _coerce_type：返回前校验 parsed 是否跟
+      default 同型，否则警告 + 退回 default。
+    本测试锁死：类型不匹配时不再穿透到下游。
+    """
+
+    def test_list_returned_falls_back_to_empty_dict(self):
+        from engine.utils import parse_llm_json_response
+        # LLM 返回 list 但 default 是 dict → 应该回 {}
+        result = parse_llm_json_response("[1, 2, 3]", default={})
+        assert result == {}, f"expected empty dict fallback, got {result!r}"
+        assert isinstance(result, dict)
+
+    def test_none_returned_falls_back_to_dict(self):
+        from engine.utils import parse_llm_json_response
+        # 全部 parse 失败（不是 JSON）→ 回 default
+        result = parse_llm_json_response("not json at all", default={})
+        assert result == {}
+        assert isinstance(result, dict)
+
+    def test_dict_returned_passes_through(self):
+        from engine.utils import parse_llm_json_response
+        result = parse_llm_json_response('{"a": 1}', default={})
+        assert result == {"a": 1}
+
+    def test_fenced_dict_returned_passes_through(self):
+        from engine.utils import parse_llm_json_response
+        result = parse_llm_json_response('```json\n{"a": 1}\n```', default={})
+        assert result == {"a": 1}
+
+    def test_list_for_list_default_passes_through(self):
+        from engine.utils import parse_llm_json_response
+        result = parse_llm_json_response("[1, 2, 3]", default=[])
+        assert result == [1, 2, 3]
+
+    def test_dict_for_list_default_falls_back(self):
+        from engine.utils import parse_llm_json_response
+        result = parse_llm_json_response('{"a": 1}', default=[])
+        assert result == []
+
+    def test_str_returned_falls_back_to_empty_string(self):
+        from engine.utils import parse_llm_json_response
+        result = parse_llm_json_response('"just a string"', default="")
+        # 类型匹配（都是 str），应原样返回
+        assert result == "just a string"
+        # 现在 default="" 但 LLM 回 list → 应回 ""
+        result2 = parse_llm_json_response("[1]", default="")
+        assert result2 == ""
+
+
+class TestTrackerUsesParseWithDictDefault:
+    """tracker.py:83 的 `parse_llm_json_response(resp, {})` 必须用 dict 作 default
+    —— 不变式。如果有人改成 `parse_llm_json_response(resp, [])` 或别的不当类型，
+    立刻测试失败。
+    """
+
+    def test_tracker_source_uses_dict_default(self):
+        import inspect
+        from engine.agents import tracker as tracker_mod
+        src = inspect.getsource(tracker_mod.run_tracker)
+        assert "parse_llm_json_response(resp, {})" in src, (
+            "tracker.run_tracker 必须用 `parse_llm_json_response(resp, {})` "
+            "（dict 作 default）；改成 list/None/str 会让后续 updates.get() "
+            "在 LLM 返回非 dict 时崩溃。"
+        )
+
+    def test_checker_source_uses_dict_default(self):
+        """checker.py 内 parse_llm_json_response 调用点必须传 dict 作 default。
+        历史 bug（你独立验证）：如果 checker 也用 list 当 default，LLM 回
+        dict 时下游 .get() 崩。
+        """
+        import inspect
+        from engine.agents import checker as checker_mod
+        src = inspect.getsource(checker_mod)
+        assert "parse_llm_json_response(" in src
+        # 找到所有 parse 调用点上下文，确认 default 形状是 dict
+        import re
+        for match in re.finditer(r'parse_llm_json_response\([^)]+\)', src):
+            ctx = match.group(0)
+            # 允许 "default"（变量名，传 dict）或 "{...}"（字面 dict）
+            assert ("default" in ctx and "parse_llm_json_response(resp, default)" in ctx) or \
+                   ("{" in ctx and "}" in ctx), (
+                f"checker 里的 parse 调用 {ctx!r} 应传 dict default。\n"
+                f"如果传了 list/None/str，下游 .get() 在 LLM 回 dict 时会崩。"
+            )
+
+    def test_rewriter_p0_checklist_uses_dict_default(self):
+        """rewriter.run_p0_checklist 解析 checklist JSON，应是 dict。"""
+        import inspect
+        from engine.agents import rewriter as rewriter_mod
+        src = inspect.getsource(rewriter_mod.run_p0_checklist)
+        # 找到调用 parse_llm_json_response 那行附近，应当传 dict
+        idx = src.find("parse_llm_json_response(")
+        assert idx > 0, "run_p0_checklist 必须调 parse_llm_json_response"
+        # 截取调用上下文，看 default 是不是 dict 形式
+        snippet = src[idx:idx+200]
+        assert '"rewrite_priority"' in snippet or 'rewrite_priority' in snippet, (
+            "checklist 解析必须返回包含 rewrite_priority 的 dict，否则下游崩溃"
+        )
