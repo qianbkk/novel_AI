@@ -28,11 +28,21 @@ def _derive_title(n: int, meta: dict, content: str) -> str:
     if role or goal:
         goal_short = goal[:30] + ("…" if len(goal) > 30 else "")
         return f"第{n}章·{role or '正文'}·{goal_short}"
-    # 兜底：从正文第一句非空行摘
+    # 兜底：从正文第一句「真正的话」摘——跳过：
+    #   1. 空行
+    #   2. 纯 scene label 行（"【xxx】"，不带正文的）
+    #   3. 「第N章 标题」/「第N卷 xxx」类重复标题
+    import re
+    title_re = re.compile(r"^第\d+[章卷]\s*\S+")
     for line in content.splitlines():
         line = line.strip()
-        if line and len(line) > 4:
-            return f"第{n}章·{line[:24]}"
+        if not line or len(line) <= 4:
+            continue
+        if line.startswith("【") and line.endswith("】") and " " not in line and len(line) <= 30:
+            continue
+        if title_re.match(line):
+            continue
+        return f"第{n}章·{line[:24]}"
     return f"第{n}章"
 
 
