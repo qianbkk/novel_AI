@@ -43,21 +43,6 @@ def _get_router() -> LLMRouter:
     return _ACTIVE_ROUTER
 
 
-def _call_llm(agent_name: str, system: str, user: str, max_tokens: int,
-              temperature: float, *, use_cache: bool = False,
-              cached_system: str | None = None) -> Tuple[str, float]:
-    """Plain call (no length control). Used for non-writing agents."""
-    return _get_router().call(
-        agent_name=agent_name,
-        system_prompt=system,
-        user_prompt=user,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        use_cache=use_cache,
-        cached_system=cached_system,
-    )
-
-
 def _call_with_budget(agent_name: str, system: str, user: str,
                       target_chars: int, *, temperature: float = 0.82,
                       tolerance: int = 200,

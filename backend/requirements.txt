@@ -10,6 +10,11 @@ sse-starlette==2.1.3
 # 历史 bug: 该项未声明时 validator 会静默跳过校验，导致 5 张表全空类 bug 再现。
 jsonschema>=4.0
 
+# LLM retry decorator used by engine.llm.router._post_with_retry.
+# 历史 bug: 未声明时只能靠 langgraph→langchain-core 传递依赖，
+# 一旦上游调整依赖树就 ImportError，整个 LLM 调用中断。
+tenacity>=8.1,<10.0
+
 # LangGraph pipeline + LLM clients
 # langgraph >= 0.2 is the API surface our engine uses; do not rely on the
 # transitive dependency from langgraph-checkpoint-sqlite.
