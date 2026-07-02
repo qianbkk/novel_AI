@@ -789,14 +789,25 @@ class TestOrphanBridgeRunRecovery:
         from datetime import datetime
         from app.main import _recover_orphan_bridge_runs
         from app.database import SessionLocal
-        from app.models import BridgeRun
+        from app.models import BridgeRun, Project
         from datetime import datetime, timezone
 
-        # 准备：插一条 orphan running 行（finished_at IS NULL）
+        # 准备：先建一个真 Project（FK 约束开启后 BridgeRun 需要合法 project_id）
         db = SessionLocal()
         try:
+            project = Project(
+                id="test-orphan-recovery-proj",
+                title="orphan recovery test project",
+                genre="都市",
+                audience="男频",
+                status="ready",
+                config_json={},
+            )
+            db.add(project)
+            db.commit()
+
             test_run = BridgeRun(
-                project_id="test-orphan-recovery",
+                project_id=project.id,
                 command="run",
                 status="running",
                 started_at=datetime.now(timezone.utc),
@@ -824,8 +835,12 @@ class TestOrphanBridgeRunRecovery:
                 "orphan run 应写入 finished_at"
             )
         finally:
-            # 清理测试数据
-            db.delete(run)
+            # 清理测试数据（先删 FK 引用，再删 project）
+            if run:
+                db.delete(run)
+            project_obj = db.get(Project, "test-orphan-recovery-proj")
+            if project_obj:
+                db.delete(project_obj)
             db.commit()
             db.close()
 
@@ -2456,3 +2471,49 @@ class TestSaveStateConcurrencySafe:
         assert isinstance(loaded, dict)
         assert "novel_id" in loaded
         assert "last_updated" in loaded
+
+
+# ───────────────────────────────────────────
+# OO: SQLite WAL + busy_timeout + foreign_keys（迭代 #10）
+# ───────────────────────────────────────────
+class TestSQLitePragmas:
+    """历史背景（迭代 #10）：
+      SQLite 默认 journal_mode=rollback，写操作期间全库锁 → engine 写
+      state.json 时前端 /health / GET chapters 都会阻塞。
+      busy_timeout=0 → 锁冲突立刻抛（多 worker / 测试并行跑时假错）。
+      foreign_keys=OFF → 默认不强制 FK，数据完整性弱（orphan 行可能）。
+
+      修法：connect event 设 PRAGMA journal_mode=WAL + busy_timeout=5000
+      + synchronous=NORMAL + foreign_keys=ON。
+    """
+
+    def test_journal_mode_is_wal(self):
+        """SQLite journal_mode 必须是 WAL。"""
+        from app.database import engine
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            mode = conn.execute(text("PRAGMA journal_mode")).scalar()
+            # mode 可能是 'wal' / 'memory' 等；wal 是我们要的
+            assert mode.lower() == "wal", (
+                f"journal_mode 应为 WAL，实际 {mode!r}"
+            )
+
+    def test_busy_timeout_is_set(self):
+        """busy_timeout 必须 >= 1000ms（默认 0 = 不等 = 锁冲突假错）。"""
+        from app.database import engine
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            timeout = conn.execute(text("PRAGMA busy_timeout")).scalar()
+            assert timeout >= 1000, (
+                f"busy_timeout 应 >= 1000ms，实际 {timeout}ms"
+            )
+
+    def test_foreign_keys_enabled(self):
+        """PRAGMA foreign_keys 必须为 ON（默认 OFF）。"""
+        from app.database import engine
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            fk = conn.execute(text("PRAGMA foreign_keys")).scalar()
+            assert fk == 1, (
+                f"foreign_keys 应为 ON（=1），实际 {fk}（FK 约束可能失效）"
+            )
