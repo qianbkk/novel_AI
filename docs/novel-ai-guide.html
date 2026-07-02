@@ -242,10 +242,10 @@ footer{padding:40px 20px 60px;text-align:center;color:var(--fg3);font-size:11px;
   </div>
 
   <div class="stats">
-    <div class="stat"><div class="stat-num">8</div><div class="stat-label">写作 Agent</div></div>
+    <div class="stat"><div class="stat-num">9</div><div class="stat-label">写作 Agent</div></div>
     <div class="stat"><div class="stat-num">7</div><div class="stat-label">LangGraph 节点</div></div>
     <div class="stat"><div class="stat-num">6</div><div class="stat-label">支持的 LLM 供应商</div></div>
-    <div class="stat"><div class="stat-num">50</div><div class="stat-label">已生成章节（实测）</div></div>
+    <div class="stat"><div class="stat-num">118</div><div class="stat-label">invariant tests 通过</div></div>
     <div class="stat"><div class="stat-num">14万</div><div class="stat-label">已生成字数</div></div>
   </div>
 
@@ -569,9 +569,96 @@ footer{padding:40px 20px 60px;text-align:center;color:var(--fg3);font-size:11px;
     <p style="font-size:13px">50 章生成跑通所需的关键修复：MiniMax-M3 端点改为 <code>api.minimaxi.com</code> + Bearer auth；thinking 模式显式禁用；human_escalation 改 continue；graph edge 改回 load_arc_tasks；tracker 兼容 dict/string；新增 <code>planner.py</code> 和 <code>init_arc.py</code> 避免 LLM bootstrap 超时。</p>
     <p style="font-size:12px;color:var(--fg3);margin-top:8px">Commit: <code>9ad873e</code> on branch <code>fix/worldbuild-and-chapters-data</code> · PR #1</p>
   </div>
+
+  <div class="card">
+    <h3 style="color:var(--accent)">2026-07-02 · 安全加固：API Key 加密 + 孤儿 running 自愈</h3>
+    <div class="tag-group" style="margin-bottom:10px">
+      <span class="badge badge-red">高危修复</span>
+      <span class="badge badge-purple">影响：所有 Provider 配置 + run 进程可靠性</span>
+    </div>
+    <p style="font-size:13px">
+      <b>API Key Fernet 加密</b>：之前 <code>Provider.api_key</code> 明文存 SQLite，DB 泄漏 = 全部供应商 key 曝光。
+      现在改用 cryptography.fernet 加密存储，密钥由 <code>MASTER_KEY</code> env 派生；
+      API 返回 <code>api_key_suffix</code>（后 4 位）代替明文。部署必设 MASTER_KEY。
+    </p>
+    <p style="font-size:13px">
+      <b>孤儿 running 自愈</b>：之前进程崩溃后 DB 里 <code>BridgeRun.status="running"</code> 永久卡住 → 项目再跑 = 409。
+      现在 lifespan handler 启动时自动清理：把未结束的 running 行标 failed + 写 finished_at。
+    </p>
+    <p style="font-size:12px;color:var(--fg3);margin-top:8px">Commits: <code>889a47e</code> (API key 加密) · <code>c8f764b</code> (lifespan + CORS 收紧) · <code>4b0dc69</code> (速率限制) · <code>af3ddc4</code> (llm_router 字段同步) · <code>2055746</code> (死代码清理) · <code>4f79ae4</code> (reports.py env 路径)</p>
+  </div>
+
+  <div class="card">
+    <h3 style="color:var(--accent)">2026-07-02 · 弃用清理 + Mock Provider + 测试加固</h3>
+    <div class="tag-group" style="margin-bottom:10px">
+      <span class="badge badge-purple">依赖升级</span>
+      <span class="badge badge-accent">影响：warnings 15→0 + 离线端到端</span>
+    </div>
+    <p style="font-size:13px">
+      <b>Pydantic V3 弃用清理</b>：<code>class Config</code> → <code>model_config = ConfigDict(...)</code>（7 处 schemas.py + 1 处 config.py）。
+      <b>datetime.utcnow() 弃用</b>：→ <code>datetime.now(timezone.utc)</code>（models/rules/reports/chapter_import/bridge/main 全改）。
+      pytest warnings 15 → 0。
+    </p>
+    <p style="font-size:13px">
+      <b>Mock LLM Provider</b>：新增 <code>LLMRouter._mock</code> + <code>_MOCK_RESPONSES</code>。
+      设 <code>NOVEL_ENGINE_MOCK=1</code> 让全部 9 agent 走 mock（无需 API key），
+      引擎机制（schema 校验 / 字数 budget / orchestrator 编排）离线可验。
+    </p>
+    <p style="font-size:13px">
+      <b>Invariant tests</b>：22 → <b>118 passed</b>。覆盖 33 个 class：
+      TestProviderApiKeyEncrypted / TestOrphanBridgeRunRecovery /
+      TestFrontendTypesAligned / TestMockLLMProvider / TestMockProviderAutoActivate /
+      TestEngineLoggingUnified / TestRateLimitMiddleware / TestOpenApiExport /
+      TestMasterKeyRotation / TestDeploymentDocs / TestChangelogExists 等。
+    </p>
+    <p style="font-size:12px;color:var(--fg3);margin-top:8px">Commits: <code>d618dd4</code> (Pydantic + utcnow) · <code>bfd68cd</code> + <code>6d6c07b</code> (mock) · <code>9418791</code> (logging) · 4 docs/ops commits</p>
+  </div>
+
+  <div class="card">
+    <h3 style="color:var(--accent)">2026-07-02 · 运维工具 + 反代安全</h3>
+    <div class="tag-group" style="margin-bottom:10px">
+      <span class="badge badge-purple">Ops</span>
+      <span class="badge badge-accent">影响：MASTER_KEY 轮换 / OpenAPI 自动导出 / XFF 防伪造</span>
+    </div>
+    <p style="font-size:13px">
+      <b>scripts/generate_master_key.py</b>：生成 44 字符 base64-urlsafe Fernet key。
+      <b>scripts/rotate_master_key.py</b>：旧 key 解密 + 新 key 重新加密所有 Provider.api_key_encrypted。
+      <b>scripts/export_openapi.py</b>：从运行中后端拉 /openapi.json 写到 frontend/（避免漂移）。
+    </p>
+    <p style="font-size:13px">
+      <b>反代场景 XFF 防伪造</b>：<code>rate_limit.py</code> 加 <code>ALLOWED_PROXIES</code> 白名单，
+      仅当直接连接 IP 在白名单内才信任 <code>X-Forwarded-For</code>，否则用 <code>request.client.host</code>。
+      生产部署必须配（防攻击者伪造 IP 绕过限流）。
+    </p>
+    <p style="font-size:13px">
+      <b>NOVEL_PRODUCTION=1</b> fail-fast：启动时强制 MASTER_KEY 已设，否则立即退出
+      （防止忘设 key → 数据损坏）。
+    </p>
+    <p style="font-size:12px;color:var(--fg3);margin-top:8px">Commits: <code>4b0dc69</code> (rate_limit) · <code>4b0dc69</code> (export_openapi) · <code>b0c2d35</code> (rotate_master_key) · <code>6d6c07b</code> (mock auto-activate)</p>
+  </div>
+
+  <div class="card">
+    <h3 style="color:var(--accent)">2026-07-02 · 文档与端口统一</h3>
+    <div class="tag-group" style="margin-bottom:10px">
+      <span class="badge badge-purple">Docs</span>
+      <span class="badge badge-accent">影响：CHANGELOG + README 部署章节 + 端口</span>
+    </div>
+    <p style="font-size:13px">
+      <b>CHANGELOG.md</b>（新建）：按 Keep a Changelog 1.1 格式，记录 Phase 1 / 1.5 /
+      深度修复轮 共 <b>25+ commit</b>。
+    </p>
+    <p style="font-size:13px">
+      <b>README 部署章节</b>（新增）：MASTER_KEY 生成 + CORS + 反代 ALLOWED_PROXIES + 端口 + 迁移。
+    </p>
+    <p style="font-size:13px">
+      <b>端口 8123 → 8132 统一</b>：README / dev.bat / docs/run_mvp 一并改
+      （之前 commit 3278a77 只改了前端代码）。
+    </p>
+    <p style="font-size:12px;color:var(--fg3);margin-top:8px">Commits: <code>550c916</code> (frontend types) · <code>c2eaf69</code> (CHANGELOG + 部署章节) · <code>d503446</code> (端口 8132 统一) · <code>bbbf0da</code> (writer log fallback)</p>
+  </div>
 </section>
 
-<footer>落笔 · Novel AI Fusion · v3 guide · 2026-07-01 · 全部内容均按 3 档深度（标准 / 一句话 / 技术细节）由 code-visualizer v3 渲染</footer>
+<footer>落笔 · Novel AI Fusion · v4 guide · 2026-07-03 · 全部内容均按 3 档深度（标准 / 一句话 / 技术细节）由 code-visualizer v3 渲染</footer>
 
 <script>
 // ──────────────────────────────────────

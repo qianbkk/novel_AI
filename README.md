@@ -108,14 +108,94 @@ export ALLOWED_ORIGINS='https://your-frontend.example.com,https://www.your-front
 - 后端：`uvicorn ... --host 0.0.0.0 --port 8132`，前面套 nginx/Caddy 反代 + HTTPS
 - 前端：`npm run build` 后 `dist/` 是静态文件，nginx 直接 serve
 
-### 4. 启动时自动迁移
+### 4. 反代场景下的速率限制 + IP 防伪造（必须）
+
+后端有内存速率限制中间件（默认 60 次/分钟/IP，仅写端点）。
+**反代部署必须设 `ALLOWED_PROXIES`**（逗号分隔 IP/CIDR），否则攻击者
+伪造 `X-Forwarded-For` header 绕过限流：
+
+```bash
+# nginx 反代在 10.0.0.5
+export ALLOWED_PROXIES='10.0.0.5,10.0.0.6'
+```
+
+nginx 端同步设：
+```nginx
+proxy_set_header X-Forwarded-For $remote_addr;  # 真实 IP，不是 XFF 链
+```
+
+直接暴露 uvicorn 时不要配 `ALLOWED_PROXIES`（默认 fallback 到 `request.client.host`）。
+
+### 5. MASTER_KEY 轮换（运维）
+
+定期 / 泄漏应急时轮换 MASTER_KEY：
+
+```bash
+# 1. 生成新 key（先备份旧 key 在 env 里的值）
+python -m scripts.generate_master_key  # 旧 key 仍在 env
+
+# 2. 跑轮换（--dry-run 先演练）
+python -m scripts.rotate_master_key --new-key <new_44_char_key> --dry-run
+
+# 3. 真跑
+python -m scripts.rotate_master_key --new-key <new_44_char_key>
+
+# 4. 把新 key 注入 K8s Secret / .env / 系统环境变量，移除旧 key
+# 5. 重启后端 + 验证 /providers 端点能正常解密
+```
+
+**关键**：必须先备份 DB（`cp data/novel_assistant.db data/novel_assistant.db.bak`），
+并在后端**停机期间**运行（避免 in-flight read 拿旧 key / 新 write 拿新 key 的竞态）。
+
+### 6. OpenAPI 自动导出（CI 集成）
+
+后端 schema 经常变，手工维护 `frontend/openapi.json` 会漂移。
+CI 集成：
+
+```bash
+# 启动后端后
+python -m scripts.export_openapi  # 写到 frontend/openapi.json（已 gitignored）
+# 或指定 URL
+python -m scripts.export_openapi --url http://localhost:8132
+
+# GitHub Actions 示例
+- name: Export OpenAPI spec
+  run: |
+    uvicorn app.main:app --port 8132 &
+    sleep 5
+    python -m scripts.export_openapi
+```
+
+### 7. Mock provider（无需 API key 跑通全流程）
+
+设 `NOVEL_ENGINE_MOCK=1` 让所有 9 个 agent 走 mock provider（无需 API key，
+返回 schema 化固定响应）：
+
+```bash
+NOVEL_ENGINE_MOCK=1 uvicorn app.main:app --port 8132
+```
+
+适用：CI / 单元测试 / demo / 本地没配 API key 时。
+
+### 8. 生产模式强制检查（fail-fast）
+
+设 `NOVEL_PRODUCTION=1` 启用生产模式：启动时强制要求 `MASTER_KEY` 已设置，
+否则进程立即退出（防止忘设 key → 数据损坏）：
+
+```bash
+export NOVEL_PRODUCTION=1
+export MASTER_KEY='<44 字符 base64-urlsafe>'
+uvicorn app.main:app --port 8132
+```
+
+### 9. 启动时自动迁移
 
 后端 lifespan handler 启动时会自动跑 `run_migrations()`（给已有表加新列）。
 SQLite 适合原型；生产建议迁 PostgreSQL（改 `database_url` 即可）。
 
-### 5. 不在这次范围内的项
+### 10. 不在这次范围内的项
 
-- 速率限制 / WAF
 - 多用户认证（当前是单租户原型）
 - 分布式任务队列（现在是进程内 lock + SQLite）
 - 密钥管理服务（Vault / AWS KMS 之类）
+- WAF / DDoS 防护（反代前面套 Cloudflare）
