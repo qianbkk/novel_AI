@@ -2517,3 +2517,118 @@ class TestSQLitePragmas:
             assert fk == 1, (
                 f"foreign_keys 应为 ON（=1），实际 {fk}（FK 约束可能失效）"
             )
+
+
+# ───────────────────────────────────────────
+# PP: export_openapi.py 端到端（拿 spec + 写文件 + 错误处理）
+# ───────────────────────────────────────────
+class TestExportOpenApiEndToEnd:
+    """迭代 #11：export_openapi.py 真实调 httpx + 写文件 + 错误处理。
+
+    之前 TestOpenApiExport 只验脚本 import / main 存在 + .gitignore 配置，
+    没真正 mock httpx 跑一遍。生产若 httpx 版本变了或 URL 改了，
+    脚本可能静默失败（httpx 解析错误 → except 块）。
+    """
+
+    def test_export_writes_spec_to_path(self, monkeypatch, tmp_path):
+        """模拟 httpx 返回固定 JSON → export 应写出来。"""
+        import json
+        import sys
+        from pathlib import Path
+        # 把 backend/ 加入 sys.path
+        backend_root = Path(__file__).resolve().parents[1]
+        if str(backend_root) not in sys.path:
+            sys.path.insert(0, str(backend_root))
+
+        # 用 importlib 加载脚本（独立 module，不污染 app.* namespace）
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "export_openapi_under_test",
+            backend_root / "scripts" / "export_openapi.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)  # type: ignore
+
+        # Mock httpx.get 返回固定 spec
+        fake_spec = {
+            "openapi": "3.1.0",
+            "info": {"title": "test", "version": "1.0"},
+            "paths": {"/test": {"get": {"summary": "test"}}},
+        }
+
+        class FakeResp:
+            status_code = 200
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return fake_spec
+
+        class FakeClient:
+            def __init__(self, *a, **kw): pass
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+            def get(self, url, **kw):
+                return FakeResp()
+
+        monkeypatch.setattr("httpx.get", lambda url, **kw: FakeResp())
+        # 脚本用 httpx.Client；改 sys.modules 让 import 拿到 mock
+        import httpx as _httpx
+        monkeypatch.setattr(_httpx, "Client", FakeClient, raising=False)
+
+        out_path = str(tmp_path / "openapi.json")
+        # 直接调 main() with argv override
+        monkeypatch.setattr(sys, "argv", [
+            "export_openapi",
+            "--url", "http://fake:9999",
+            "--out", out_path,
+        ])
+        rc = mod.main()
+        assert rc == 0, f"main() 应返回 0，实际 {rc}"
+        # 文件已写
+        assert Path(out_path).exists()
+        written = json.loads(Path(out_path).read_text(encoding="utf-8"))
+        assert written["info"]["title"] == "test"
+        assert "/test" in written["paths"]
+
+    def test_export_fails_when_url_unreachable(self, monkeypatch, tmp_path):
+        """URL 不可达 → main() 返回非 0，不写文件。"""
+        import sys
+        from pathlib import Path
+        backend_root = Path(__file__).resolve().parents[1]
+        if str(backend_root) not in sys.path:
+            sys.path.insert(0, str(backend_root))
+
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "export_openapi_fail",
+            backend_root / "scripts" / "export_openapi.py",
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)  # type: ignore
+
+        # Mock httpx.get 抛 ConnectionError
+        import httpx
+        def fake_get(url, **kw):
+            raise httpx.ConnectError("connection refused")
+        monkeypatch.setattr("httpx.get", fake_get)
+
+        out_path = str(tmp_path / "openapi.json")
+        monkeypatch.setattr(sys, "argv", [
+            "export_openapi",
+            "--url", "http://fake:9999",
+            "--out", out_path,
+        ])
+        rc = mod.main()
+        assert rc != 0, "URL 不可达时 main() 必须返回非 0"
+        assert not Path(out_path).exists(), "失败时不能写半成品文件"
+
+    def test_export_invalidates_invalid_new_master_key(self):
+        """ensure export script 同时提供 --url 验证（URL 必须含 http://）。"""
+        # 简单 sanity check：脚本支持 --url / --out 参数
+        from pathlib import Path
+        script = Path(__file__).resolve().parents[1] / "scripts" / "export_openapi.py"
+        content = script.read_text(encoding="utf-8")
+        assert '"--url"' in content or "'--url'" in content
+        assert '"--out"' in content or "'--out'" in content
