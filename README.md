@@ -8,7 +8,7 @@ FastAPI + React Web 框架内嵌一个 LangGraph 多 Agent 写作引擎。前端
 
 - `backend/`：FastAPI 后端，提供项目管理、世界构建、Provider/角色配置、写作引擎桥接、章节导入与检索。
 - `frontend/`：React + TypeScript + Vite 前端，提供项目页面、Provider 管理、角色配置和写作引擎控制台。
-- `docs/`：项目文档与可视化页面（含自解释指南 `novel_ai_fusion_guide.html`）。
+- `docs/`：项目文档与可视化页面（含自解释指南 HTML）。
 - `patches/`：写作引擎的修复 apply 指南，跨机器需手动 apply。
 
 ## 本地运行
@@ -18,7 +18,7 @@ FastAPI + React Web 框架内嵌一个 LangGraph 多 Agent 写作引擎。前端
 ```bash
 cd backend
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8123
+uvicorn app.main:app --reload --port 8132
 ```
 
 前端：
@@ -53,7 +53,7 @@ pip install langgraph anthropic httpx jieba
 ```bash
 cd backend
 # 1. 启动后端（另一个终端）
-uvicorn app.main:app --reload --port 8123
+uvicorn app.main:app --reload --port 8132
 
 # 2. 在 frontend 新建项目 + 完成 worldbuild（10 阶段），记下 project_id
 # 3. 跑 MVP（默认写 1 章，选版本 A）

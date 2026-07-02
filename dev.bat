@@ -23,7 +23,7 @@ set "BACKEND_DIR=%PROJECT_ROOT%\backend"
 set "FRONTEND_DIR=%PROJECT_ROOT%\frontend"
 
 set "BACKEND_HOST=127.0.0.1"
-set "BACKEND_PORT=8123"
+set "BACKEND_PORT=8132"
 set "FRONTEND_HOST=127.0.0.1"
 set "FRONTEND_PORT=5293"
 
@@ -59,7 +59,7 @@ goto :eof
 :print_menu
 echo.
 echo %YELLOW%Choose action:%RESET%
-echo   %GREEN%1)%RESET% start backend     (uvicorn :8123)
+echo   %GREEN%1)%RESET% start backend     (uvicorn :8132)
 echo   %GREEN%2)%RESET% start frontend    (vite    :5293)
 echo   %GREEN%3)%RESET% start BOTH
 echo   %GREEN%4)%RESET% stop backend
@@ -333,10 +333,10 @@ goto :menu_loop
 echo.
 echo %CYAN%Usage:%RESET%
 echo   dev.bat                       interactive menu
-echo   dev.bat start-backend         start uvicorn :8123
+echo   dev.bat start-backend         start uvicorn :8132
 echo   dev.bat start-frontend        start vite    :5293
 echo   dev.bat start-all             start both
-echo   dev.bat stop-backend          kill 8123 listener
+echo   dev.bat stop-backend          kill 8132 listener
 echo   dev.bat stop-frontend         kill 5293 listener
 echo   dev.bat stop-all              kill both
 echo   dev.bat restart-all           stop then start both

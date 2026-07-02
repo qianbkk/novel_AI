@@ -2,7 +2,7 @@
 
 用法:
     cd backend
-    python -m scripts.run_mvp <project_id> [--api http://localhost:8123] [--chapters 1] [--select A]
+    python -m scripts.run_mvp <project_id> [--api http://localhost:8132] [--chapters 1] [--select A]
 
 跑法:
     1. push-concept          推世界构建到 novel_AI/config/novel_config.json
@@ -103,7 +103,7 @@ def select_bootstrap_version(project_id: str, chapter: int, version: str) -> Non
 def main() -> int:
     parser = argparse.ArgumentParser(description="一键跑 novel_AI MVP 流水线")
     parser.add_argument("project_id", help="目标 project_id（先在 frontend 新建项目）")
-    parser.add_argument("--api", default="http://localhost:8123", help="后端 base URL")
+    parser.add_argument("--api", default="http://localhost:8132", help="后端 base URL")
     parser.add_argument("--chapters", type=int, default=1, help="run 命令写多少章（默认 1）")
     parser.add_argument("--select", default="A", help="bootstrap 选哪版（A/B/C）")
     parser.add_argument("--skip-bootstrap", action="store_true", help="跳过 bootstrap 步骤（如果之前跑过）")
@@ -118,7 +118,7 @@ def main() -> int:
             r = client.get("/health")
             r.raise_for_status()
         except Exception as e:
-            print(f"✗ 后端 {args.api} 不可达：{e}\n  请先在另一个终端跑: cd backend && uvicorn app.main:app --reload --port 8123")
+            print(f"✗ 后端 {args.api} 不可达：{e}\n  请先在另一个终端跑: cd backend && uvicorn app.main:app --reload --port 8132")
             return 1
 
         # 1. push-concept
