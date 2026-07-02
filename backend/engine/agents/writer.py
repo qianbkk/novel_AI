@@ -13,6 +13,7 @@ P3 expansion: 字数控制接入生成路径。
   - 配 _truncate_at_sentence_boundary 避免硬切在字中间
 """
 from __future__ import annotations
+import logging
 import os
 import sys
 from typing import Tuple
@@ -23,6 +24,9 @@ from ..config.prompt_templates import (
     get_genre_instruction, get_hook_guidance,
     get_character_voice_reminder, UNIVERSAL_WRITING_RULES,
 )
+
+
+log = logging.getLogger("novel_ai.engine.writer")
 
 # Active router is set by backend.engine.graph.build_project_graph()
 _ACTIVE_ROUTER: LLMRouter | None = None
@@ -96,6 +100,7 @@ def _genre_instruction(genre: str) -> str:
     try:
         return get_genre_instruction(genre)
     except Exception:
+        log.exception("_genre_instruction fallback: get_genre_instruction raised for genre=%r", genre)
         return f"题材：{genre}。\n"
 
 
@@ -103,6 +108,7 @@ def _hook_guidance(hook_type: str) -> str:
     try:
         return get_hook_guidance(hook_type)
     except Exception:
+        log.exception("_hook_guidance fallback: get_hook_guidance raised for hook_type=%r", hook_type)
         return f"结尾钩子类型：{hook_type}。请在结尾埋下一个让读者想看下一章的钩子。\n"
 
 
@@ -110,6 +116,7 @@ def _character_voice_reminder(characters: list, setting: dict) -> str:
     try:
         return get_character_voice_reminder(characters, setting)
     except Exception:
+        log.exception("_character_voice_reminder fallback: get_character_voice_reminder raised")
         return ""
 
 
@@ -205,13 +212,15 @@ def run_writer(task: dict, memory: dict, setting_core: dict) -> tuple[str, float
     try:
         context = get_writer_context(novel_id, task)
     except Exception:
+        log.exception("_build_system_and_user fallback: get_writer_context raised for novel=%s", novel_id)
         context = memory if isinstance(memory, dict) else {}
 
     # Trigger style sample refresh (P1: no-op)
     try:
         maybe_update_style_samples(task.get("chapter_number", 0), novel_id)
     except Exception:
-        pass
+        # style sample 是 no-op 装饰，失败不应阻断主流程，但仍要 log
+        log.warning("maybe_update_style_samples failed (non-critical)", exc_info=True)
 
     system_dynamic, user_prompt = build_writer_prompt(task, context, setting_core)
 
