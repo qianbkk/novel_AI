@@ -868,6 +868,151 @@ class TestWriterFailureNoFakeStub:
 
 
 # ───────────────────────────────────────────
+# O: orchestrator 全 pipeline 失败兜底必须显式 escalate（不再 fake pass）
+# ───────────────────────────────────────────
+class TestOrchestratorNoFakePass:
+    """你独立验证发现的 5 个同型 fake-pass bug：
+
+      1. compliance 失败 → 兜底 {"passed": True}（line 294 之前）
+      2. checker 失败 → 兜底 {"score": 7.0, "verdict": "PASS"}（line 311 之前）
+      3. rewriter 失败 → 兜底 new_text = draft_text（line 363 之前）
+      4. checker (post-rewrite) 失败 → 兜底 cr2 = cr（line 402 之前）
+      5. outline 失败 → 兜底 10 个 placeholder task（line 201 之前）
+
+    统一修法：异常时设 task._xxx_failed=True（每个 stage 单独 flag），
+    route_after_pipeline / route_after_rewrite 检查后路由到 escalate，
+    不再让 fake 默认值污染下游。
+    本测试锁死。
+    """
+
+    @pytest.fixture(autouse=True)
+    def orch(self, monkeypatch):
+        """提供 monkeypatched run_* helpers."""
+        from engine import orchestrator as orch_mod
+        return orch_mod
+
+    def test_compliance_failure_marks_task(self, orch, monkeypatch):
+        """compliance 抛异常 → task._compliance_check_failed=True + 提前 return"""
+        def fake_writer(task, memory, setting):
+            return "ok 2000字 真实文本 " * 200, 0.0
+        def fake_normalizer(text, task):
+            return text, [], 0.0
+        def fake_compliance(text, platform):
+            raise ConnectionError("compliance down")
+        monkeypatch.setattr(orch, "run_writer", fake_writer)
+        monkeypatch.setattr(orch, "run_normalizer", fake_normalizer)
+        monkeypatch.setattr(orch, "run_compliance", fake_compliance)
+        state = {"current_task": {"chapter_number": 99, "audit_mode": "full"},
+                 "current_chapter": 99, "rewrite_count_current": 0,
+                 "error_log": [], "chapter_task_queue": [],
+                 "platform": "fanqie"}
+        result = orch.node_write_pipeline(state)
+        assert result["current_task"].get("_compliance_check_failed") is True, (
+            "compliance 抛异常时 task._compliance_check_failed 必须置 True"
+        )
+        # 不应继续到 checker
+        assert "_checker_result" not in result["current_task"]
+
+    def test_checker_failure_marks_task(self, orch, monkeypatch):
+        """checker 抛异常 → task._checker_failed=True + 提前 return"""
+        def fake_writer(task, memory, setting):
+            return "ok text " * 200, 0.0
+        def fake_normalizer(text, task):
+            return text, [], 0.0
+        def fake_compliance(text, platform):
+            return {"passed": True, "suggestion": ""}, 0.0
+        def fake_checker(text, task, mode):
+            raise ConnectionError("checker down")
+        monkeypatch.setattr(orch, "run_writer", fake_writer)
+        monkeypatch.setattr(orch, "run_normalizer", fake_normalizer)
+        monkeypatch.setattr(orch, "run_compliance", fake_compliance)
+        monkeypatch.setattr(orch, "run_checker", fake_checker)
+        state = {"current_task": {"chapter_number": 99, "audit_mode": "full"},
+                 "current_chapter": 99, "rewrite_count_current": 0,
+                 "error_log": [], "chapter_task_queue": [],
+                 "platform": "fanqie"}
+        result = orch.node_write_pipeline(state)
+        assert result["current_task"].get("_checker_failed") is True, (
+            "checker 抛异常时 task._checker_failed 必须置 True（不再 fake score=7.0 PASS）"
+        )
+
+    def test_rewriter_failure_marks_task(self, orch, monkeypatch):
+        """rewriter 抛异常 → task._rewriter_failed=True + 提前 return"""
+        def fake_rewriter(text, lvl, feedback, task, cr, memory, setting):
+            raise ConnectionError("rewriter down")
+        monkeypatch.setattr(orch, "run_rewriter", fake_rewriter)
+        state = {
+            "current_task": {
+                "chapter_number": 99,
+                "_checker_result": {"score": 5.0, "rewrite_level": "P1"},
+                "_draft_text": "原始文本",
+            },
+            "current_chapter": 99,
+            "rewrite_count_current": 0,
+            "error_log": [],
+            "chapter_task_queue": [],
+            "novel_id": "default",
+        }
+        result = orch.node_rewrite(state)
+        assert result["current_task"].get("_rewriter_failed") is True, (
+            "rewriter 抛异常时 task._rewriter_failed 必须置 True（不再用原文本当重写结果）"
+        )
+        # draft_text 应保留原值（不是被覆盖为空）
+        assert result["current_task"].get("_draft_text") == "原始文本"
+
+    def test_checker_post_rewrite_failure_marks_task(self, orch, monkeypatch):
+        """checker (post-rewrite) 抛异常 → _checker_failed=True（不再用旧 cr 兜底）"""
+        def fake_rewriter(text, lvl, feedback, task, cr, memory, setting):
+            return "重写后文本 " * 200, 0.0
+        def fake_normalizer(text, task):
+            return text, [], 0.0
+        def fake_compliance(text, platform):
+            return {"passed": True}, 0.0
+        def fake_checker(text, task, mode):
+            raise ConnectionError("post-rewrite checker down")
+        monkeypatch.setattr(orch, "run_rewriter", fake_rewriter)
+        monkeypatch.setattr(orch, "run_normalizer", fake_normalizer)
+        monkeypatch.setattr(orch, "run_compliance", fake_compliance)
+        monkeypatch.setattr(orch, "run_checker", fake_checker)
+        state = {
+            "current_task": {
+                "chapter_number": 99,
+                "_checker_result": {"score": 5.0, "rewrite_level": "P1", "feedback": "x"},
+                "_draft_text": "原始文本",
+                "_compliance_failed": False,
+            },
+            "current_chapter": 99,
+            "rewrite_count_current": 0,
+            "error_log": [],
+            "chapter_task_queue": [],
+            "novel_id": "default",
+            "platform": "fanqie",
+        }
+        result = orch.node_rewrite(state)
+        assert result["current_task"].get("_checker_failed") is True, (
+            "post-rewrite checker 抛异常时 _checker_failed 必须置 True"
+        )
+
+    def test_route_after_pipeline_escalates_on_compliance_check_failed(self):
+        from engine.orchestrator import route_after_pipeline
+        state = {
+            "current_phase": "writing",
+            "current_task": {"_compliance_check_failed": True, "_checker_result": {"score": 7.0}},
+            "rewrite_count_current": 0,
+        }
+        assert route_after_pipeline(state) == "escalate"
+
+    def test_route_after_pipeline_escalates_on_checker_failed(self):
+        from engine.orchestrator import route_after_pipeline
+        state = {
+            "current_phase": "writing",
+            "current_task": {"_checker_failed": True, "_checker_result": {"score": 7.0}},
+            "rewrite_count_current": 0,
+        }
+        assert route_after_pipeline(state) == "escalate"
+
+
+# ───────────────────────────────────────────
 # N: state / chapters 路径必须用 binding.novel_ai_dir，不再硬编码
 # ───────────────────────────────────────────
 class TestStatePathFromBinding:

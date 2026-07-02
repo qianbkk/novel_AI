@@ -197,9 +197,15 @@ def node_load_arc_tasks(state: OrchestratorState) -> OrchestratorState:
             tasks, cost = run_outline(arc, start, setting, memory)
             _add_cost(state, cost)
     except Exception as e:
+        # 之前：兜底 10 个 placeholder task，engine 继续跑但全是占位——
+        # 比"fake PASS 章节"更隐蔽：用户看到的 chapter 数字在动，
+        # 但所有内容都是 placeholder 模板。
+        # 改为：标记 _outline_failed=True，run_orchestrator 检测后停。
         log(f"ERR outline failed: {e}", state)
-        tasks = [_placeholder_task(arc_idx, i, arc) for i in range(10)]
-        cost = 0.0
+        state["error_log"] = (state.get("error_log", []) +
+                              [f"outline failed arc{arc_idx}: {e}"])
+        state["_outline_failed"] = True
+        return state
     _add_cost(state, cost)
 
     state["chapter_task_queue"]      = tasks
@@ -289,10 +295,19 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
     log("  🛡️  合规检查...", state)
     try:
         comp_result, cost = run_compliance(clean_text, state.get("platform", "fanqie"))
+        _add_cost(state, cost)
     except Exception as e:
+        # 之前：兜底 {"passed": True}，合规失败被静默擦掉——
+        # 跟 writer stub 同型"fake pass"问题。改为：标记 _compliance_check_failed=True
+        # 并给出中性 verdict（待人工 review），route_after_pipeline 路由到 escalate。
         log(f"ERR compliance failed: {e}", state)
-        comp_result, cost = {"passed": True}, 0.0
-    _add_cost(state, cost)
+        state["error_log"] = (state.get("error_log", []) +
+                              [f"compliance failed ch{task['chapter_number']}: {e}"])
+        task["_compliance_check_failed"] = True
+        task["_compliance_feedback"]     = f"compliance check raised: {e}"
+        task["_draft_text"]              = clean_text
+        state["current_task"]            = task
+        return state
 
     if not comp_result.get("passed", True):
         log(f"  ❌ 合规失败", state)
@@ -306,10 +321,17 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
     log(f"  🔍 质检（{audit_mode}）...", state)
     try:
         checker_result, cost = run_checker(clean_text, task, audit_mode)
+        _add_cost(state, cost)
     except Exception as e:
+        # 之前：兜底 score=7.0 / verdict=PASS——任何 checker 失败都假 PASS。
+        # 改为：标记 _checker_failed=True，route_after_pipeline 路由到 escalate。
         log(f"ERR checker failed: {e}", state)
-        checker_result, cost = {"score": 7.0, "verdict": "PASS", "feedback": "", "rewrite_level": "P0", "weakest_point": ""}, 0.0
-    _add_cost(state, cost)
+        state["error_log"] = (state.get("error_log", []) +
+                              [f"checker failed ch{task['chapter_number']}: {e}"])
+        task["_checker_failed"] = True
+        task["_draft_text"]     = clean_text
+        state["current_task"]   = task
+        return state
 
     score = checker_result.get("score", 0)
     log(f"  📊 {score:.1f}分 | {checker_result.get('verdict','')}", state)
@@ -342,17 +364,27 @@ def node_rewrite(state: OrchestratorState) -> OrchestratorState:
 
     try:
         new_text, cost = run_rewriter(draft_text, rewrite_lvl, feedback, task, cr, memory, setting)
+        _add_cost(state, cost)
     except Exception as e:
+        # 之前：new_text = draft_text（重写失败时用原文本当重写结果——
+        # 实际上没重写，但 state 显示重写完成，rewrite_count++ 误导用户）。
+        # 改为：标记 _rewriter_failed=True，task 标 _checker_failed 复用同路径 escalate。
         log(f"ERR rewriter failed: {e}", state)
-        new_text, cost = draft_text, 0.0
-    _add_cost(state, cost)
+        state["error_log"] = (state.get("error_log", []) +
+                              [f"rewriter failed ch{task['chapter_number']}: {e}"])
+        task["_rewriter_failed"] = True
+        task["_checker_failed"] = True  # 让 route_after_rewrite 走 escalate
+        task["_draft_text"]    = draft_text
+        state["current_task"]  = task
+        return state
 
     try:
         clean_text, _, cost = run_normalizer(new_text, task)
+        _add_cost(state, cost)
     except Exception as e:
         log(f"ERR normalizer (post-rewrite) failed: {e}", state)
+        # normalizer 失败但 rewriter 成功 → 退到 raw new_text，不丢重写结果
         clean_text, cost = new_text, 0.0
-    _add_cost(state, cost)
 
     # Re-verify compliance
     try:
@@ -371,10 +403,18 @@ def node_rewrite(state: OrchestratorState) -> OrchestratorState:
 
     try:
         cr2, cost = run_checker(clean_text, task, "lite")
+        _add_cost(state, cost)
     except Exception as e:
+        # 之前：cr2 = cr（用上次 checker 结果当这次结果——重写后没真的评分，
+        # 但显示"重写后分数"，rewrite 循环可能基于错误的分数继续）。
+        # 改为：标记 _checker_failed=True，让 route_after_rewrite 走 escalate。
         log(f"ERR checker (post-rewrite) failed: {e}", state)
-        cr2, cost = cr, 0.0
-    _add_cost(state, cost)
+        state["error_log"] = (state.get("error_log", []) +
+                              [f"checker (post-rewrite) failed ch{task['chapter_number']}: {e}"])
+        task["_checker_failed"] = True
+        task["_draft_text"]     = clean_text
+        state["current_task"]   = task
+        return state
     log(f"  📊 重写后：{cr2.get('score',0):.1f}分", state)
 
     task["_draft_text"]        = clean_text
@@ -474,9 +514,13 @@ def route_after_pipeline(state) -> Literal["save", "rewrite", "escalate", "budge
     if state.get("current_phase") in ("done", "budget_paused"):
         return "save"
     task = state.get("current_task", {})
-    # writer 完全失败时直接 escalate，不进入 normalizer/checker/save
-    # 之前会写 [writer-stub] 占位并跑完 pipeline → 假 7.0 分 PASS（ch_0064）
+    # 任一 pipeline 阶段异常 → 直接 escalate，不进入 save
+    # 之前这些异常会被"fake pass 默认值"吞掉（ch_0064 同型问题）。
     if task.get("_writer_failed"):
+        return "escalate"
+    if task.get("_compliance_check_failed"):
+        return "escalate"
+    if task.get("_checker_failed"):
         return "escalate"
     score = task.get("_checker_result", {}).get("score", 0) if task.get("_checker_result") else 0
     rw = state.get("rewrite_count_current", 0)
@@ -548,6 +592,11 @@ def run_orchestrator(state: OrchestratorState, max_chapters: int = 10) -> Orches
     for event in app.stream(state, config):
         node_name = list(event.keys())[0]
         new_state = event[node_name]
+        # outline 失败时立即停（不跑出 10 个 placeholder 章节）
+        if new_state.get("_outline_failed"):
+            print("\n❌ outline 失败，run 终止（避免跑出 placeholder 章节）")
+            save_state(new_state, str(STATE_PATH))
+            return new_state
         if node_name == "save_and_track":
             chapters_done += 1
             print(f"\n✅ [{chapters_done}/{max_chapters}] Ch{new_state.get('current_chapter',0)} "
