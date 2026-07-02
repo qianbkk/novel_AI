@@ -277,7 +277,7 @@ export default function BridgeConsole() {
       await api.submitReview(projectId, {
         task_id: item.task_id,
         action,
-        edited_content: action === "edit" ? reviewText[item.task_id] || item.content || "" : undefined,
+        content: action === "edit" ? reviewText[item.task_id] || item.content || "" : undefined,
       });
       appendLogLine("review", `${item.task_id} -> ${action}`, "ok");
       toast.success("审核已提交", `${item.task_id} · ${action}`);

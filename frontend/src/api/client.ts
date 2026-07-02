@@ -151,7 +151,7 @@ export const api = {
 
   submitReview: (
     projectId: string,
-    payload: { task_id: string; action: "accept" | "reject" | "edit"; edited_content?: string },
+    payload: { task_id: string; action: "accept" | "reject" | "edit"; content?: string },
   ) =>
     request<Record<string, unknown>>(`/projects/${projectId}/bridge/review`, {
       method: "POST",

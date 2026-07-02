@@ -588,6 +588,470 @@ class TestFrontendBackendPortConsistency:
                     f"用户改 backend 端口后会看到错地址"
                 )
 
+    def test_no_hardcoded_8123_in_docs_and_scripts(self):
+        """README / dev.bat / scripts / docs html 不能硬编码 :8123
+        (排除：注释里解释历史/端口漂移、tests/ 锁死历史 bug)。
+        历史背景：commit 3278a77 把后端 8123→8132，本轮扫出 5 处残留
+        (README.md / dev.bat / docs/novel-ai-guide.html / run_mvp.py) 全已修。
+        """
+        from pathlib import Path
+        repo = Path(__file__).resolve().parents[2]
+        # 扫这些路径下硬编码 :8123 的可执行/文档文件
+        targets = [
+            repo / "README.md",
+            repo / "dev.bat",
+            repo / "docs" / "novel-ai-guide.html",
+            repo / "backend" / "scripts" / "run_mvp.py",
+        ]
+        # 排除注释里提到 8123 是因为要解释 8132 的来历 / findstr 锚定语义
+        ALLOWED_LINE_FRAGMENTS = (
+            "8123 经常被",        # client.ts 注释解释 8132 来历
+            "Anchoring on the trailing space prevents \":8123\"",  # dev.bat findstr
+            "from matching \":81230\"",  # dev.bat findstr
+        )
+        violations: list[str] = []
+        for path in targets:
+            if not path.exists():
+                continue
+            content = path.read_text(encoding="utf-8")
+            for i, line in enumerate(content.splitlines(), start=1):
+                if ":8123" not in line:
+                    continue
+                if any(frag in line for frag in ALLOWED_LINE_FRAGMENTS):
+                    continue
+                # 排除纯注释行（REM 开头 / // 开头 / # 开头且包含 8132 解释）
+                stripped = line.strip()
+                if stripped.startswith("REM") and "8132" in stripped:
+                    continue
+                if stripped.startswith("//") and "8132" in stripped:
+                    continue
+                if stripped.startswith("#") and "8132" in stripped:
+                    continue
+                violations.append(f"{path.relative_to(repo)}:{i}: {line.rstrip()}")
+        assert not violations, (
+            "硬编码 :8123 残留（应统一为 :8132）：\n  "
+            + "\n  ".join(violations)
+        )
+
+
+# ───────────────────────────────────────────
+# V: submitReview 前后端 schema 一致（防止 edited_content vs content 错位）
+# ───────────────────────────────────────────
+class TestReviewContract:
+    """历史 bug：
+      前端 submitReview 发 `edited_content` 字段，
+      后端 ReviewRequest 读 `content` 字段 → 永远拿到 None
+      → 用户"编辑后提交"的内容静默丢失。
+
+    锁定条件：
+      - 前端 api.submitReview 类型声明必须用 `content`
+      - 前端实际调用必须用 `content`
+      - 后端 ReviewRequest 必须有 `content` 字段
+      - 前端不能出现 `edited_content`（已统一）
+    """
+
+    def test_frontend_submit_review_uses_content_field(self):
+        """前端 api.submitReview 类型声明 + BridgeConsole 调用都用 `content`。"""
+        client_ts = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "api" / "client.ts").read_text(encoding="utf-8")
+        assert "edited_content" not in client_ts, (
+            "frontend api/client.ts 还用 edited_content 字段 — "
+            "后端 ReviewRequest 读 content，编辑内容会被丢弃"
+        )
+        assert "content?:" in client_ts or "content: string" in client_ts, (
+            "frontend api/client.ts submitReview 必须显式声明 content 字段"
+        )
+
+    def test_frontend_submit_review_call_site_uses_content(self):
+        """BridgeConsole.tsx 实际调用 api.submitReview 时用 content key。"""
+        console_tsx = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages" / "BridgeConsole.tsx").read_text(encoding="utf-8")
+        assert "edited_content" not in console_tsx, (
+            "frontend BridgeConsole.tsx 还传 edited_content — "
+            "实际提交时编辑内容会被丢弃"
+        )
+        # 调用点必须传 content 字段（值是三元表达式）
+        import re
+        m = re.search(r"api\.submitReview\s*\([^)]*content:\s*", console_tsx, re.DOTALL)
+        assert m, (
+            "frontend BridgeConsole.tsx 调 api.submitReview 时必须传 content 字段"
+        )
+
+    def test_backend_review_request_has_content_field(self):
+        """后端 ReviewRequest 必须有 content 字段（与前端对齐）。"""
+        from app.schemas import ReviewRequest
+        fields = ReviewRequest.__fields__
+        assert "content" in fields, (
+            "backend ReviewRequest 缺 content 字段 — 前端编辑提交会拿到 None"
+        )
+        # 显式不允许 edited_content（避免再次漂移）
+        assert "edited_content" not in fields, (
+            "backend ReviewRequest 不应有 edited_content 字段（应统一为 content）"
+        )
+
+
+# ───────────────────────────────────────────
+# W: bridge.py 死代码清理（_run_bridge_async / _run_bridge_async_imported）
+# ───────────────────────────────────────────
+class TestBridgeDeadCodeRemoved:
+    """历史背景：
+      commit 62baf44 把 run 进程从 in-process 切到 subprocess（_spawn_engine_subprocess），
+      旧版 _run_bridge_async 函数和 _run_bridge_async_imported 降级引用变 dead code。
+      本轮清理：函数体删掉，只留 stub 抛 NotImplementedError；_run_bridge_async_imported
+      字符串彻底从源码消失。
+    """
+
+    def test_no_run_bridge_async_imported_string_in_source(self):
+        """源码（包括 subprocess 降级路径字符串）不能出现 _run_bridge_async_imported。"""
+        from pathlib import Path
+        repo = Path(__file__).resolve().parents[2]
+        offenders: list[str] = []
+        for py_file in (repo / "backend").rglob("*.py"):
+            # 跳过 tests/ 自身（test 文件里 grep 这个名字是合法的——在断言里）
+            if "tests" in py_file.parts:
+                continue
+            content = py_file.read_text(encoding="utf-8")
+            if "_run_bridge_async_imported" in content:
+                offenders.append(str(py_file.relative_to(repo)))
+        assert not offenders, (
+            "_run_bridge_async_imported 仍存在（已删除函数，不应再被引用）：\n  "
+            + "\n  ".join(offenders)
+        )
+
+    def test_run_bridge_async_only_stub(self):
+        """_run_bridge_async 函数体应只剩 stub（抛 NotImplementedError），不能真有逻辑。"""
+        from pathlib import Path
+        bridge_py = Path(__file__).resolve().parents[2] / "backend" / "app" / "api" / "bridge.py"
+        content = bridge_py.read_text(encoding="utf-8")
+        # 找到函数定义位置
+        import re
+        m = re.search(r"async def _run_bridge_async\([^)]*\):\s*\n(.*?)(?=\nasync def |def |class |\Z)", content, re.DOTALL)
+        assert m, "找不到 _run_bridge_async 函数"
+        body = m.group(1)
+        # 不应有 run_graph_task / asyncio.to_thread 这种实质逻辑
+        assert "run_graph_task" not in body, (
+            "_run_bridge_async 函数体不应再调用 run_graph_task（已废弃）"
+        )
+        assert "NotImplementedError" in body, (
+            "_run_bridge_async 必须是 stub（抛 NotImplementedError）"
+        )
+
+
+# ───────────────────────────────────────────
+# X: BridgeRun 孤儿 running 自愈（启动时清理）
+# ───────────────────────────────────────────
+class TestOrphanBridgeRunRecovery:
+    """历史 bug（独立审查标记）：
+      并发锁在内存 _project_locks，进程崩溃后 DB 里 status='running'
+      且 finished_at IS NULL 的记录永久卡住。下次任何 /bridge/run → 409 Conflict。
+
+    修复：main.py lifespan handler 启动时调 _recover_orphan_bridge_runs()，
+    把所有未结束的 running 行标为 'failed'，写入 finished_at。
+    """
+
+    def test_main_has_orphan_recovery_function(self):
+        """backend/app/main.py 必须定义 _recover_orphan_bridge_runs 函数。"""
+        from pathlib import Path
+        main_py = Path(__file__).resolve().parents[2] / "backend" / "app" / "main.py"
+        content = main_py.read_text(encoding="utf-8")
+        assert "_recover_orphan_bridge_runs" in content, (
+            "backend/app/main.py 缺 _recover_orphan_bridge_runs 函数 — "
+            "启动时无法清理孤儿 BridgeRun 行，进程崩溃后项目永久 409"
+        )
+
+    def test_main_uses_lifespan_handler(self):
+        """必须用 @asynccontextmanager lifespan 替代 deprecated @app.on_event。"""
+        from pathlib import Path
+        main_py = Path(__file__).resolve().parents[2] / "backend" / "app" / "main.py"
+        content = main_py.read_text(encoding="utf-8")
+        assert "@asynccontextmanager" in content and "async def lifespan" in content, (
+            "backend/app/main.py 必须用 lifespan handler（@app.on_event 已被 deprecated）"
+        )
+        assert "@app.on_event" not in content, (
+            "backend/app/main.py 还用 deprecated 的 @app.on_event — "
+            "应改为 @asynccontextmanager lifespan"
+        )
+
+    def test_lifespan_calls_orphan_recovery(self):
+        """lifespan handler 必须调 _recover_orphan_bridge_runs()。"""
+        from pathlib import Path
+        main_py = Path(__file__).resolve().parents[2] / "backend" / "app" / "main.py"
+        content = main_py.read_text(encoding="utf-8")
+        # lifespan 函数体内必须调 _recover_orphan_bridge_runs
+        import re
+        m = re.search(r"async def lifespan\(.*?\):(.*?)(?=\nasync def |def |class |\Z)", content, re.DOTALL)
+        assert m, "找不到 lifespan 函数"
+        body = m.group(1)
+        assert "_recover_orphan_bridge_runs()" in body, (
+            "lifespan handler 必须调 _recover_orphan_bridge_runs()"
+        )
+
+    def test_recovery_marks_orphan_runs_failed(self):
+        """直接调 _recover_orphan_bridge_runs 验证：orphan 行被标 failed。"""
+        from datetime import datetime
+        from app.main import _recover_orphan_bridge_runs
+        from app.database import SessionLocal
+        from app.models import BridgeRun
+
+        # 准备：插一条 orphan running 行（finished_at IS NULL）
+        db = SessionLocal()
+        try:
+            test_run = BridgeRun(
+                project_id="test-orphan-recovery",
+                command="run",
+                status="running",
+                started_at=datetime.utcnow(),
+                finished_at=None,
+            )
+            db.add(test_run)
+            db.commit()
+            test_run_id = test_run.id
+        finally:
+            db.close()
+
+        # 调 cleanup
+        recovered = _recover_orphan_bridge_runs()
+        assert recovered >= 1, f"应至少清理 1 条 orphan，实际 {recovered}"
+
+        # 验证：状态变成 failed，finished_at 有值
+        db = SessionLocal()
+        try:
+            run = db.get(BridgeRun, test_run_id)
+            assert run is not None
+            assert run.status == "failed", (
+                f"orphan run 状态应改为 failed，实际 {run.status}"
+            )
+            assert run.finished_at is not None, (
+                "orphan run 应写入 finished_at"
+            )
+        finally:
+            # 清理测试数据
+            db.delete(run)
+            db.commit()
+            db.close()
+
+    def test_cors_uses_env_or_default(self):
+        """CORS 必须从 env 读 ALLOWED_ORIGINS，不能硬编码 *。"""
+        from pathlib import Path
+        main_py = Path(__file__).resolve().parents[2] / "backend" / "main.py" if False else (
+            Path(__file__).resolve().parents[2] / "backend" / "app" / "main.py"
+        )
+        content = main_py.read_text(encoding="utf-8")
+        assert 'allow_origins=["*"]' not in content, (
+            "backend/app/main.py CORS 还硬编码 * — 部署前必须收紧"
+        )
+        assert "ALLOWED_ORIGINS" in content, (
+            "backend/app/main.py 必须从 env 读 ALLOWED_ORIGINS"
+        )
+
+
+# ───────────────────────────────────────────
+# Y: reports.py 路径统一（与 engine 一致走 NOVEL_AI_DIR env）
+# ───────────────────────────────────────────
+class TestReportsPathUnified:
+    """历史背景（独立审查标记）：
+      engine 写到 NOVEL_AI_DIR env 路径（与 binding.novel_ai_dir 等价时是
+      novel_AI/output/，否则是 backend/data/engine/output/）。
+      reports.py 之前硬编码 novel_ai_dir/output/ → engine 写到 env 路径时
+      reports 读不到 → status 显示陈旧或 not_initialized。
+
+    修复：reports.py 的 _state_path / _chapters_dir / _budget_log_path
+    优先用 NOVEL_AI_DIR env，fallback 到参数。
+    """
+
+    def test_reports_uses_env_novel_ai_dir(self):
+        """reports.py 解析路径时必须读 NOVEL_AI_DIR env。"""
+        from pathlib import Path
+        reports_py = (
+            Path(__file__).resolve().parents[2]
+            / "backend" / "app" / "bridge" / "reports.py"
+        )
+        content = reports_py.read_text(encoding="utf-8")
+        assert "NOVEL_AI_DIR" in content, (
+            "reports.py 必须读 NOVEL_AI_DIR env（与 engine 路径解析对齐）"
+        )
+
+    def test_reports_state_path_with_env(self, monkeypatch, tmp_path):
+        """设置 NOVEL_AI_DIR 后，_state_path 必须解析到 env 路径。"""
+        env_dir = str(tmp_path / "novel_ai_env")
+        Path(env_dir, "output").mkdir(parents=True)
+        monkeypatch.setenv("NOVEL_AI_DIR", env_dir)
+
+        # 强制重读 reports（monkeypatch.setenv 必须在 import 之后）
+        from app.bridge.reports import _state_path
+        result = _state_path("/some/other/path")
+        assert str(result) == str(Path(env_dir) / "output" / "orchestrator_state.json"), (
+            f"_state_path 没走 NOVEL_AI_DIR env：{result}"
+        )
+
+    def test_reports_state_path_fallback_without_env(self, monkeypatch):
+        """NOVEL_AI_DIR 没设置时，_state_path 必须 fallback 到参数。"""
+        monkeypatch.delenv("NOVEL_AI_DIR", raising=False)
+        from app.bridge.reports import _state_path
+        result = _state_path("/some/dir")
+        expected = str(Path("/some/dir") / "output" / "orchestrator_state.json")
+        assert str(result) == expected, (
+            f"_state_path fallback 失败：{result}（期望 {expected}）"
+        )
+
+
+# ───────────────────────────────────────────
+# Z: Provider API Key 加密（明文不入库）
+# ───────────────────────────────────────────
+class TestProviderApiKeyEncrypted:
+    """历史背景（独立审查标记的高危点）：
+      Provider.api_key 之前是 Column(String, nullable=False) 明文存 SQLite。
+      数据库文件泄漏 = 全部供应商 key 直接曝光。
+      部署前必修，不是"以后再说"。
+
+    本轮修复：
+      - 新字段 api_key_encrypted（Fernet ciphertext）+ api_key_suffix（明文后 4 位）
+      - providers.py 写时 encrypt_api_key，读时通过 ProviderOut 不暴露明文
+      - 前端只看到 api_key_set=true + api_key_suffix="xxxx"
+    """
+
+    def test_provider_model_has_no_plaintext_api_key_column(self):
+        """Provider model 必须没有 api_key 明文字段（已被 api_key_encrypted 替换）。"""
+        from app.models import Provider
+        columns = {c.name for c in Provider.__table__.columns}
+        assert "api_key" not in columns, (
+            "Provider model 还保留明文 api_key 列 — 高危！数据库泄漏 = 全部 key 曝光"
+        )
+        assert "api_key_encrypted" in columns, (
+            "Provider model 缺 api_key_encrypted 列（应存 Fernet ciphertext）"
+        )
+        assert "api_key_suffix" in columns, (
+            "Provider model 缺 api_key_suffix 列（UI 显示用后 4 位）"
+        )
+
+    def test_provider_out_does_not_expose_plaintext_key(self):
+        """ProviderOut schema 不能有 api_key 明文字段。"""
+        from app.schemas import ProviderOut
+        fields = ProviderOut.model_fields
+        assert "api_key" not in fields, (
+            "ProviderOut schema 不能有 api_key 明文字段（会泄漏到前端）"
+        )
+        assert "api_key_suffix" in fields, (
+            "ProviderOut schema 缺 api_key_suffix（前端无法显示后 4 位）"
+        )
+        assert "api_key_set" in fields, (
+            "ProviderOut schema 缺 api_key_set（前端无法判断是否已配置）"
+        )
+
+    def test_encrypt_decrypt_roundtrip(self):
+        """encrypt → decrypt 必须能还原明文。"""
+        from app.security import encrypt_api_key, decrypt_api_key, get_master_key
+        import os, base64, secrets
+        # 测试用稳定 key（避免 get_master_key 拿到临时 key）
+        os.environ["MASTER_KEY"] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+        plain = "sk-test-1234567890abcdef"
+        encrypted = encrypt_api_key(plain)
+        assert encrypted != plain, "ciphertext 必须 != 明文"
+        assert decrypt_api_key(encrypted) == plain, "decrypt 必须还原明文"
+
+    def test_ciphertext_not_equal_plaintext(self):
+        """两次加密同一明文 → ciphertext 必须不同（Fernet 每次随机 IV）。"""
+        import os, base64, secrets
+        os.environ["MASTER_KEY"] = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+        from app.security import encrypt_api_key
+        plain = "sk-test-fixed-plaintext"
+        c1 = encrypt_api_key(plain)
+        c2 = encrypt_api_key(plain)
+        assert c1 != c2, "两次同明文必须出不同 ciphertext（防止重放攻击）"
+
+    def test_api_key_suffix_returns_last_4(self):
+        """key_suffix 返回明文后 4 位（UI 显示用）。"""
+        from app.security import key_suffix
+        assert key_suffix("sk-test-1234567890abcdef") == "cdef"
+        assert key_suffix("") == ""
+
+    def test_create_provider_does_not_store_plaintext(self, monkeypatch):
+        """create_provider API 调用后，DB 里必须没有明文 api_key。"""
+        import os, base64, secrets
+        monkeypatch.setenv("MASTER_KEY", base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())
+        from app.database import SessionLocal
+        from app.models import Provider
+        from app.api.providers import create_provider
+        from app.schemas import ProviderCreate
+
+        plain_key = "sk-test-must-not-be-stored-plaintext-12345"
+        db = SessionLocal()
+        try:
+            payload = ProviderCreate(
+                name="test-encryption",
+                provider_type="anthropic",
+                api_key=plain_key,
+                default_model="claude-test",
+            )
+            out = create_provider(payload, db)  # 返回 ProviderOut
+            # 1. out 不能含 api_key 明文字段
+            out_dict = out.model_dump()
+            assert "api_key" not in out_dict, (
+                "ProviderOut 响应包含 api_key 明文字段 — 高危！"
+            )
+            assert out_dict["api_key_set"] is True
+            assert out_dict["api_key_suffix"] == plain_key[-4:], (
+                f"api_key_suffix 应为明文后 4 位 {plain_key[-4:]!r}，"
+                f"实际 {out_dict['api_key_suffix']!r}"
+            )
+            test_id = out.id
+            # 2. 直接查 DB（绕过 pydantic）确认存的是 ciphertext
+            row = db.get(Provider, test_id)
+            assert plain_key not in (row.api_key_encrypted or ""), (
+                "DB api_key_encrypted 字段包含明文 — 高危！"
+            )
+            assert row.api_key_encrypted.startswith("gAAAAA"), (
+                f"api_key_encrypted 应为 Fernet ciphertext（gAAAAA 开头），"
+                f"实际 {row.api_key_encrypted[:20]!r}"
+            )
+        finally:
+            if 'test_id' in locals():
+                p = db.get(Provider, test_id)
+                if p:
+                    db.delete(p)
+                    db.commit()
+            db.close()
+
+    def test_provider_out_response_no_plaintext(self, monkeypatch):
+        """API 返回的 ProviderOut 不能包含明文 api_key。"""
+        import os, base64, secrets
+        monkeypatch.setenv("MASTER_KEY", base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())
+        from app.database import SessionLocal
+        from app.models import Provider
+        from app.api.providers import create_provider, _to_out
+        from app.schemas import ProviderCreate
+
+        plain_key = "sk-leak-test-secret-key-9999"
+        db = SessionLocal()
+        try:
+            payload = ProviderCreate(
+                name="test-leak",
+                provider_type="anthropic",
+                api_key=plain_key,
+                default_model="claude-test",
+            )
+            provider = create_provider(payload, db)  # 返回 ProviderOut
+            # _to_out 既支持 ORM 也支持 ProviderOut
+            out = _to_out(provider)
+            out_dict = out.model_dump()
+            assert "api_key" not in out_dict, (
+                "ProviderOut 响应包含 api_key 明文字段 — 高危！"
+            )
+            assert out_dict["api_key_set"] is True
+            assert out_dict["api_key_suffix"] == plain_key[-4:]
+            # 完整明文也不能出现在任何字段值里
+            for k, v in out_dict.items():
+                if isinstance(v, str):
+                    assert plain_key not in v, (
+                        f"明文 api_key 泄漏到 {k!r} 字段值：{v!r}"
+                    )
+            test_id = out.id
+        finally:
+            if 'test_id' in locals():
+                p = db.get(Provider, test_id)
+                if p:
+                    db.delete(p)
+                    db.commit()
+            db.close()
+
 
 # ───────────────────────────────────────────
 # K: parse_llm_json_response 必须做类型保护（防止 tracker 类 bug 复发）
@@ -1205,12 +1669,18 @@ class TestStatePathFromBinding:
             importlib.reload(graph_mod)
 
     def test_bridge_run_injects_novel_ai_dir(self):
-        """app/api/bridge.py 的 _run_bridge_async 必须从 binding 注入 NOVEL_AI_DIR。"""
+        """app/api/bridge.py 的 _spawn_engine_subprocess 必须从 binding 注入 NOVEL_AI_DIR。
+
+        历史背景：commit 62baf44 把 in-process _run_bridge_async 切到 subprocess
+        _spawn_engine_subprocess。这个 test 也跟着迁移（之前的版本测
+        _run_bridge_async 源码里有 NOVEL_AI_DIR + binding 读，现在测的是
+        subprocess 路径）。
+        """
         import inspect
         from app.api import bridge as bridge_mod
-        src = inspect.getsource(bridge_mod._run_bridge_async)
+        src = inspect.getsource(bridge_mod._spawn_engine_subprocess)
         assert "NOVEL_AI_DIR" in src, (
-            "bridge._run_bridge_async 必须注入 NOVEL_AI_DIR env，"
+            "_spawn_engine_subprocess 必须注入 NOVEL_AI_DIR env，"
             "否则 engine STATE_PATH 跟 binding 不一致（双重真相 bug）"
         )
         assert "NovelAIBinding" in src and "novel_ai_dir" in src, (
