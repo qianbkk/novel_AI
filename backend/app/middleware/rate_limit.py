@@ -11,12 +11,19 @@
   - 默认 60 次/分钟/IP（每写端点独立计数）
   - 通过 env RATE_LIMIT_PER_MINUTE 调（生产建议调到 10-20）
 
+反代部署的安全：
+  - X-Forwarded-For 默认不可信（攻击者可伪造任意 IP 绕过限流）
+  - 通过 env ALLOWED_PROXIES 配置反代 IP 白名单（逗号分隔 CIDR/IP）
+  - 仅当直接连接 IP 在白名单内才用 X-Forwarded-For 第一段
+  - 直接暴露 uvicorn 时不要配 ALLOWED_PROXIES → 自动用 request.client.host
+
 注意：
   - 中间件用 dict 存每 IP 的窗口，时间复杂度 O(1) 摊销
   - 测试时设 RATE_LIMIT_PER_MINUTE=10000 避免误命中
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 import threading
 import time
@@ -30,6 +37,41 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from ..logging_setup import get_logger
 
 log = get_logger("novel_ai.rate_limit")
+
+
+def _parse_allowed_proxies() -> list[ipaddress.IPv4Network | ipaddress.IPv6Network]:
+    """从 env 解析反代 IP 白名单（逗号分隔）。
+
+    支持：
+      - 单个 IP：127.0.0.1
+      - CIDR：10.0.0.0/8
+    未配 / 解析失败 → 返回空列表（所有反代 IP 都不信任 → fallback 到 request.client.host）
+    """
+    env = os.environ.get("ALLOWED_PROXIES", "").strip()
+    if not env:
+        return []
+    out = []
+    for token in env.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            # ip_network 接受 "127.0.0.1" 和 "127.0.0.0/24"
+            out.append(ipaddress.ip_network(token, strict=False))
+        except ValueError:
+            log.warning("ALLOWED_PROXIES 含无效 IP/CIDR：%r（跳过）", token)
+    return out
+
+
+def _ip_in_allowed_list(ip_str: str, allowed: list) -> bool:
+    """检查 ip_str 是否在任一 allowed network 内。"""
+    if not allowed:
+        return False
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    return any(ip in net for net in allowed)
 
 
 def _is_write_endpoint(path: str) -> bool:
@@ -111,7 +153,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
       - X-RateLimit-Limit: 总配额
       - X-RateLimit-Remaining: 当前窗口剩余
       - Retry-After: 被限流时距离下次可用的秒数
+
+    反代部署必须设 ALLOWED_PROXIES（逗号分隔 IP/CIDR），否则 X-Forwarded-For
+    不可信，攻击者能伪造 IP 绕过限流。
     """
+
+    # 模块级缓存反代白名单（避免每个请求都重新解析 env）
+    _allowed_proxies: list | None = None
+
+    @classmethod
+    def _get_allowed_proxies(cls) -> list:
+        if cls._allowed_proxies is None:
+            cls._allowed_proxies = _parse_allowed_proxies()
+        return cls._allowed_proxies
 
     async def dispatch(self, request: Request, call_next):
         path = request.url.path
@@ -121,10 +175,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if method in ("GET", "HEAD", "OPTIONS") or not _is_write_endpoint(path):
             return await call_next(request)
 
-        # 拿 IP（考虑 X-Forwarded-For，反代场景）
-        ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (
-            request.client.host if request.client else "unknown"
-        )
+        # 拿真实客户端 IP：
+        # - 直接连接 uvicorn：request.client.host 唯一可信源
+        # - 反代：request.client.host 是反代 IP，必须在 ALLOWED_PROXIES 才信任 XFF
+        direct_ip = request.client.host if request.client else "unknown"
+        allowed = self._get_allowed_proxies()
+        if allowed and _ip_in_allowed_list(direct_ip, allowed):
+            # 反代在白名单内 → 信任 XFF 第一段
+            xff = request.headers.get("x-forwarded-for", "")
+            ip = xff.split(",")[0].strip() or direct_ip
+        else:
+            # 直接连接 或 反代不在白名单 → 用 direct IP（不信任 XFF）
+            ip = direct_ip
 
         if not _limiter.is_allowed(ip):
             log.warning("rate limit hit: ip=%s path=%s method=%s", ip, path, method)

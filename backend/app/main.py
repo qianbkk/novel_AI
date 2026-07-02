@@ -21,6 +21,39 @@ Base.metadata.create_all(bind=engine)
 from .migrations import run_migrations
 
 
+def _check_master_key_in_production() -> None:
+    """生产模式下强制要求 MASTER_KEY 已设置。
+
+    历史背景（独立审查 + 本轮深度审计标记的高危点）：
+      security.py 在 MASTER_KEY 未设时临时生成一个 + 警告，继续运行。
+      这在 dev 模式 OK，但生产部署忘设 MASTER_KEY → 后端启动 + Provider
+      写入 api_key_encrypted 成功 → **重启后无法解密**（临时 key 丢失）。
+      数据永久不可逆损坏。
+
+    修法：通过 env NOVEL_PRODUCTION=1 标记生产环境，启动时显式检查。
+    dev 模式（默认）保持原行为：warn 但继续运行，方便本地开发。
+    """
+    if os.environ.get("NOVEL_PRODUCTION") != "1":
+        return  # dev / test 模式不强制
+    from .security import get_master_key
+    try:
+        get_master_key()
+        # 成功读到了 — 但要确认不是临时生成的（warning log）
+        # 检查 env 是否真设了 MASTER_KEY
+        if not os.environ.get("MASTER_KEY", "").strip():
+            raise RuntimeError(
+                "PRODUCTION 模式下必须设置 MASTER_KEY 环境变量。\n"
+                "  生成：python -m scripts.generate_master_key\n"
+                "  设置：export MASTER_KEY='<44 字符 base64-urlsafe>'\n"
+                "  否则重启后已加密的 Provider.api_key 无法解密 → 数据损坏"
+            )
+    except RuntimeError as e:
+        # 真设了但解码失败 / 真没设但 get_master_key 走到 fallback
+        if "MASTER_KEY" in str(e):
+            raise
+        raise RuntimeError(str(e)) from e
+
+
 def _recover_orphan_bridge_runs() -> int:
     """启动时清理孤儿 BridgeRun。
 
@@ -60,12 +93,14 @@ def _recover_orphan_bridge_runs() -> int:
 async def lifespan(app: FastAPI):
     """FastAPI lifespan handler（替代已 deprecated 的 startup/shutdown 装饰器）。
 
-    启动时同时做三件事：
+    启动时同时做四件事：
+      0. _check_master_key_in_production — 生产模式强制 MASTER_KEY 已设
       1. run_migrations — 给已存在的表加新列（schema 演进）
       2. seed_role_assignments — 初始化 15 个写作角色
       3. _recover_orphan_bridge_runs — 清理上一轮崩溃遗留的孤儿 running 行
     """
-    log.info("startup: migrations + seed_role_assignments + recover_orphan_bridge_runs begin")
+    log.info("startup: master_key_check + migrations + seed_role_assignments + recover_orphan_bridge_runs begin")
+    _check_master_key_in_production()  # 生产模式 fail-fast（在 run_migrations 前）
     applied = run_migrations()
     db = SessionLocal()
     try:

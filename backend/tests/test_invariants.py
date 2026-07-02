@@ -1322,6 +1322,33 @@ class TestRateLimitMiddleware:
                 max_per_minute=10000  # 测试环境高阈值
             )
 
+    def test_allowed_proxies_parsing(self):
+        """ALLOWED_PROXIES env 解析：单个 IP + CIDR + 无效值跳过。"""
+        from app.middleware.rate_limit import _parse_allowed_proxies, RateLimitMiddleware
+        # 重置缓存
+        RateLimitMiddleware._allowed_proxies = None
+        # 单个 IP
+        import os
+        os.environ["ALLOWED_PROXIES"] = "127.0.0.1,10.0.0.0/8,invalid_ip"
+        nets = _parse_allowed_proxies()
+        # invalid_ip 应被跳过
+        assert len(nets) == 2, f"应解析 2 个有效 IP/CIDR（跳过 invalid），实际 {len(nets)}"
+        os.environ.pop("ALLOWED_PROXIES", None)
+        RateLimitMiddleware._allowed_proxies = None
+
+    def test_ip_in_allowed_list_check(self):
+        """_ip_in_allowed_list 正确判断 IP 是否在白名单。"""
+        from app.middleware.rate_limit import _ip_in_allowed_list
+        import ipaddress
+        nets = [ipaddress.ip_network("127.0.0.0/8"), ipaddress.ip_network("10.0.0.0/8")]
+        assert _ip_in_allowed_list("127.0.0.1", nets)
+        assert _ip_in_allowed_list("10.5.6.7", nets)
+        assert not _ip_in_allowed_list("8.8.8.8", nets)
+        # 无效 IP 字符串
+        assert not _ip_in_allowed_list("not_an_ip", nets)
+        # 空白名单
+        assert not _ip_in_allowed_list("127.0.0.1", [])
+
 
 # ───────────────────────────────────────────
 # JJ: Mock provider 端到端（LLMRouter 真实构造路径）
