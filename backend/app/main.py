@@ -154,4 +154,29 @@ app.include_router(ai_assist.router)
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """健康检查：除了返回 status=ok，还验证 DB 可达。
+
+    为什么要加 DB ping：
+      - 之前 /health 永远返回 ok（不管 DB 是否锁、磁盘满、migration 失败）
+      - k8s livenessProbe / readinessProbe 拿到 ok 会继续发流量
+      - 实际后端挂但 health 还绿 → 用户请求全 5xx 但监控看不见
+
+    返回结构：
+      - 200 OK: {"status": "ok", "db": "ok"}
+      - 503 Service Unavailable: {"status": "degraded", "db": "error", "detail": "..."}
+    """
+    from .database import SessionLocal
+    from sqlalchemy import text
+    db = SessionLocal()
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "ok", "db": "ok"}
+    except Exception as e:
+        log.warning("/health DB ping failed: %s", e)
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            status_code=503,
+            content={"status": "degraded", "db": "error", "detail": str(e)[:200]},
+        )
+    finally:
+        db.close()

@@ -2330,3 +2330,56 @@ class TestAcceptanceTestsCovered:
         )
         # 项目当前数据不全 → 至少 AC-2 应该 PASS，其他可能 SKIP
         # 我们不强求 5/5 PASS（数据依赖），但 True/False 边界要对
+
+
+# ───────────────────────────────────────────
+# MM: /health 端点必须真 ping DB（不能永远返回 ok）
+# ───────────────────────────────────────────
+class TestHealthEndpointDBCheck:
+    """历史背景（迭代 #8）：
+      /health 之前永远返回 {"status": "ok"}，不管 DB 是否锁 / 磁盘满 /
+      migration 失败。k8s livenessProbe / readinessProbe 拿到 ok 后会继续
+      发流量，实际后端挂但监控看不见。
+
+      修法：/health 必须真执行 SELECT 1（验证 DB session 可用）。
+    """
+
+    def test_health_returns_db_ok_when_db_works(self):
+        """DB 可用时 /health 返回 200 + db: ok。"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        client = TestClient(app)
+        r = client.get("/health")
+        assert r.status_code == 200, f"/health 期望 200，实际 {r.status_code}"
+        body = r.json()
+        assert body["status"] == "ok"
+        assert body.get("db") == "ok", (
+            f"/health 响应必须含 db 字段：{body}"
+        )
+
+    def test_health_returns_503_when_db_fails(self, monkeypatch):
+        """DB 不可达时 /health 返回 503 + status: degraded。"""
+        from fastapi.testclient import TestClient
+        from app import database as db_mod
+        from app import main as main_mod
+
+        class FakeSession:
+            def execute(self, *args, **kwargs):
+                raise RuntimeError("DB lock acquired")
+            def close(self):
+                pass
+        monkeypatch.setattr(db_mod, "SessionLocal", lambda: FakeSession())
+        monkeypatch.setattr(main_mod, "SessionLocal", lambda: FakeSession())
+
+        from app.main import app as _app
+        client = TestClient(_app)
+        r = client.get("/health")
+        assert r.status_code == 503, (
+            f"DB 故障时 /health 应返回 503，实际 {r.status_code}"
+        )
+        body = r.json()
+        assert body["status"] == "degraded"
+        assert body["db"] == "error"
+        assert "DB lock" in body.get("detail", ""), (
+            f"detail 应含错误信息：{body}"
+        )
