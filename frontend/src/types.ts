@@ -148,8 +148,14 @@ export interface BridgeRun {
   id: string;
   project_id: string;
   command: string;
+  args_json?: Record<string, unknown> | unknown[] | null;
   status: "pending" | "running" | "done" | "failed";
   exit_code: number | null;
+  // SSE 断了也能查的兜底字段（commit 62baf44 subprocess 后由主进程定期 flush 到 DB）
+  stdout_text?: string | null;
+  // ISO datetime 字符串
+  started_at: string;
+  finished_at: string | null;
   outline_mode?: string;  // batch | card | talk
 }
 
@@ -240,7 +246,9 @@ export interface ChapterFull {
   chapter_no: number;
   title: string | null;
   content: string;
-  created_at: string;
+  // 后端 schema 允许 None（历史数据兼容：raw SQL / _force_reimport 覆盖写入的
+  // 旧行 created_at 可能为 null），前端用 string | null 跟 schema 对齐。
+  created_at: string | null;
   characters: ChapterCharacter[];
 }
 
