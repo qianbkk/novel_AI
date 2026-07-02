@@ -8,6 +8,7 @@ from .database import Base, SessionLocal, engine
 from .api import bridge, chapters, projects, providers, role_assignments, worldbuild, rules, foreshadowings, ai_assist
 from .api.role_assignments import seed_role_assignments
 from .logging_setup import configure_root, get_logger
+from .middleware.rate_limit import RateLimitMiddleware
 
 configure_root()
 log = get_logger("novel_ai.main")
@@ -101,6 +102,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# 速率限制中间件：仅写端点限速（防刷 /bridge/run 触发昂贵 LLM 调用）
+# 通过 env RATE_LIMIT_PER_MINUTE 调整阈值（默认 60）
+app.add_middleware(RateLimitMiddleware)
 
 app.include_router(projects.router)
 app.include_router(worldbuild.router)

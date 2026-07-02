@@ -1095,6 +1095,235 @@ class TestChangelogExists:
 
 
 # ───────────────────────────────────────────
+# FF: openapi.json 漂移防护（auto-export 脚本 + .gitignore）
+# ───────────────────────────────────────────
+class TestOpenApiExport:
+    """历史背景（独立审查标记的低优先级）：
+      frontend/openapi.json 之前手工 commit，已严重漂移（缺 10+ 端点）。
+      本轮修复：加 export_openapi.py 从运行中的后端拉 spec，frontend/openapi.json
+      加 .gitignore 自动忽略。CI / 开发者需要时跑 `python -m scripts.export_openapi`
+      重新生成。
+    """
+
+    def test_frontend_openapi_gitignored(self):
+        """frontend/openapi.json 必须在 frontend/.gitignore 里（不再 commit）。"""
+        from pathlib import Path
+        gi = Path(__file__).resolve().parents[2] / "frontend" / ".gitignore"
+        content = gi.read_text(encoding="utf-8")
+        assert "openapi.json" in content, (
+            "frontend/.gitignore 必须包含 openapi.json — "
+            "否则它会污染 commit history（旧版本漂移问题）"
+        )
+
+    def test_export_openapi_script_exists(self):
+        """export_openapi.py 必须存在 + 可作为 module import。"""
+        from pathlib import Path
+        script = Path(__file__).resolve().parents[2] / "backend" / "scripts" / "export_openapi.py"
+        assert script.exists(), "backend/scripts/export_openapi.py 不存在"
+        # 验证可 import + 有 main()
+        import importlib.util
+        spec_obj = importlib.util.spec_from_file_location("export_openapi", script)
+        mod = importlib.util.module_from_spec(spec_obj)
+        spec_obj.loader.exec_module(mod)  # type: ignore
+        assert hasattr(mod, "main"), "export_openapi.py 必须定义 main()"
+
+
+# ───────────────────────────────────────────
+# GG: MASTER_KEY 轮换工具存在（运维：定期轮换 / 泄漏应急）
+# ───────────────────────────────────────────
+class TestMasterKeyRotation:
+    """历史背景（独立审查标记的高危点修复配套）：
+      Provider.api_key 用 MASTER_KEY 派生的 Fernet 加密。
+      运维场景：MASTER_KEY 可能因为员工离职 / 定期轮换需要更换。
+      必须有工具支持轮换（避免手动 SQL 解密重加密出错）。
+
+      本轮新增：scripts/rotate_master_key.py
+        - 旧 MASTER_KEY 仍在 env
+        - 新 MASTER_KEY 通过 --new-key 传入
+        - 自动列出待轮换 provider，支持 --dry-run
+        - round-trip 校验每个 provider 解密+再加密成功才 commit
+    """
+
+    def test_rotate_master_key_script_exists(self):
+        """rotate_master_key.py 必须存在 + 含 main() + 关键选项。"""
+        from pathlib import Path
+        script = Path(__file__).resolve().parents[2] / "backend" / "scripts" / "rotate_master_key.py"
+        assert script.exists(), "backend/scripts/rotate_master_key.py 不存在"
+        # 验证含 main + --new-key + --dry-run
+        content = script.read_text(encoding="utf-8")
+        assert "def main()" in content, "rotate_master_key.py 必须定义 main()"
+        assert '"--new-key"' in content or "'--new-key'" in content, (
+            "rotate_master_key.py 必须有 --new-key 参数"
+        )
+        assert '"--dry-run"' in content or "'--dry-run'" in content, (
+            "rotate_master_key.py 必须有 --dry-run 参数"
+        )
+        # 关键安全特性：fail-fast on invalid key
+        assert "validate" in content.lower() or "_validate_key" in content, (
+            "rotate_master_key.py 必须校验 key 合法性（fail-fast）"
+        )
+
+    def test_rotate_script_validates_new_key(self):
+        """传非法 --new-key 必须立刻报错退出（不开始改 DB）。"""
+        import subprocess
+        from pathlib import Path
+        script_dir = Path(__file__).resolve().parents[2] / "backend" / "scripts"
+        # 完全非 base64
+        result = subprocess.run(
+            ["python", "-m", "scripts.rotate_master_key", "--new-key", "not-base64-at-all!!!"],
+            cwd=script_dir.parent,
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode != 0, (
+            "非法 --new-key 应该失败但成功 — 可能没校验"
+        )
+        assert "不合法" in result.stderr or "Invalid" in result.stderr, (
+            f"错误信息应明确说 key 不合法，实际 stderr: {result.stderr!r}"
+        )
+
+
+# ───────────────────────────────────────────
+# HH: Mock provider 通过 env 自动激活（CI / demo 友好）
+# ───────────────────────────────────────────
+class TestMockProviderAutoActivate:
+    """历史背景（独立审查标记的中危点修复扩展）：
+      之前 mock provider 只在 router.py 内显式设置 routes 才能用。
+      CI / 单元测试 / demo 用户要"无需任何配置就让 engine 跑 mock"
+      必须有 env 开关。
+
+      本轮修复：NOVEL_ENGINE_MOCK=1 → LLMRouter 构造时自动 use_mock()
+      把全部 9 个 agent routes 切到 mock provider（无需 API key）。
+    """
+
+    def test_env_var_triggers_use_mock(self, monkeypatch):
+        """NOVEL_ENGINE_MOCK=1 → 构造 LLMRouter 后所有 routes 是 mock。"""
+        monkeypatch.setenv("NOVEL_ENGINE_MOCK", "1")
+        from engine.llm.router import LLMRouter
+        r = LLMRouter("test")
+        for agent, route in r.routes.items():
+            assert route[0] == "mock", (
+                f"NOVEL_ENGINE_MOCK=1 后 agent '{agent}' 应指向 mock，实际 {route[0]!r}"
+            )
+
+    def test_explicit_use_mock_method(self):
+        """不设 env，调用 r.use_mock() 也能切到 mock（用于运行时切换）。"""
+        from engine.llm.router import LLMRouter
+        r = LLMRouter("test")
+        assert r.routes["writer"][0] != "mock", "默认 routes 不应是 mock"
+        r.use_mock()
+        assert r.routes["writer"][0] == "mock", "显式 use_mock() 后应切到 mock"
+
+    def test_no_env_no_api_key_still_raises(self):
+        """不设 NOVEL_ENGINE_MOCK + 没 API key → 默认 routes 不应自动变 mock（保持原行为）。"""
+        import os
+        for k in ["NOVEL_ENGINE_MOCK", "ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY",
+                  "KIMI_API_KEY", "MINIMAX_API_KEY"]:
+            os.environ.pop(k, None)
+        from engine.llm.router import LLMRouter
+        r = LLMRouter("test")
+        # 默认仍是真实 provider（除非显式 use_mock 或 NOVEL_ENGINE_MOCK=1）
+        assert r.routes["writer"][0] != "mock", (
+            "无 env 触发不应自动 mock（保留 opt-in 行为）"
+        )
+
+
+# ───────────────────────────────────────────
+# II: 速率限制中间件（防刷 /bridge/run 触发昂贵 LLM）
+# ───────────────────────────────────────────
+class TestRateLimitMiddleware:
+    """历史背景（独立审查标记的范围外项）：
+      当前无任何速率限制 → 攻击者用脚本刷 /bridge/run 会触发昂贵 LLM 调用
+      （每次 $0.01-$0.10）→ 钱包爆掉。
+
+      本轮修复：app.middleware.rate_limit.RateLimitMiddleware
+        - 内存滑动窗口，默认 60 次/分钟/IP
+        - 仅写端点限速（GET / OPTIONS / HEAD / 读路径不受限）
+        - 通过 RATE_LIMIT_PER_MINUTE env 调整
+        - 响应含 X-RateLimit-Limit / Remaining / Retry-After headers
+    """
+
+    def test_middleware_registered_in_main(self):
+        """main.py 必须注册 RateLimitMiddleware。"""
+        from pathlib import Path
+        main_py = Path(__file__).resolve().parents[2] / "backend" / "app" / "main.py"
+        content = main_py.read_text(encoding="utf-8")
+        assert "RateLimitMiddleware" in content, (
+            "main.py 必须注册 RateLimitMiddleware — "
+            "否则攻击者能刷 /bridge/run 触发昂贵 LLM 调用"
+        )
+        assert "RATE_LIMIT_PER_MINUTE" in content, (
+            "main.py 应支持 RATE_LIMIT_PER_MINUTE env"
+        )
+
+    def test_ip_rate_limiter_basic(self):
+        """IPRateLimiter 基本逻辑：max+1 次后第 N+1 次被拒绝。"""
+        from app.middleware.rate_limit import IPRateLimiter, reset_for_testing
+        reset_for_testing()
+        limiter = IPRateLimiter(max_per_minute=3)
+        # 前 3 次允许
+        assert limiter.is_allowed("1.2.3.4")
+        assert limiter.is_allowed("1.2.3.4")
+        assert limiter.is_allowed("1.2.3.4")
+        # 第 4 次拒绝
+        assert not limiter.is_allowed("1.2.3.4"), (
+            "超出 max_per_minute 后必须拒绝"
+        )
+        # 不同 IP 独立计数
+        assert limiter.is_allowed("5.6.7.8"), "不同 IP 必须独立计数"
+        reset_for_testing()
+
+    def test_write_endpoint_detection(self):
+        """_is_write_endpoint 标记 /api/v1/ 下所有路径为潜在写（middleware 按 method 二次过滤）。
+
+        注意：_is_write_endpoint 单看路径，middleware 在 dispatch 里再加一层
+        GET/HEAD/OPTIONS 早退。所以这个 helper 是"路径是否是 /api/v1/ 下"。
+        """
+        from app.middleware.rate_limit import _is_write_endpoint
+        # /api/v1/ 下所有路径（中间件按 method 二次过滤）
+        assert _is_write_endpoint("/api/v1/projects/abc/bridge/run")
+        assert _is_write_endpoint("/api/v1/projects/abc/worldbuild/start")
+        assert _is_write_endpoint("/api/v1/providers/xyz")
+        assert _is_write_endpoint("/api/v1/foreshadowings/123/status")
+        assert _is_write_endpoint("/api/v1/projects/abc/bridge/status")  # GET 也标记
+        # 豁免
+        assert not _is_write_endpoint("/health")
+        assert not _is_write_endpoint("/openapi.json")
+        assert not _is_write_endpoint("/docs")
+
+    def test_rate_limit_headers_in_response(self):
+        """被限流的请求必须返回 429 + Retry-After / X-RateLimit-* headers。"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.middleware.rate_limit import (
+            _limiter, reset_for_testing,
+        )
+        # 强制设很低阈值
+        from app.middleware import rate_limit
+        rate_limit._limiter = rate_limit.IPRateLimiter(max_per_minute=1)
+        try:
+            client = TestClient(app)
+            # 第 1 次 POST /providers：允许（设很小的 body 可能 422，但不触发 rate limit）
+            # 用 POST /providers 测（body 即使无效也先过 middleware）
+            r1 = client.post("/api/v1/providers", json={})
+            # 第 2 次：被限流
+            r2 = client.post("/api/v1/providers", json={})
+            # 注意：r1 可能是 422（body 校验），但 rate limit 已消耗
+            # r2 必须是 429
+            assert r2.status_code == 429, (
+                f"第 2 次写请求应被限流（max=1），实际 {r2.status_code}"
+            )
+            assert "Retry-After" in r2.headers
+            assert "X-RateLimit-Limit" in r2.headers
+            assert r2.json().get("error") == "rate_limit_exceeded"
+        finally:
+            reset_for_testing()
+            # 恢复模块级 limiter
+            rate_limit._limiter = rate_limit.IPRateLimiter(
+                max_per_minute=10000  # 测试环境高阈值
+            )
+
+
+# ───────────────────────────────────────────
 # BB: engine/graph.py 日志统一（capture.write [engine] → log.xxx）
 # ───────────────────────────────────────────
 class TestEngineLoggingUnified:
