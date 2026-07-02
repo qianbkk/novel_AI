@@ -2719,3 +2719,155 @@ class TestMasterKeyScriptsEndToEnd:
         import pytest
         with pytest.raises(ValueError, match="api_key 解密失败"):
             decrypt_api_key(ciphertext)
+
+
+# ───────────────────────────────────────────
+# RR: rotate_master_key.py 端到端（旧 key 解密 → 新 key 重加密 → round-trip）
+# ───────────────────────────────────────────
+class TestRotateMasterKeyEndToEnd:
+    """迭代 #13：rotate_master_key 真实轮换流程测试。
+
+    之前只测 fail-fast on invalid new key，没测：
+      - 旧 key encrypt 的数据 → 新 key re-encrypt
+      - round-trip：拿新 key 解密应能恢复明文
+      - 多个 provider 同时轮换
+    """
+
+    def _make_provider(self, plain_key: str) -> str:
+        """helper：插一个带 api_key_encrypted 的 provider，返回 id。"""
+        from app.database import SessionLocal
+        from app.models import Provider
+        from app.security import encrypt_api_key, key_suffix
+        import secrets
+        db = SessionLocal()
+        try:
+            p = Provider(
+                id=f"test-rotate-{secrets.token_hex(4)}",
+                name=f"test-{secrets.token_hex(4)}",
+                provider_type="anthropic",
+                api_key_encrypted=encrypt_api_key(plain_key),
+                api_key_suffix=key_suffix(plain_key),
+                default_model="test",
+            )
+            db.add(p)
+            db.commit()
+            return p.id
+        finally:
+            db.close()
+
+    def _cleanup_provider(self, provider_id: str):
+        from app.database import SessionLocal
+        from app.models import Provider
+        db = SessionLocal()
+        try:
+            p = db.get(Provider, provider_id)
+            if p:
+                db.delete(p)
+                db.commit()
+        finally:
+            db.close()
+
+    def test_rotate_single_provider_end_to_end(self, monkeypatch):
+        """旧 MASTER_KEY 加密的 Provider → rotate 后用新 key 仍能 decrypt。"""
+        import os, base64, secrets
+        from app.security import decrypt_api_key
+        from pathlib import Path
+        import importlib.util
+
+        # 1. 设旧 MASTER_KEY（脚本会读 os.environ 拿旧 key）
+        old_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+        monkeypatch.setenv("MASTER_KEY", old_key)
+
+        # 2. 插一条 Provider（旧 key 加密的）
+        plain = "sk-real-plaintext-for-rotation"
+        provider_id = self._make_provider(plain)
+        try:
+            # 3. 加载脚本 + 调 rotate 函数（不通过 subprocess，monkeypatch 才能控）
+            backend_root = Path(__file__).resolve().parents[1]
+            spec = importlib.util.spec_from_file_location(
+                "rotate_under_test",
+                backend_root / "scripts" / "rotate_master_key.py",
+            )
+            mod = importlib.util.module_from_spec(spec)
+            # 不调 spec.loader.exec_module（会跑 main / argparse）
+            # 直接 import 模块体
+            import sys
+            sys.modules["rotate_under_test"] = mod
+            with open(backend_root / "scripts" / "rotate_master_key.py", encoding="utf-8") as f:
+                code = f.read()
+            exec(compile(code, str(backend_root / "scripts" / "rotate_master_key.py"), "exec"), mod.__dict__)
+
+            # 4. 轮换
+            new_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+            import sys as _sys, builtins
+            _sys.argv = ["rotate", "--new-key", new_key]
+            # 脚本要求"按 Enter 继续"确认备份，monkeypatch 让它自动继续
+            monkeypatch.setattr(builtins, "input", lambda prompt="": "")
+            rc = mod.main()
+            assert rc == 0, f"rotate_master_key.main 返回 {rc}"
+
+            # 5. 切到新 MASTER_KEY，解密必须能拿到原明文
+            monkeypatch.setenv("MASTER_KEY", new_key)
+            from app.database import SessionLocal
+            from app.models import Provider
+            db = SessionLocal()
+            try:
+                p = db.get(Provider, provider_id)
+                assert p is not None
+                decrypted = decrypt_api_key(p.api_key_encrypted)
+                assert decrypted == plain, (
+                    f"rotate 后解密应得原明文：got {decrypted!r}, expected {plain!r}"
+                )
+            finally:
+                db.close()
+        finally:
+            self._cleanup_provider(provider_id)
+
+    def test_rotate_dry_run_does_not_modify_db(self, monkeypatch):
+        """--dry-run 模式：列出 provider 但不实际改 DB。"""
+        import os, base64, secrets
+        from app.security import decrypt_api_key
+        from pathlib import Path
+        import importlib.util
+
+        old_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+        monkeypatch.setenv("MASTER_KEY", old_key)
+
+        plain = "sk-dryrun-test"
+        provider_id = self._make_provider(plain)
+        try:
+            backend_root = Path(__file__).resolve().parents[1]
+            spec = importlib.util.spec_from_file_location(
+                "rotate_dry",
+                backend_root / "scripts" / "rotate_master_key.py",
+            )
+            mod = importlib.util.module_from_spec(spec)
+            import sys
+            sys.modules["rotate_dry"] = mod
+            with open(backend_root / "scripts" / "rotate_master_key.py", encoding="utf-8") as f:
+                code = f.read()
+            exec(compile(code, str(backend_root / "scripts" / "rotate_master_key.py"), "exec"), mod.__dict__)
+
+            new_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+            import sys as _sys
+            _sys.argv = ["rotate", "--new-key", new_key, "--dry-run"]
+            rc = mod.main()
+            assert rc == 0
+
+            # 验证 DB 没改：旧 key 仍能解密
+            decrypted = decrypt_api_key(
+                # 旧 key 还在 env，从 DB 拿密文
+                __import__("app.database", fromlist=["SessionLocal"]).SessionLocal().__enter__().__class__
+            ) if False else None  # 简化为直接 DB 读
+            from app.database import SessionLocal
+            from app.models import Provider
+            db = SessionLocal()
+            try:
+                p = db.get(Provider, provider_id)
+                # 旧 key 解密应成功（说明 DB 没改）
+                decrypted = decrypt_api_key(p.api_key_encrypted)
+                assert decrypted == plain, "dry-run 不应修改 DB"
+            finally:
+                db.close()
+        finally:
+            self._cleanup_provider(provider_id)
