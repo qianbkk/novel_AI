@@ -190,7 +190,19 @@ def save_state(state: OrchestratorState, path: str) -> None:
             os.fsync(f.fileno())
         finally:
             _release_lock(f)
-    os.replace(tmp_path, path)
+    # atomic rename（Windows 上并发 rename 可能 WinError 32 — 文件被另一进程锁）
+    # 重试 3 次：第一次失败后等 50ms 让另一边的 msvcrt.locking 释放
+    last_exc = None
+    for attempt in range(3):
+        try:
+            os.replace(tmp_path, path)
+            return
+        except OSError as e:
+            last_exc = e
+            import time
+            time.sleep(0.05 * (attempt + 1))
+    # 3 次都失败：最后一次 raise（不让数据静默丢失）
+    raise last_exc  # type: ignore
 
 
 def load_state(path: str) -> OrchestratorState:
