@@ -1,6 +1,7 @@
 import asyncio
 import json
 from datetime import datetime
+from pathlib import Path
 from queue import Queue
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
@@ -20,6 +21,8 @@ from ..schemas import BridgeRunOut, BridgeRunRequest, NovelAIBindingOut, NovelAI
 log = get_logger("novel_ai.bridge")
 
 router = APIRouter(prefix="/projects/{project_id}/bridge", tags=["bridge"])
+
+BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 
 _run_queues: dict[str, Queue] = {}
 _project_locks: dict[str, asyncio.Lock] = {}
@@ -101,16 +104,114 @@ async def run_bridge(
     db.commit()
     db.refresh(bridge_run)
 
-    # ponytail: run in-process via BackgroundTasks (uvicorn + TestClient 都能正确跟踪)
+    # spawn subprocess 跑 engine（不再是 in-process via BackgroundTasks）
+    # 原因：uvicorn 重启（手动 / --reload）会杀掉 in-process engine；
+    # subprocess 独立于 uvicorn 进程，重启时 in-flight run 不会被打断。
     queue = get_run_queue(bridge_run.id)
-    # outline_mode (batch/card/talk) 透传给 orchestrator
     outline_mode = (payload.outline_mode or "batch").strip().lower()
     background_tasks.add_task(
-        _run_bridge_async,
+        _spawn_engine_subprocess,
         bridge_run.id, project_id, command, payload.args or [],
         queue, outline_mode,
     )
     return bridge_run
+
+
+def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
+                              args: list[str], queue, outline_mode: str = "batch"):
+    """在 subprocess 里跑 engine.run_graph_task。
+
+    之前（in-process）：uvicorn 重启杀掉 engine，in-flight run 中断。
+    现在（subprocess）：engine 在独立 Python 进程里跑，uvicorn 重启不影响。
+
+    stdout pipe → 主进程读 → 转 put 到 SSE queue；同时把 stdout 追加写到
+    BridgeRun.stdout_text 字段（兜底，SSE 断了也能查）。
+    """
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    # 从 binding 读 novel_ai_dir 注入 env（跟 in-process 版本一致）
+    db = SessionLocal()
+    try:
+        binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
+        env = os.environ.copy()
+        env["NOVEL_OUTLINE_MODE"] = outline_mode
+        if binding:
+            env["NOVEL_AI_DIR"] = binding.novel_ai_dir
+    finally:
+        db.close()
+
+    # 调用 engine.graph.run_graph_task 的等价入口
+    # 用 -c 跑一行 Python 调起 engine，避免依赖额外的 worker 脚本
+    # worker 脚本：engine/workers/run_bridge_subprocess.py
+    worker_script = Path(__file__).resolve().parent.parent.parent / "engine" / "workers" / "run_bridge_subprocess.py"
+    if not worker_script.exists():
+        # 兜底：worker 脚本还没建时降级到 -c 形式
+        cmd = [
+            sys.executable, "-c",
+            f"import sys; sys.path.insert(0, {str(BACKEND)!r}); "
+            f"from engine.graph import run_graph_task; "
+            f"import queue as _q; "
+            f"from app.api.bridge import _run_bridge_async_imported as _runner; "
+            f"_runner({run_id!r}, {project_id!r}, {command!r}, {args!r}, None, {outline_mode!r})"
+        ]
+    else:
+        cmd = [sys.executable, str(worker_script), run_id, project_id, command,
+               *[str(a) for a in args], outline_mode]
+
+    log.info("spawning engine subprocess: %s", " ".join(cmd[:3]))
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=env,
+            cwd=str(BACKEND_ROOT),
+            text=True,
+            bufsize=1,  # line buffered
+        )
+        # 在独立线程读 stdout → put to queue
+        import threading
+        def _drain_stdout():
+            db = SessionLocal()
+            stdout_chunks: list[str] = []
+            try:
+                bridge_run = db.get(BridgeRun, run_id)
+                if not bridge_run:
+                    return
+                bridge_run.status = "running"
+                db.commit()
+                queue.put({"event": "start", "run_id": run_id, "command": command,
+                           "outline_mode": outline_mode})
+                for line in iter(proc.stdout.readline, ""):
+                    stdout_chunks.append(line)
+                    # 把 stdout 当作 log 事件转发给 SSE
+                    queue.put({"event": "log", "line": line.rstrip()})
+                    # 每 50 行 flush 到 DB（避免频繁 commit）
+                    if len(stdout_chunks) >= 50:
+                        bridge_run.stdout_text = (bridge_run.stdout_text or "") + "".join(stdout_chunks)
+                        db.commit()
+                        stdout_chunks = []
+                # 进程结束
+                exit_code = proc.wait()
+                if stdout_chunks:
+                    bridge_run.stdout_text = (bridge_run.stdout_text or "") + "".join(stdout_chunks)
+                bridge_run.exit_code = exit_code
+                bridge_run.finished_at = datetime.utcnow()
+                bridge_run.status = "done" if exit_code == 0 else "failed"
+                db.commit()
+                queue.put({"event": "complete", "status": bridge_run.status,
+                           "exit_code": exit_code})
+            finally:
+                queue.put({"event": "done", "exit_code": proc.returncode})
+                db.close()
+        threading.Thread(target=_drain_stdout, daemon=True).start()
+    except Exception as e:
+        log.exception("spawn engine subprocess failed")
+        queue.put({"event": "error", "message": str(e)})
+        queue.put({"event": "done", "exit_code": -1})
 
 
 @router.get("/stream")

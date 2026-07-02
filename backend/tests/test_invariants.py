@@ -1071,6 +1071,93 @@ class TestAgentNetworkRetry:
 
 
 # ───────────────────────────────────────────
+# Q: run 进程必须 subprocess 跑，不再 in-process（uvicorn 重启不杀 engine）
+# ───────────────────────────────────────────
+class TestBridgeSubprocessArchitecture:
+    """历史 bug：bridge.run 用 BackgroundTasks 在 uvicorn worker 进程内跑
+    engine，uvicorn 重启（手动 / --reload / OOM）会杀掉 in-flight engine run。
+    修复：spawn subprocess 跑 engine，stdout pipe 转发 SSE 事件，DB 写
+    BridgeRun.status 跟踪生命周期，uvicorn 重启不影响。
+
+    本测试锁死：
+    1) subprocess worker 脚本存在
+    2) bridge._spawn_engine_subprocess 函数存在
+    3) run_bridge endpoint 调用 _spawn_engine_subprocess 而不是 _run_bridge_async
+    4) build_graph 接受 checkpointer 参数（之前 status 命令 fail 的隐藏 bug）
+    5) SSECapture 在 queue=None 时回退到 stdout（subprocess 模式不丢消息）
+    """
+
+    def test_worker_script_exists(self):
+        from pathlib import Path
+        ws = Path(__file__).resolve().parents[1] / "engine" / "workers" / "run_bridge_subprocess.py"
+        assert ws.exists(), f"worker 脚本不存在: {ws}"
+
+    def test_bridge_has_spawn_engine_subprocess(self):
+        from app.api import bridge as bridge_mod
+        assert hasattr(bridge_mod, "_spawn_engine_subprocess"), (
+            "bridge 必须有 _spawn_engine_subprocess 函数（替代 in-process BackgroundTasks）"
+        )
+
+    def test_run_endpoint_uses_subprocess(self):
+        """run_bridge endpoint 必须调 _spawn_engine_subprocess，不是 _run_bridge_async。"""
+        import inspect
+        from app.api import bridge as bridge_mod
+        src = inspect.getsource(bridge_mod.run_bridge)
+        # 关键断言：源代码里必须出现 _spawn_engine_subprocess
+        assert "_spawn_engine_subprocess" in src, (
+            "run_bridge 没用 _spawn_engine_subprocess——仍在 in-process 旧路径"
+        )
+        # 反向：不能再有 background_tasks.add_task(_run_bridge_async, ...)
+        assert "background_tasks.add_task(\n        _run_bridge_async" not in src and \
+               "background_tasks.add_task(_run_bridge_async" not in src, (
+            "run_bridge 仍用 BackgroundTasks + _run_bridge_async（in-process 旧路径）"
+        )
+
+    def test_build_graph_accepts_checkpointer(self):
+        """build_graph 必须接受 checkpointer 参数（否则 status 命令 fail）。"""
+        from engine.orchestrator import build_graph
+        # 不传 checkpointer 也能用
+        g = build_graph()
+        assert g is not None
+        # 传 checkpointer 也能用
+        from langgraph.checkpoint.memory import MemorySaver
+        g2 = build_graph(checkpointer=MemorySaver())
+        assert g2 is not None
+
+    def test_sse_capture_handles_none_queue(self):
+        """SSECapture 在 queue=None 时不能崩（subprocess 模式）。"""
+        from engine.graph import SSECapture
+        from io import StringIO
+        # queue=None 必须不抛
+        cap = SSECapture(None)
+        # 模拟 print 输出
+        cap.write("hello world\n")
+        cap.write("more text\n")
+        cap.flush()
+        # StringIO 行为：write 后 super().write 把数据存到内部 buffer
+        # 不能崩 + 至少不抛异常
+        assert True
+
+    def test_subprocess_smoke_status(self):
+        """subprocess worker 跑 status 命令能 exit_code=0。"""
+        import subprocess
+        import sys
+        from pathlib import Path
+        result = subprocess.run(
+            [sys.executable, "-m", "engine.workers.run_bridge_subprocess",
+             "smoke-test", "c12345678901234567890123456789012", "status", "batch"],
+            capture_output=True, text=True,
+            cwd=str(Path(__file__).resolve().parents[1]),
+            timeout=15,
+        )
+        # 之前 status 命令的 build_graph 错让 exit_code=1，修了之后必须=0
+        assert result.returncode == 0, (
+            f"subprocess status 应 exit_code=0，实际: {result.returncode}\n"
+            f"stdout: {result.stdout[-500:]}\nstderr: {result.stderr[-500:]}"
+        )
+
+
+# ───────────────────────────────────────────
 # N: state / chapters 路径必须用 binding.novel_ai_dir，不再硬编码
 # ───────────────────────────────────────────
 class TestStatePathFromBinding:

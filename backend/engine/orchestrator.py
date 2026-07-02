@@ -552,7 +552,7 @@ def route_after_save(state) -> Literal["next_task", "done"]:
 # ══════════════════════════════════════════
 # 构建图
 # ══════════════════════════════════════════
-def build_graph():
+def build_graph(checkpointer=None):
     g = StateGraph(OrchestratorState)  # type: ignore
     g.add_node("load_arc_tasks",   node_load_arc_tasks)
     g.add_node("get_next_task",    node_get_next_task)
@@ -571,7 +571,9 @@ def build_graph():
     g.add_conditional_edges("save_and_track", route_after_save,
         {"next_task": "load_arc_tasks", "done": END})
     g.add_edge("human_escalation", END)
-    return g.compile()
+    if checkpointer is None:
+        return g.compile()
+    return g.compile(checkpointer=checkpointer)
 
 
 # ══════════════════════════════════════════

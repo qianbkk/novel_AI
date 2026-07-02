@@ -149,7 +149,13 @@ class SSECapture(io.StringIO):
             line = "".join(self._buffer).rstrip("\n")
             self._buffer.clear()
             if line.strip():
-                self.queue.put({"event": "log", "line": line})
+                if self.queue is not None:
+                    self.queue.put({"event": "log", "line": line})
+                else:
+                    # queue=None 时（subprocess 模式）回退到 sys.stdout，
+                    # 让 print() 输出到 subprocess pipe，主进程读
+                    sys.__stdout__.write(line + "\n")
+                    sys.__stdout__.flush()
         return super().write(s)
 
     def flush(self) -> None:
@@ -157,7 +163,11 @@ class SSECapture(io.StringIO):
             line = "".join(self._buffer).rstrip()
             self._buffer.clear()
             if line.strip():
-                self.queue.put({"event": "log", "line": line})
+                if self.queue is not None:
+                    self.queue.put({"event": "log", "line": line})
+                else:
+                    sys.__stdout__.write(line + "\n")
+                    sys.__stdout__.flush()
         super().flush()
 
 
