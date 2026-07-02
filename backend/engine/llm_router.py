@@ -55,6 +55,7 @@ class LLMRouter:
         """Read RoleAssignment × Provider rows. Sets self._routes."""
         from app.database import SessionLocal
         from app.models import Provider, RoleAssignment
+        from app.security import decrypt_api_key
 
         db = SessionLocal()
         try:
@@ -65,9 +66,17 @@ class LLMRouter:
             )
             routes: dict[str, dict] = {}
             for ra, p in rows:
+                # api_key 加密存储（commit 加密修复）→ 读时解密
+                key = ""
+                if p.api_key_encrypted:
+                    try:
+                        key = decrypt_api_key(p.api_key_encrypted)
+                    except Exception:
+                        # 解密失败（MASTER_KEY 变了等）→ 该 provider 暂时不可用
+                        key = ""
                 routes[ra.role_key] = {
                     "type":  p.provider_type,
-                    "key":   p.api_key or "",
+                    "key":   key,
                     "base":  p.api_base or "",
                     "model": ra.model_override or p.default_model or "",
                     "extra": p.extra_json or {},
