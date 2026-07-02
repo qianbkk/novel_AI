@@ -1324,6 +1324,38 @@ class TestRateLimitMiddleware:
 
 
 # ───────────────────────────────────────────
+# JJ: Mock provider 端到端（LLMRouter 真实构造路径）
+# ───────────────────────────────────────────
+class TestMockProviderEndToEnd:
+    """迭代 #1: 验证 mock 模式不仅单测过，真实构造 LLMRouter 时也起作用。
+
+    历史背景：
+      之前 mock provider 只在 router.py 内显式设置 routes 才能用。
+      commit 6d6c07b 加了 NOVEL_ENGINE_MOCK=1 env 自动激活，但单测可能
+      不能覆盖真实 import + 构造路径（mock path 可能只在测试 fixture 里）。
+    """
+
+    def test_llm_router_construction_with_mock_env(self):
+        """设 NOVEL_ENGINE_MOCK=1 后 LLMRouter() 自动 use_mock() — 真实构造路径。"""
+        import os
+        os.environ["NOVEL_ENGINE_MOCK"] = "1"
+        try:
+            # 真 import + 构造（不走 mock 模块）
+            from engine.llm.router import LLMRouter
+            r = LLMRouter("test-end-to-end")
+            # 9 个 agent 全部 mock
+            assert r.routes["writer"][0] == "mock"
+            assert r.routes["tracker"][0] == "mock"
+            assert r.routes["orchestrator"][0] == "mock"
+            # 真实 call() 调用走 mock 分支
+            text, cost = r.call("writer", "sys", "user", max_tokens=2000, temperature=0.7)
+            assert len(text) > 100, "mock writer 应返回长文本"
+            assert cost == 0.001
+        finally:
+            os.environ.pop("NOVEL_ENGINE_MOCK", None)
+
+
+# ───────────────────────────────────────────
 # BB: engine/graph.py 日志统一（capture.write [engine] → log.xxx）
 # ───────────────────────────────────────────
 class TestEngineLoggingUnified:
@@ -1944,6 +1976,45 @@ class TestOrchestratorNoFakePass:
         }
         assert route_after_pipeline(state) == "escalate"
 
+    def test_writer_failed_error_sentinel_exists(self):
+        """WriterFailedError sentinel 异常类必须存在且可正常 raise/catch（commit 5d1f83e 修复）。"""
+        from engine.orchestrator import WriterFailedError
+        assert issubclass(WriterFailedError, Exception)
+        try:
+            raise WriterFailedError("writer crashed")
+        except WriterFailedError as e:
+            assert "writer crashed" in str(e)
+
+    def test_route_after_pipeline_escalates_on_writer_failed(self):
+        """task._writer_failed=True → 必须 escalate（防止 47 字 writer-stub 假 PASS）。"""
+        from engine.orchestrator import route_after_pipeline
+        state = {
+            "current_phase": "writing",
+            "current_task": {"_writer_failed": True},
+            "rewrite_count_current": 0,
+        }
+        assert route_after_pipeline(state) == "escalate", (
+            "_writer_failed=True 时必须走 escalate，不能 'save'"
+        )
+
+    def test_route_after_pipeline_normal_high_score_saves(self):
+        """正常高分任务必须能 save（防止锁死逻辑破坏 happy path）。"""
+        from engine.orchestrator import route_after_pipeline
+        state = {
+            "current_phase": "writing",
+            "current_task": {
+                "_checker_result": {"score": 8.0, "verdict": "PASS"},
+                "_compliance_failed": False,
+                "_compliance_check_failed": False,
+                "_checker_failed": False,
+                "_writer_failed": False,
+            },
+            "rewrite_count_current": 0,
+        }
+        assert route_after_pipeline(state) == "save", (
+            "正常高分任务必须能 save（不能锁死到 escalate）"
+        )
+
 
 # ───────────────────────────────────────────
 # P: writer / rewriter 网络异常必须重试一次再 escalate
@@ -2088,6 +2159,24 @@ class TestBridgeSubprocessArchitecture:
             f"subprocess status 应 exit_code=0，实际: {result.returncode}\n"
             f"stdout: {result.stdout[-500:]}\nstderr: {result.stderr[-500:]}"
         )
+
+    def test_graph_run_graph_task_handles_unknown_command(self):
+        """run_graph_task 收到未知命令时必须 exit_code=1（不是 0）。"""
+        from engine.graph import run_graph_task
+        from queue import Queue
+        q = Queue()
+        # 用一个明显没注册的命令
+        exit_code, stdout = run_graph_task(
+            project_id="nonexistent",
+            command="definitely_not_a_real_command_xyz",
+            args=[],
+            run_id="test-unknown",
+            queue=q,
+        )
+        assert exit_code == 1, (
+            f"未知命令应返回 exit_code=1，实际 {exit_code}（'假装成功'是 fake-pass）"
+        )
+        assert "未知命令" in stdout, f"stderr 应明确说未知命令，实际 stdout: {stdout[:200]!r}"
 
 
 # ───────────────────────────────────────────
