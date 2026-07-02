@@ -1,9 +1,49 @@
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 VALID_REVIEW_ACTIONS = {"accept", "reject", "edit"}
+
+
+def _state_path(novel_ai_dir: str) -> Path:
+    """解析 state 文件路径。
+
+    历史背景（commit 08a8f02 / 62baf44）：
+      engine 写到 NOVEL_AI_DIR env 路径（与 binding.novel_ai_dir 等价时是
+      novel_AI/output/，否则是 backend/data/engine/output/）。
+      reports.py 之前硬编码 novel_ai_dir/output/ → engine 写到 env 路径时
+      reports 读不到，造成 status/pending/budget 显示陈旧。
+
+    解析顺序：
+      1. 如果 NOVEL_AI_DIR env 设置了 → 用 env 路径（与 engine 完全一致）
+      2. 否则 → 用传进来的 novel_ai_dir（向后兼容）
+
+    效果：bridge endpoint 注入 NOVEL_AI_DIR env 后，subprocess 和主进程 reports
+    读同一份 state 文件，不会再出现 "engine 在跑但 status 显示 not_initialized" 的
+    假象。
+    """
+    env_dir = os.environ.get("NOVEL_AI_DIR")
+    if env_dir:
+        return Path(env_dir) / "output" / "orchestrator_state.json"
+    return Path(novel_ai_dir) / "output" / "orchestrator_state.json"
+
+
+def _chapters_dir(novel_ai_dir: str) -> Path:
+    """解析 chapters 目录（与 _state_path 同一规则）。"""
+    env_dir = os.environ.get("NOVEL_AI_DIR")
+    if env_dir:
+        return Path(env_dir) / "output" / "chapters"
+    return Path(novel_ai_dir) / "output" / "chapters"
+
+
+def _budget_log_path(novel_ai_dir: str) -> Path:
+    """解析 budget log 路径（与 _state_path 同一规则）。"""
+    env_dir = os.environ.get("NOVEL_AI_DIR")
+    if env_dir:
+        return Path(env_dir) / "logs" / "budget_log.jsonl"
+    return Path(novel_ai_dir) / "logs" / "budget_log.jsonl"
 
 
 def read_status(novel_ai_dir: str) -> dict[str, Any]:
@@ -38,7 +78,7 @@ def read_pending(novel_ai_dir: str) -> dict[str, Any]:
 
 def read_budget_log(novel_ai_dir: str) -> dict[str, Any]:
     state = read_status(novel_ai_dir)
-    log_path = Path(novel_ai_dir, "logs", "budget_log.jsonl")
+    log_path = _budget_log_path(novel_ai_dir)
     records = []
     if log_path.exists():
         for line in log_path.read_text(encoding="utf-8").splitlines():
@@ -84,7 +124,7 @@ def apply_review(
     task = pending[idx] if idx is not None else None
 
     if action == "edit" and chapter_number and content is not None:
-        chapter_path = Path(novel_ai_dir, "output", "chapters", f"ch_{chapter_number:04d}.txt")
+        chapter_path = _chapters_dir(novel_ai_dir) / f"ch_{chapter_number:04d}.txt"
         chapter_path.parent.mkdir(parents=True, exist_ok=True)
         chapter_path.write_text(content, encoding="utf-8")
 
@@ -103,10 +143,6 @@ def apply_review(
     state["last_updated"] = datetime.utcnow().isoformat()
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"available": True, "action": action, "task": task, "remaining": len(pending)}
-
-
-def _state_path(novel_ai_dir: str) -> Path:
-    return Path(novel_ai_dir, "output", "orchestrator_state.json")
 
 
 def _read_json(path: Path) -> dict[str, Any]:
