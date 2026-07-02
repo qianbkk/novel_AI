@@ -124,7 +124,12 @@ export interface Provider {
   name: string;
   provider_type: "anthropic" | "deepseek" | "gemini" | "kimi" | "minimax" | "custom";
   api_base: string | null;
-  api_key: string | null;
+  // 注意：API 返回绝不包含明文 api_key（commit 加密后）。
+  // 后端返回 api_key_set=true + api_key_suffix="xxxx"（明文后 4 位）。
+  // 用户编辑时如果不重新填 api_key，PUT 会用前端已有的值覆盖——所以前端表单要保留原始 api_key 字段供编辑。
+  api_key?: string | null;
+  api_key_set?: boolean;
+  api_key_suffix?: string | null;
   default_model: string | null;
   extra_json?: Record<string, unknown> | null;
   needs_proxy: boolean;

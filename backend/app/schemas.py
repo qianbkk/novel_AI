@@ -41,6 +41,9 @@ class ChapterCreate(BaseModel):
 
 
 class ProviderCreate(BaseModel):
+    """前端 POST/PUT 时传 api_key 明文（只在传输过程中明文）。
+    后端写库前用 security.encrypt_api_key 加密。
+    """
     name: str
     provider_type: str
     api_base: Optional[str] = None
@@ -51,6 +54,7 @@ class ProviderCreate(BaseModel):
 
 
 class ProviderOut(BaseModel):
+    """API 返回：绝不返回明文 api_key，只返回后 4 位 + 是否设置标记。"""
     id: str
     name: str
     provider_type: str
@@ -58,6 +62,8 @@ class ProviderOut(BaseModel):
     default_model: str
     extra_json: Optional[dict[str, Any]] = None
     needs_proxy: bool = False
+    api_key_suffix: Optional[str] = None  # 后 4 位，"sk-...xxxx"
+    api_key_set: bool = False            # True = 已配置（用户能看到 suffix），False = 未配置
     created_at: datetime
 
     class Config:

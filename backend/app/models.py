@@ -211,14 +211,20 @@ class EmbeddingChunk(Base):
 
 
 class Provider(Base):
-    """用户配置的供应商账号，一个账号可被多个角色复用"""
+    """用户配置的供应商账号，一个账号可被多个角色复用
+
+    api_key 加密存储（历史 bug：之前是明文存 SQLite，DB 泄漏 = 全部 key 曝光）：
+      - api_key_encrypted: Fernet ciphertext（base64），读时解密
+      - api_key_suffix: 明文后 4 位（UI 显示用，"sk-...xxxx" 形式）
+    """
     __tablename__ = "providers"
 
     id = Column(String, primary_key=True, default=gen_id)
     name = Column(String, nullable=False)
     provider_type = Column(String, nullable=False)  # anthropic|deepseek|gemini|kimi|minimax|custom
     api_base = Column(String, nullable=True)
-    api_key = Column(String, nullable=False)
+    api_key_encrypted = Column(Text, nullable=True)  # Fernet ciphertext（明文不入库）
+    api_key_suffix = Column(String(8), nullable=True)  # UI 显示用后 4 位
     default_model = Column(String, nullable=False)
     extra_json = Column(JSON, nullable=True)
     needs_proxy = Column(Boolean, default=False)

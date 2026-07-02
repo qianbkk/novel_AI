@@ -51,11 +51,14 @@ export default function Providers() {
 
   function startEdit(provider: Provider) {
     setEditingId(provider.id);
+    // 后端不返回明文 api_key：列表里 provider.api_key 是 undefined。
+    // 编辑表单如果用户没改 api_key，提交时仍要发原值；这里用空字符串占位，
+    // handleSubmit 会在 editingId 模式下提示用户重新填 api_key。
     setForm({
       name: provider.name,
       provider_type: provider.provider_type,
       api_base: provider.api_base || "",
-      api_key: provider.api_key || "",
+      api_key: "",  // 不从列表预填（后端不返回明文）
       default_model: provider.default_model || "",
       extra_json: provider.extra_json || null,
       needs_proxy: provider.needs_proxy,
@@ -64,13 +67,18 @@ export default function Providers() {
 
   async function handleSubmit() {
     if (!form.name.trim()) return;
+    // 编辑模式下 api_key 是空 → 阻止提交（避免误清空）
+    if (editingId && !form.api_key?.trim()) {
+      setError("编辑 Provider 时必须重新填写 api_key（后端不返回明文，无法预填）");
+      return;
+    }
     setSaving(true);
     setError(null);
     const payload: ProviderForm = {
       ...form,
       name: form.name.trim(),
       api_base: form.api_base?.trim() || null,
-      api_key: form.api_key?.trim() || null,
+      api_key: form.api_key?.trim() || "",
       default_model: form.default_model?.trim() || null,
     };
 
