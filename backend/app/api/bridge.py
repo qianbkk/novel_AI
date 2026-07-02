@@ -144,22 +144,19 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
         db.close()
 
     # 调用 engine.graph.run_graph_task 的等价入口
-    # 用 -c 跑一行 Python 调起 engine，避免依赖额外的 worker 脚本
     # worker 脚本：engine/workers/run_bridge_subprocess.py
     worker_script = Path(__file__).resolve().parent.parent.parent / "engine" / "workers" / "run_bridge_subprocess.py"
     if not worker_script.exists():
-        # 兜底：worker 脚本还没建时降级到 -c 形式
-        cmd = [
-            sys.executable, "-c",
-            f"import sys; sys.path.insert(0, {str(BACKEND)!r}); "
-            f"from engine.graph import run_graph_task; "
-            f"import queue as _q; "
-            f"from app.api.bridge import _run_bridge_async_imported as _runner; "
-            f"_runner({run_id!r}, {project_id!r}, {command!r}, {args!r}, None, {outline_mode!r})"
-        ]
-    else:
-        cmd = [sys.executable, str(worker_script), run_id, project_id, command,
-               *[str(a) for a in args], outline_mode]
+        # worker 脚本是必需依赖，不存在就立刻报错（不要再降级到 -c + 调用
+        # 已删除的 in-process fallback 函数路径，参考 commit 62baf44）。
+        log.error("engine worker script missing: %s", worker_script)
+        raise RuntimeError(
+            f"engine/workers/run_bridge_subprocess.py 不存在：{worker_script}。"
+            f"该脚本是 run 进程的必需依赖，缺失会导致 run 完全不可用。"
+        )
+
+    cmd = [sys.executable, str(worker_script), run_id, project_id, command,
+           *[str(a) for a in args], outline_mode]
 
     log.info("spawning engine subprocess: %s", " ".join(cmd[:3]))
     try:
@@ -326,85 +323,15 @@ def review(project_id: str, payload: ReviewRequest, db: Session = Depends(get_db
 async def _run_bridge_async(run_id: str, project_id: str, command: str,
                             args: list[str], queue,
                             outline_mode: str = "batch"):
-    """Run graph command in-process. Called via asyncio.create_task from the endpoint."""
-    from engine.graph import run_graph_task
-    from datetime import datetime
-    log.info("bridge run start: run_id=%s project=%s cmd=%s args=%s",
-             run_id, project_id, command, args)
-    lock = _get_project_lock(project_id)
-    async with lock:
-        db = SessionLocal()
-        try:
-            bridge_run = db.get(BridgeRun, run_id)
-            if not bridge_run:
-                log.warning("bridge run %s 不存在，跳过", run_id)
-                return
-            bridge_run.status = "running"
-            db.commit()
-            queue.put({"event": "start", "run_id": run_id, "command": command,
-                       "outline_mode": outline_mode})
+    """DEPRECATED: in-process bridge runner, replaced by `_spawn_engine_subprocess`.
 
-            # 把 binding.novel_ai_dir 注入 NOVEL_AI_DIR env，让 engine 的
-            # STATE_PATH / OUTPUT_DIR / CHAPTERS_DIR 跟 binding 一致
-            # （之前 state 在 novel_AI/，chapters 在 backend/，双重路径混乱）
-            import os
-            _prev_mode = os.environ.get("NOVEL_OUTLINE_MODE")
-            os.environ["NOVEL_OUTLINE_MODE"] = outline_mode
-            _prev_novel_ai_dir = os.environ.get("NOVEL_AI_DIR")
-            binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
-            if binding:
-                os.environ["NOVEL_AI_DIR"] = binding.novel_ai_dir
-            try:
-                exit_code, stdout_text = await asyncio.to_thread(
-                    run_graph_task, project_id, command, args, run_id, queue
-                )
-            finally:
-                if _prev_mode is None:
-                    os.environ.pop("NOVEL_OUTLINE_MODE", None)
-                else:
-                    os.environ["NOVEL_OUTLINE_MODE"] = _prev_mode
-                if _prev_novel_ai_dir is None:
-                    os.environ.pop("NOVEL_AI_DIR", None)
-                else:
-                    os.environ["NOVEL_AI_DIR"] = _prev_novel_ai_dir
-
-            bridge_run.exit_code = exit_code
-            bridge_run.stdout_text = stdout_text
-            bridge_run.finished_at = datetime.utcnow()
-            bridge_run.status = "done" if exit_code == 0 else "failed"
-            db.commit()
-            log.info("bridge run done: run_id=%s exit=%s stdout_len=%d",
-                     run_id, exit_code, len(stdout_text or ""))
-
-            if exit_code == 0 and command == "planner":
-                queue.put({"event": "auto_pull_setting_start"})
-                binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
-                if binding:
-                    await pull_setting_package(project_id, binding.novel_ai_dir, db)
-                    queue.put({"event": "auto_pull_setting_done"})
-            if exit_code == 0 and command in {"run", "resume"}:
-                queue.put({"event": "auto_import_chapters_start"})
-                binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
-                if binding:
-                    imported = await import_chapters_from_novel_ai(project_id, binding.novel_ai_dir, db)
-                    queue.put({"event": "auto_import_chapters_done", "imported": imported})
-
-            queue.put({"event": "complete", "status": bridge_run.status, "exit_code": exit_code})
-        except Exception as exc:
-            import traceback
-            tb = traceback.format_exc()
-            queue.put({"event": "error", "message": str(exc), "traceback": tb[-1000:]})
-            bridge_run = db.get(BridgeRun, run_id)
-            if bridge_run:
-                bridge_run.status = "failed"
-                bridge_run.finished_at = datetime.utcnow()
-                db.commit()
-        finally:
-            done_payload = {"event": "done"}
-            if "exit_code" in locals():
-                done_payload["exit_code"] = exit_code
-            queue.put(done_payload)
-            db.close()
+    删除原因：commit 62baf44 改成 subprocess 模式后，run endpoint 调的是
+    _spawn_engine_subprocess。这个函数变成 dead code，保留会让人误以为
+    还在用。新代码不要调用它；future endpoint 应该用 _spawn_engine_subprocess。
+    """
+    raise NotImplementedError(
+        "_run_bridge_async 已废弃，请用 _spawn_engine_subprocess"
+    )
 
 
 def _get_project_and_binding(project_id: str, db: Session) -> tuple[Project, NovelAIBinding]:
