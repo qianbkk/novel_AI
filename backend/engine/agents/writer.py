@@ -47,16 +47,36 @@ def _call_with_budget(agent_name: str, system: str, user: str,
                       target_chars: int, *, temperature: float = 0.82,
                       tolerance: int = 200,
                       max_continues: int = 2) -> Tuple[str, float]:
-    """Length-budget call (写入路径字数控制). 写作 agent 专用."""
-    return _get_router().call_with_length_budget(
-        agent_name=agent_name,
-        system_prompt=system,
-        user_prompt=user,
-        target_chars=target_chars,
-        tolerance=tolerance,
-        temperature=temperature,
-        max_continues=max_continues,
-    )
+    """Length-budget call (写入路径字数控制). 写作 agent 专用.
+
+    网络抖动重试：router._post_with_retry 已经有 tenacity 3 次 retry，
+    但其退避是指数 1-10s（最多 30s 总耗时），如果服务端挂掉超过 30s
+    仍然失败。这里加一层 agent-level retry：3 次（每次 60s 内）失败后
+    再 sleep 30s 重试一轮。避免一次瞬时网络抖动就让整章 escalate。
+    """
+    import time as _time
+    import httpx as _httpx
+    last_exc: Exception | None = None
+    for attempt in range(2):  # 1st try + 1 retry
+        try:
+            return _get_router().call_with_length_budget(
+                agent_name=agent_name,
+                system_prompt=system,
+                user_prompt=user,
+                target_chars=target_chars,
+                tolerance=tolerance,
+                temperature=temperature,
+                max_continues=max_continues,
+            )
+        except (_httpx.TransportError, _httpx.HTTPStatusError, ConnectionError) as e:
+            last_exc = e
+            if attempt < 1:
+                # 第一轮失败 → sleep 30s 再试
+                # 理由：MiniMax 偶尔出现 30-60s 短暂不可用，
+                # 30s sleep 是经验值（再长用户等不及）
+                _time.sleep(30)
+    # 两次都失败 → 抛最后一次异常，让 orchestrator 走 escalate
+    raise last_exc  # type: ignore[misc]
 
 
 # ── Prompt templates (P2: import from config.prompt_templates) ──

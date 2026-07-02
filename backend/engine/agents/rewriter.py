@@ -61,16 +61,29 @@ def _parse_target_chars(task: dict, default: int = 2200) -> int:
 def _call_with_budget(agent_name: str, system: str, user: str,
                       target_chars: int, *, temperature: float,
                       tolerance: int = 200, max_continues: int = 2):
-    """长度预算调用（写入路径字数控制）。rewriter 三条路径共用。"""
-    return _get_active_router_or_fallback().call_with_length_budget(
-        agent_name=agent_name,
-        system_prompt=system,
-        user_prompt=user,
-        target_chars=target_chars,
-        tolerance=tolerance,
-        temperature=temperature,
-        max_continues=max_continues,
-    )
+    """长度预算调用（写入路径字数控制）。rewriter 三条路径共用。
+
+    网络抖动重试：见 writer.py 注释。两轮 30s 间隔。
+    """
+    import time as _time
+    import httpx as _httpx
+    last_exc: Exception | None = None
+    for attempt in range(2):
+        try:
+            return _get_active_router_or_fallback().call_with_length_budget(
+                agent_name=agent_name,
+                system_prompt=system,
+                user_prompt=user,
+                target_chars=target_chars,
+                tolerance=tolerance,
+                temperature=temperature,
+                max_continues=max_continues,
+            )
+        except (_httpx.TransportError, _httpx.HTTPStatusError, ConnectionError) as e:
+            last_exc = e
+            if attempt < 1:
+                _time.sleep(30)
+    raise last_exc  # type: ignore[misc]
 
 
 def run_p0_checklist(text: str, task: dict, memory: dict) -> tuple[dict, float]:

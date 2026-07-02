@@ -1013,6 +1013,64 @@ class TestOrchestratorNoFakePass:
 
 
 # ───────────────────────────────────────────
+# P: writer / rewriter 网络异常必须重试一次再 escalate
+# ───────────────────────────────────────────
+class TestAgentNetworkRetry:
+    """ch63 / ch64 现场：MiniMax 30-60s 不可用时，router 内部 tenacity 3 次
+    退避 1-10s（共最多 30s）仍会失败。agent 层加一轮 30s sleep 后再 retry，
+    覆盖更长的瞬时不可用窗口。
+    """
+
+    def test_writer_retries_on_httpx_error(self, monkeypatch):
+        """writer 第一次 httpx.TransportError → sleep + retry 一次成功。"""
+        import time as _time
+        from engine.agents import writer as writer_mod
+        from engine.llm.router import LLMRouter
+        call_count = [0]
+        sleep_calls = []
+
+        def fake_call_with_length_budget(self, **kwargs):
+            call_count[0] += 1
+            if call_count[0] == 1:
+                import httpx
+                raise httpx.TransportError("simulated conn reset")
+            return "ok text " * 200, 0.0
+
+        def fake_sleep(secs):
+            sleep_calls.append(secs)
+        monkeypatch.setattr(_time, "sleep", fake_sleep)
+        monkeypatch.setattr(LLMRouter, "call_with_length_budget",
+                            fake_call_with_length_budget)
+        monkeypatch.setattr(writer_mod, "_get_router", lambda: LLMRouter())
+
+        text, cost = writer_mod._call_with_budget(
+            agent_name="writer", system="x", user="y", target_chars=2000,
+        )
+        assert call_count[0] == 2, f"应重试一次，实际 {call_count[0]} 次"
+        assert sleep_calls == [30], f"应 sleep 30s 一次，实际: {sleep_calls}"
+        assert text.startswith("ok text")
+
+    def test_writer_raises_after_two_failures(self, monkeypatch):
+        """writer 两次都失败 → 抛最后一次异常给 orchestrator 走 escalate。"""
+        import time as _time
+        from engine.agents import writer as writer_mod
+        from engine.llm.router import LLMRouter
+        import httpx
+
+        def fake_call(self, **kwargs):
+            raise httpx.TransportError("always fail")
+        monkeypatch.setattr(_time, "sleep", lambda s: None)
+        monkeypatch.setattr(LLMRouter, "call_with_length_budget", fake_call)
+        monkeypatch.setattr(writer_mod, "_get_router", lambda: LLMRouter())
+
+        import pytest
+        with pytest.raises(httpx.TransportError):
+            writer_mod._call_with_budget(
+                agent_name="writer", system="x", user="y", target_chars=2000,
+            )
+
+
+# ───────────────────────────────────────────
 # N: state / chapters 路径必须用 binding.novel_ai_dir，不再硬编码
 # ───────────────────────────────────────────
 class TestStatePathFromBinding:
