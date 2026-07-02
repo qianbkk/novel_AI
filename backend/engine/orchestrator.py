@@ -40,9 +40,19 @@ from .memory.manager import get_l2
 # ── Paths (relative to backend/) ──
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 ENGINE_DIR  = Path(__file__).resolve().parent
-OUTPUT_DIR  = BACKEND_DIR / "data" / "engine" / "output"
+
+# 优先用 NOVEL_AI_DIR 环境变量（与 binding.novel_ai_dir 一致），
+# 否则 fallback 到 backend/data/engine/output（默认位置）。
+# 历史包袱：state 路径之前在 novel_AI/output/，chapters 在 backend；
+# 统一通过 env 解决（不强行迁移现有数据，避免破坏 in-flight 任务）。
+import os as _os
+_NOVEL_AI_DIR_OVERRIDE = _os.environ.get("NOVEL_AI_DIR")
+if _NOVEL_AI_DIR_OVERRIDE:
+    OUTPUT_DIR   = Path(_NOVEL_AI_DIR_OVERRIDE) / "output"
+else:
+    OUTPUT_DIR   = BACKEND_DIR / "data" / "engine" / "output"
 CHAPTERS_DIR = OUTPUT_DIR / "chapters"
-STATE_PATH  = OUTPUT_DIR / "orchestrator_state.json"
+STATE_PATH   = OUTPUT_DIR / "orchestrator_state.json"
 SETTING_PATH = OUTPUT_DIR / "setting_package.json"
 CONFIG_PATH  = BACKEND_DIR / "data" / "engine" / "config" / "novel_config.json"
 

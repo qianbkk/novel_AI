@@ -865,3 +865,64 @@ class TestWriterFailureNoFakeStub:
         assert any("writer failed" in e for e in result.get("error_log", [])), (
             f"error_log 应记录 writer 失败，实际: {result.get('error_log', [])[-3:]}"
         )
+
+
+# ───────────────────────────────────────────
+# N: state / chapters 路径必须用 binding.novel_ai_dir，不再硬编码
+# ───────────────────────────────────────────
+class TestStatePathFromBinding:
+    """历史 bug（你独立验证）：
+      engine/orchestrator.py:43-45 硬编码 STATE_PATH / OUTPUT_DIR /
+      CHAPTERS_DIR 到 backend/data/engine/output/，但
+      app/bridge/reports.py:109 用 binding.novel_ai_dir（默认 novel_AI/output/）。
+      → bridge/status 读 novel_AI/output/orchestrator_state.json（17 小时前），
+        engine 实际写到 backend/data/engine/output/orchestrator_state.json（活跃）。
+      → 双重真相：监控看不到 engine 真实状态。
+
+    修复：engine 的 STATE_PATH / _STATE_PATH 优先用 NOVEL_AI_DIR 环境变量，
+    bridge/run 在 spawn background task 前从 binding 注入这个 env。
+    本测试锁死 env 行为。
+    """
+
+    def test_orchestrator_state_path_uses_env(self, monkeypatch, tmp_path):
+        """设 NOVEL_AI_DIR 后，orchestrator.STATE_PATH 走那个目录。"""
+        monkeypatch.setenv("NOVEL_AI_DIR", str(tmp_path))
+        # 重新 import 让模块级常量重算
+        import importlib
+        from engine import orchestrator as orch
+        importlib.reload(orch)
+        try:
+            assert str(orch.STATE_PATH).startswith(str(tmp_path)), (
+                f"orchestrator.STATE_PATH 应在 NOVEL_AI_DIR 下，"
+                f"实际: {orch.STATE_PATH}"
+            )
+            assert str(orch.STATE_PATH).endswith("orchestrator_state.json")
+        finally:
+            # 重新 reload 恢复默认
+            monkeypatch.delenv("NOVEL_AI_DIR", raising=False)
+            importlib.reload(orch)
+
+    def test_graph_state_path_uses_env(self, monkeypatch, tmp_path):
+        """engine/graph.py 的 _STATE_PATH 也走 NOVEL_AI_DIR。"""
+        monkeypatch.setenv("NOVEL_AI_DIR", str(tmp_path))
+        import importlib
+        from engine import graph as graph_mod
+        importlib.reload(graph_mod)
+        try:
+            assert str(graph_mod._STATE_PATH).startswith(str(tmp_path))
+        finally:
+            monkeypatch.delenv("NOVEL_AI_DIR", raising=False)
+            importlib.reload(graph_mod)
+
+    def test_bridge_run_injects_novel_ai_dir(self):
+        """app/api/bridge.py 的 _run_bridge_async 必须从 binding 注入 NOVEL_AI_DIR。"""
+        import inspect
+        from app.api import bridge as bridge_mod
+        src = inspect.getsource(bridge_mod._run_bridge_async)
+        assert "NOVEL_AI_DIR" in src, (
+            "bridge._run_bridge_async 必须注入 NOVEL_AI_DIR env，"
+            "否则 engine STATE_PATH 跟 binding 不一致（双重真相 bug）"
+        )
+        assert "NovelAIBinding" in src and "novel_ai_dir" in src, (
+            "必须从 binding 读 novel_ai_dir 再注入 env"
+        )

@@ -243,10 +243,16 @@ async def _run_bridge_async(run_id: str, project_id: str, command: str,
             queue.put({"event": "start", "run_id": run_id, "command": command,
                        "outline_mode": outline_mode})
 
-            # outline_mode 走 env-style 注入；graph.run_graph_task 读 os.environ
+            # 把 binding.novel_ai_dir 注入 NOVEL_AI_DIR env，让 engine 的
+            # STATE_PATH / OUTPUT_DIR / CHAPTERS_DIR 跟 binding 一致
+            # （之前 state 在 novel_AI/，chapters 在 backend/，双重路径混乱）
             import os
             _prev_mode = os.environ.get("NOVEL_OUTLINE_MODE")
             os.environ["NOVEL_OUTLINE_MODE"] = outline_mode
+            _prev_novel_ai_dir = os.environ.get("NOVEL_AI_DIR")
+            binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
+            if binding:
+                os.environ["NOVEL_AI_DIR"] = binding.novel_ai_dir
             try:
                 exit_code, stdout_text = await asyncio.to_thread(
                     run_graph_task, project_id, command, args, run_id, queue
@@ -256,6 +262,10 @@ async def _run_bridge_async(run_id: str, project_id: str, command: str,
                     os.environ.pop("NOVEL_OUTLINE_MODE", None)
                 else:
                     os.environ["NOVEL_OUTLINE_MODE"] = _prev_mode
+                if _prev_novel_ai_dir is None:
+                    os.environ.pop("NOVEL_AI_DIR", None)
+                else:
+                    os.environ["NOVEL_AI_DIR"] = _prev_novel_ai_dir
 
             bridge_run.exit_code = exit_code
             bridge_run.stdout_text = stdout_text

@@ -27,7 +27,13 @@ from typing import Any, Optional
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BACKEND_DIR / "data"
 _CHECKPOINTS_PATH = str(DATA_DIR / "checkpoints.sqlite")
-_STATE_PATH = str(DATA_DIR / "engine" / "output" / "orchestrator_state.json")
+# 优先用 NOVEL_AI_DIR 环境变量（与 binding.novel_ai_dir 一致），fallback backend 路径
+import os as _os_const
+_NOVEL_AI_DIR_CONST = _os_const.environ.get("NOVEL_AI_DIR")
+if _NOVEL_AI_DIR_CONST:
+    _STATE_PATH = str(Path(_NOVEL_AI_DIR_CONST) / "output" / "orchestrator_state.json")
+else:
+    _STATE_PATH = str(DATA_DIR / "engine" / "output" / "orchestrator_state.json")
 
 log = logging.getLogger("novel_ai.engine")
 
