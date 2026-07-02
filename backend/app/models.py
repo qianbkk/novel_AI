@@ -6,7 +6,16 @@
 每个实体都有自己的 UUID 主键。
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
+
+
+def _utcnow() -> datetime:
+    """datetime.utcnow() 的弃用替代，返回 timezone-aware UTC datetime。
+
+    弃用原因：datetime.utcnow() 返回 naive datetime，不带 tzinfo，
+    容易和本地时间混用出错。Python 3.12+ 推荐用 datetime.now(timezone.utc)。
+    """
+    return datetime.now(timezone.utc)
 
 from sqlalchemy import (
     Column, String, Text, Integer, ForeignKey, DateTime, JSON, Float, Boolean
@@ -37,7 +46,7 @@ class Project(Base):
     budget_limit_usd = Column(Float, nullable=True)
     novel_ai_status = Column(String, default="not_started")
     # not_started | concept_pushed | planner_done | bootstrap_done | writing | done
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     world_setting = relationship("WorldSetting", back_populates="project", uselist=False)
     characters = relationship("Character", back_populates="project")
@@ -177,7 +186,7 @@ class Chapter(Base):
     content = Column(Text, nullable=False)
     summary = Column(Text, nullable=True)
     ai_assist_level = Column(String, default="ai_assisted")  # 章节级合规字段，呼应 Project 同名字段
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     project = relationship("Project")
 
@@ -207,7 +216,7 @@ class EmbeddingChunk(Base):
     text_snippet = Column(Text, nullable=False)     # 存一份原文片段方便调试/展示，不止存向量
     embedding_json = Column(JSON, nullable=False)
     model = Column(String, default="mock-ngram")
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 
 class Provider(Base):
@@ -228,7 +237,7 @@ class Provider(Base):
     default_model = Column(String, nullable=False)
     extra_json = Column(JSON, nullable=True)
     needs_proxy = Column(Boolean, default=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
 
 class RoleAssignment(Base):
@@ -252,7 +261,7 @@ class BridgeRun(Base):
     status = Column(String, default="pending")
     exit_code = Column(Integer, nullable=True)
     stdout_text = Column(Text, nullable=True)
-    started_at = Column(DateTime, default=datetime.utcnow)
+    started_at = Column(DateTime, default=_utcnow)
     finished_at = Column(DateTime, nullable=True)
 
 
@@ -278,7 +287,7 @@ class GenerationJob(Base):
     progress_percent = Column(Integer, default=0)
     error_message = Column(Text, nullable=True)
     consistency_warnings_json = Column(JSON, nullable=True)  # 一致性校验阶段产出的"吃书风险"清单
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=_utcnow)
 
     project = relationship("Project", back_populates="jobs")
 
@@ -294,6 +303,6 @@ class RuleConfig(Base):
     taboos_json = Column(JSON, nullable=True)           # list[str]
     template = Column(String, default="run.章节撰写")     # 当前激活的 prompt 模板名
     extra_json = Column(JSON, nullable=True)            # 预留：未来加更多维度
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     project = relationship("Project")

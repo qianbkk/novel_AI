@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from ..models import Chapter
 from ..rag.retrieval import add_chapter
 from ..logging_setup import get_logger
-from datetime import datetime
+from datetime import datetime, timezone
 
 log = get_logger("novel_ai.chapter_import")
 
@@ -143,7 +143,7 @@ async def _force_reimport(project_id: str, novel_ai_dir: str, db: Session) -> li
             existing.content = content
             existing.summary = derived_summary
             if not existing.created_at:
-                existing.created_at = datetime.utcnow()
+                existing.created_at = datetime.now(timezone.utc)
             db.commit()
             updated.append({"chapter_no": n, "title": derived_title, "mode": "updated"})
         else:

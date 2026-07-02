@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -138,9 +138,9 @@ def apply_review(
         "chapter_number": chapter_number,
         "note": note,
         "task": task,
-        "reviewed_at": datetime.utcnow().isoformat(),
+        "reviewed_at": datetime.now(timezone.utc).isoformat(),
     })
-    state["last_updated"] = datetime.utcnow().isoformat()
+    state["last_updated"] = datetime.now(timezone.utc).isoformat()
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
     return {"available": True, "action": action, "task": task, "remaining": len(pending)}
 

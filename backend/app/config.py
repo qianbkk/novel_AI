@@ -14,7 +14,7 @@ llm_client.py 会自动给 httpx 客户端加上代理。
 """
 from pathlib import Path
 
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent  # backend/ 目录
 DATA_DIR = BASE_DIR / "data"
@@ -63,9 +63,9 @@ class Settings(BaseSettings):
     llm_timeout_seconds: int = 120
     llm_max_retries: int = 2
 
-    class Config:
-        env_file = ".env"
-        env_prefix = "NOVEL_"
+    # Pydantic V3 会删 class-based config，迁到 SettingsConfigDict
+    # 见 https://errors.pydantic.dev/2.9/migration/
+    model_config = SettingsConfigDict(env_file=".env", env_prefix="NOVEL_")
 
 
 settings = Settings()

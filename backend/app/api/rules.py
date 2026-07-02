@@ -14,7 +14,7 @@
 （需要 graph 已 build_project_graph 过一次才会注册）。
 """
 from __future__ import annotations
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -91,7 +91,7 @@ def put_rules(project_id: str, payload: RuleConfigUpsert,
         cfg.template = payload.template
     if payload.extra is not None:
         cfg.extra_json = payload.extra
-    cfg.updated_at = datetime.utcnow()
+    cfg.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(cfg)
     return _serialize(cfg)
@@ -259,5 +259,5 @@ def post_process(project_id: str, payload: PostProcessRequest,
         findings=_parse_findings(raw),
         score=_extract_score(raw),
         cost_usd=cost,
-        generated_at=datetime.utcnow(),
+        generated_at=datetime.now(timezone.utc),
     )

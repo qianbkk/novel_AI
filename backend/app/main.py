@@ -30,11 +30,11 @@ def _recover_orphan_bridge_runs() -> int:
 
     修法：启动时把所有未结束的 running 行标为 'failed'，写入 finished_at。
     """
-    from datetime import datetime
+    from datetime import datetime, timezone
     from .models import BridgeRun
     db = SessionLocal()
     try:
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         stuck = (
             db.query(BridgeRun)
             .filter(BridgeRun.status == "running")

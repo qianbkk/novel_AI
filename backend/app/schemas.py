@@ -19,8 +19,7 @@ class ProjectOut(BaseModel):
     budget_limit_usd: Optional[float] = None
     novel_ai_status: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class JobOut(BaseModel):
@@ -30,8 +29,7 @@ class JobOut(BaseModel):
     current_stage: Optional[str]
     progress_percent: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChapterCreate(BaseModel):
@@ -66,8 +64,7 @@ class ProviderOut(BaseModel):
     api_key_set: bool = False            # True = 已配置（用户能看到 suffix），False = 未配置
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RoleAssignmentOut(BaseModel):
@@ -105,8 +102,7 @@ class BridgeRunOut(BaseModel):
     started_at: datetime
     finished_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class NovelAIBindingUpsert(BaseModel):
@@ -138,8 +134,7 @@ class RuleConfigOut(BaseModel):
     extra: dict[str, Any] = {}
     updated_at: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class RuleConfigUpsert(BaseModel):
@@ -174,8 +169,7 @@ class ChapterCharacterOut(BaseModel):
     character_name: Optional[str] = None
     character_role: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ChapterFull(BaseModel):
@@ -188,8 +182,7 @@ class ChapterFull(BaseModel):
     created_at: Optional[datetime] = None
     characters: list[ChapterCharacterOut] = []
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 # ─── 伏笔状态 ───

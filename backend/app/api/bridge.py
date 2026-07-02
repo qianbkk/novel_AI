@@ -1,6 +1,6 @@
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from queue import Queue
 
@@ -196,7 +196,7 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                 if stdout_chunks:
                     bridge_run.stdout_text = (bridge_run.stdout_text or "") + "".join(stdout_chunks)
                 bridge_run.exit_code = exit_code
-                bridge_run.finished_at = datetime.utcnow()
+                bridge_run.finished_at = datetime.now(timezone.utc)
                 bridge_run.status = "done" if exit_code == 0 else "failed"
                 db.commit()
                 queue.put({"event": "complete", "status": bridge_run.status,
