@@ -2632,3 +2632,90 @@ class TestExportOpenApiEndToEnd:
         content = script.read_text(encoding="utf-8")
         assert '"--url"' in content or "'--url'" in content
         assert '"--out"' in content or "'--out'" in content
+
+
+# ───────────────────────────────────────────
+# QQ: generate_master_key.py + security 端到端（实际加密 + 解密 round-trip）
+# ───────────────────────────────────────────
+class TestMasterKeyScriptsEndToEnd:
+    """迭代 #12：脚本不是只 import — 必须能跑通真实 encrypt/decrypt。
+
+    历史背景：
+      generate_master_key.py 之前只测 import / round-trip sanity check，
+      没测"用生成的 key 真能 encrypt + decrypt 跨模块"的真实场景。
+
+    本测试验证：
+      - generate_master_key.py 输出 44 字符 base64-urlsafe
+      - 用生成的 key encrypt 一个 string + 用同一个 Fernet 实例
+        decrypt 回原文
+      - security.encrypt/decrypt 真读 MASTER_KEY env
+    """
+
+    def test_generated_key_can_encrypt_decrypt_roundtrip(self):
+        """generate_master_key.py 输出的 key 真能用于 Fernet encrypt/decrypt。"""
+        from cryptography.fernet import Fernet
+        from pathlib import Path
+        import subprocess
+        backend_root = Path(__file__).resolve().parents[1]
+
+        result = subprocess.run(
+            ["python", "-m", "scripts.generate_master_key"],
+            cwd=backend_root,
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0, f"脚本失败：{result.stderr}"
+
+        key_str = None
+        for line in result.stdout.splitlines():
+            if line.startswith("MASTER_KEY="):
+                key_str = line.split("=", 1)[1].strip()
+                break
+        assert key_str is not None, f"脚本输出里没找到 MASTER_KEY=：{result.stdout!r}"
+        assert len(key_str) == 44, f"MASTER_KEY 长度 {len(key_str)} ≠ 44"
+
+        f = Fernet(key_str.encode("ascii"))
+        plaintext = "sk-test-real-encryption-12345"
+        ciphertext = f.encrypt(plaintext.encode("utf-8"))
+        decrypted = f.decrypt(ciphertext).decode("utf-8")
+        assert decrypted == plaintext, (
+            f"round-trip 失败：plaintext={plaintext!r}, decrypted={decrypted!r}"
+        )
+
+    def test_two_consecutive_keys_are_different(self):
+        """连续两次运行 generate 必产生不同 key（secrets 随机）。"""
+        from pathlib import Path
+        import subprocess
+        backend_root = Path(__file__).resolve().parents[1]
+        keys = []
+        for _ in range(2):
+            result = subprocess.run(
+                ["python", "-m", "scripts.generate_master_key"],
+                cwd=backend_root,
+                capture_output=True, text=True, timeout=10,
+            )
+            for line in result.stdout.splitlines():
+                if line.startswith("MASTER_KEY="):
+                    keys.append(line.split("=", 1)[1].strip())
+        assert len(keys) == 2, f"应拿到 2 个 key，实际 {keys}"
+        assert keys[0] != keys[1], (
+            f"连续两次 generate 应产生不同 key（secrets 随机），实际都 = {keys[0]}"
+        )
+
+    def test_security_encrypt_decrypt_uses_master_key_env(self, monkeypatch):
+        """security.encrypt_api_key / decrypt_api_key 真的读 MASTER_KEY env。"""
+        import os, base64, secrets
+        test_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+        monkeypatch.setenv("MASTER_KEY", test_key)
+
+        from app.security import encrypt_api_key, decrypt_api_key
+        plain = "sk-test-secret-9999"
+        ciphertext = encrypt_api_key(plain)
+        assert ciphertext != plain
+        # 同一 env 下解密必须成功
+        assert decrypt_api_key(ciphertext) == plain
+
+        # 改 env 模拟 MASTER_KEY 重置 / 错配 → 解密失败
+        monkeypatch.setenv("MASTER_KEY", base64.urlsafe_b64encode(secrets.token_bytes(32)).decode())
+        import pytest
+        with pytest.raises(ValueError, match="api_key 解密失败"):
+            decrypt_api_key(ciphertext)
