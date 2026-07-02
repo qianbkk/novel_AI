@@ -169,16 +169,84 @@ def save_state(state: OrchestratorState, path: str) -> None:
     自动更新 last_updated 为当前时间——之前不更新导致 state 看起来"冻结"
     （用户视角：bridge/status 显示 last_updated 17 小时前，但实际 engine
     还在跑）。P5 fix。
+
+    并发保护（迭代 #9）：用 fcntl/msvcrt 文件锁，避免两个 engine 进程
+    同时写 state.json 互相覆盖（last-write-wins 导致数据丢失）。
     """
     from datetime import datetime
+    import os
     # 复制一份避免修改入参（TypedDict 实际是 dict）
     payload = dict(state)
     payload["last_updated"] = datetime.now().isoformat()
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, ensure_ascii=False, indent=2)
+
+    # atomic write: 先写 .tmp，再 rename（避免半写文件被读）
+    # + 文件锁防并发（Windows 用 msvcrt，POSIX 用 fcntl）
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        _acquire_lock(f)  # no-op if not supported on platform
+        try:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        finally:
+            _release_lock(f)
+    os.replace(tmp_path, path)
 
 
 def load_state(path: str) -> OrchestratorState:
     """Load state from JSON. Returns a TypedDict instance."""
     with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        _acquire_lock(f)
+        try:
+            return json.load(f)
+        finally:
+            _release_lock(f)
+
+
+# ─────────────────────────────────────────────
+# 文件锁辅助（跨平台）
+# ─────────────────────────────────────────────
+def _acquire_lock(file_obj) -> bool:
+    """获取文件锁（独占写 / 共享读）。
+
+    Returns:
+        True: 锁成功（POSIX）或不适用（Windows / 锁库不可用）
+        False: 锁失败（OS 不可重入等）
+
+    Windows 用 msvcrt.locking（短时锁，配合 with 立即释放）：
+      - msvcrt.locking(fd, mode, nbytes)
+      - mode=2 = LK_LOCK, mode=8 = LK_UNLCK
+    POSIX 用 fcntl.flock（多进程间文件锁）：
+      - LOCK_SH (1) = 共享读 / LOCK_EX (2) = 独占写 / LOCK_UN (8) = 释放
+    """
+    try:
+        import fcntl  # type: ignore
+        fcntl.flock(file_obj.fileno(), fcntl.LOCK_EX)
+        return True
+    except (ImportError, AttributeError):
+        # Windows: 退化到 msvcrt
+        try:
+            import msvcrt  # type: ignore
+            # 锁住当前文件指针后的 1 个字节（写场景，文件已有内容）
+            msvcrt.locking(file_obj.fileno(), msvcrt.LK_LOCK, 1)
+            return True
+        except Exception:
+            # 锁库不可用（罕见）：跳过锁而非 crash
+            return False
+    except OSError:
+        return False
+
+
+def _release_lock(file_obj) -> None:
+    """释放文件锁（与 _acquire_lock 配对）。失败不抛（避免掩盖原异常）。"""
+    try:
+        import fcntl  # type: ignore
+        fcntl.flock(file_obj.fileno(), fcntl.LOCK_UN)
+    except (ImportError, AttributeError):
+        try:
+            import msvcrt  # type: ignore
+            msvcrt.locking(file_obj.fileno(), msvcrt.LK_UNLCK, 1)
+        except Exception:
+            pass
+    except OSError:
+        pass

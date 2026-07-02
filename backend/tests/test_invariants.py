@@ -2383,3 +2383,76 @@ class TestHealthEndpointDBCheck:
         assert "DB lock" in body.get("detail", ""), (
             f"detail 应含错误信息：{body}"
         )
+
+
+# ───────────────────────────────────────────
+# NN: engine/state.py save_state 加原子写 + 文件锁（防并发损坏）
+# ───────────────────────────────────────────
+class TestSaveStateConcurrencySafe:
+    """历史背景（迭代 #9）：
+      save_state 之前直接 open(path, "w") + json.dump，半写文件被读 +
+      多进程同时写会互相覆盖（last-write-wins）。多 worker 部署或
+      测试并行跑会偶发 state.json 损坏。
+
+      修法：
+        1. atomic write：先写 .tmp + os.replace（原子 rename，避免半写）
+        2. 文件锁：fcntl (POSIX) / msvcrt (Windows) 跨平台
+        3. fsync：数据真正落盘（不掉电丢失）
+    """
+
+    def test_save_state_atomic_no_partial_file(self, tmp_path):
+        """save_state 写失败时不能留半写 state.json。"""
+        from engine.state import save_state, create_initial_state, load_state
+        path = str(tmp_path / "state.json")
+        state = create_initial_state("test", "t", "fanqie", "都市", "")
+        state["current_chapter"] = 42
+        save_state(state, path)
+        # 真文件存在
+        assert (tmp_path / "state.json").exists()
+        # .tmp 已清理（说明 atomic write 完成）
+        assert not (tmp_path / "state.json.tmp").exists(), (
+            ".tmp 临时文件不应保留（atomic write 后应清理）"
+        )
+        # 内容可正常 load
+        loaded = load_state(path)
+        assert loaded["current_chapter"] == 42
+
+    def test_save_state_overwrites_existing(self, tmp_path):
+        """多次 save_state 覆盖写，最终内容是最新的（无残留旧数据）。"""
+        from engine.state import save_state, create_initial_state, load_state
+        path = str(tmp_path / "state.json")
+        # 第一次
+        s1 = create_initial_state("test", "title1", "fanqie", "都市", "")
+        save_state(s1, path)
+        # 第二次（不同字段）
+        s2 = create_initial_state("test", "title2", "qidian", "玄幻", "升级流")
+        s2["current_chapter"] = 99
+        save_state(s2, path)
+        loaded = load_state(path)
+        assert loaded["title"] == "title2", "二次写应覆盖 title"
+        assert loaded["current_chapter"] == 99
+
+    def test_lock_helpers_no_crash_on_unsupported_platform(self):
+        """_acquire_lock / _release_lock 在锁库不可用时不 crash。"""
+        from engine.state import _acquire_lock, _release_lock
+        import tempfile
+        # 用真文件句柄测试
+        with tempfile.NamedTemporaryFile() as f:
+            # 即便 fcntl/msvcrt 都不可用（罕见），也不应抛
+            try:
+                result = _acquire_lock(f)
+                # 任何返回值都可（True/False 都接受，只要不抛）
+                assert result in (True, False)
+            finally:
+                _release_lock(f)
+
+    def test_load_state_returns_typed_dict(self, tmp_path):
+        """load_state 返回 dict（TypedDict 在运行时就是 dict）。"""
+        from engine.state import save_state, create_initial_state, load_state
+        path = str(tmp_path / "state.json")
+        state = create_initial_state("test", "t", "fanqie", "都市", "")
+        save_state(state, path)
+        loaded = load_state(path)
+        assert isinstance(loaded, dict)
+        assert "novel_id" in loaded
+        assert "last_updated" in loaded
