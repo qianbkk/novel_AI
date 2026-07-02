@@ -678,7 +678,7 @@ class TestReviewContract:
     def test_backend_review_request_has_content_field(self):
         """后端 ReviewRequest 必须有 content 字段（与前端对齐）。"""
         from app.schemas import ReviewRequest
-        fields = ReviewRequest.__fields__
+        fields = ReviewRequest.model_fields
         assert "content" in fields, (
             "backend ReviewRequest 缺 content 字段 — 前端编辑提交会拿到 None"
         )
@@ -790,6 +790,7 @@ class TestOrphanBridgeRunRecovery:
         from app.main import _recover_orphan_bridge_runs
         from app.database import SessionLocal
         from app.models import BridgeRun
+        from datetime import datetime, timezone
 
         # 准备：插一条 orphan running 行（finished_at IS NULL）
         db = SessionLocal()
@@ -798,7 +799,7 @@ class TestOrphanBridgeRunRecovery:
                 project_id="test-orphan-recovery",
                 command="run",
                 status="running",
-                started_at=datetime.utcnow(),
+                started_at=datetime.now(timezone.utc),
                 finished_at=None,
             )
             db.add(test_run)
@@ -890,6 +891,116 @@ class TestReportsPathUnified:
         expected = str(Path("/some/dir") / "output" / "orchestrator_state.json")
         assert str(result) == expected, (
             f"_state_path fallback 失败：{result}（期望 {expected}）"
+        )
+
+
+# ───────────────────────────────────────────
+# AA: Mock LLM Provider（引擎质量验证不花钱）
+# ───────────────────────────────────────────
+class TestMockLLMProvider:
+    """历史背景（独立审查标记的中危点）：
+      之前要验证 engine 端到端机制（schema 校验、字数 budget、orchestrator
+      编排、tools 调用）必须真花钱调 LLM。
+      Mock provider 让这一切离线跑：单元测试 / 集成测试 / CI 都不依赖
+      外部 API，引擎质量验证独立于生成质量。
+
+      本轮新增：LLMRouter._mock 方法 + _MOCK_RESPONSES 模板。
+      Mock 模式只验证引擎机制，不验证生成内容质量（生产仍走真 provider）。
+    """
+
+    def test_mock_provider_registered_in_dispatch(self):
+        """LLMRouter 的 dispatch 必须包含 'mock' provider。"""
+        from engine.llm.router import LLMRouter
+        r = LLMRouter("test")
+        # 通过 routes 里把 agent 指向 mock，触发 dispatch
+        r.routes["writer"] = ("mock", "mock-model")
+        text, cost = r.call("writer", "sys", "user", max_tokens=2000, temperature=0.7)
+        assert text, "mock writer 必须返回非空文本"
+        assert cost == 0.001, f"mock cost 应为 0.001/调用，实际 {cost}"
+        assert len(text) >= 1800, (
+            f"mock writer 应返回接近 2000 字的章节（满足 call_with_length_budget 区间），"
+            f"实际 {len(text)}"
+        )
+
+    def test_mock_provider_no_api_key_needed(self):
+        """mock provider 不能读任何 api_key env（环境变量没设也不报错）。"""
+        import os
+        from engine.llm.router import LLMRouter
+        # 删掉所有 API key env
+        for k in ["ANTHROPIC_API_KEY", "DEEPSEEK_API_KEY", "GEMINI_API_KEY",
+                  "KIMI_API_KEY", "MINIMAX_API_KEY", "CUSTOM_API_KEY"]:
+            os.environ.pop(k, None)
+        r = LLMRouter("test")
+        r.routes["planner"] = ("mock", "mock-model")
+        # 不抛异常 + 返回非空
+        text, cost = r.call("planner", "sys", "user", max_tokens=2000, temperature=0.7)
+        assert text
+        assert "Mock" in text or "mock" in text, (
+            f"mock planner 应返回标记为 Mock 的内容：{text[:100]!r}"
+        )
+
+    def test_mock_provider_returns_schema_valid_json(self):
+        """checker / tracker / outline 等 agent 的 mock 响应必须是合法 JSON。"""
+        import json
+        from engine.llm.router import LLMRouter
+        r = LLMRouter("test")
+        for agent in ["tracker", "compliance", "checker_main", "outline"]:
+            r.routes[agent] = ("mock", "mock-model")
+            text, _ = r.call(agent, "sys", "user", max_tokens=4000, temperature=0.7)
+            parsed = json.loads(text)  # 必须能 parse
+            assert isinstance(parsed, dict), (
+                f"mock {agent} 响应必须是 JSON dict，实际 {type(parsed).__name__}"
+            )
+            assert len(parsed) > 0, f"mock {agent} 响应不能是空 dict"
+
+    def test_mock_provider_does_not_break_stats(self):
+        """mock 调用应该正常累计 stats（不抛异常）。"""
+        from engine.llm.router import LLMRouter
+        r = LLMRouter("test")
+        r.routes["writer"] = ("mock", "mock-model")
+        r.call("writer", "sys", "user", max_tokens=2000, temperature=0.7)
+        stats = r.get_stats()
+        assert stats["total_calls"] == 1
+        assert abs(stats["total_cost_usd"] - 0.001) < 1e-6
+        assert stats["by_agent"]["writer"]["calls"] == 1
+
+
+# ───────────────────────────────────────────
+# BB: engine/graph.py 日志统一（capture.write [engine] → log.xxx）
+# ───────────────────────────────────────────
+class TestEngineLoggingUnified:
+    """历史背景（独立审查标记的低优先级）：
+      backend/engine/graph.py 之前 16 处 capture.write("[engine] ...")，日志
+      走 SSECapture 而不是 logging 配置——日志级别、文件落盘、log rotation
+      都控制不到。
+
+      本轮修复：把 [engine] 前缀的诊断输出改成 log.xxx() 调用，让 root
+      logger 配置接管（控制台 + backend/logs/novel_ai.log 落盘）。
+      不动其他 capture.write（章节内容 / emoji 状态等 user-facing 输出）。
+    """
+
+    def test_no_engine_prefix_capture_write(self):
+        """graph.py 不应再有 capture.write("[engine] ...") 诊断输出。"""
+        from pathlib import Path
+        graph_py = Path(__file__).resolve().parents[2] / "backend" / "engine" / "graph.py"
+        content = graph_py.read_text(encoding="utf-8")
+        offenders = []
+        for i, line in enumerate(content.splitlines(), start=1):
+            if 'capture.write' in line and '[engine]' in line:
+                offenders.append(f"line {i}: {line.rstrip()}")
+        assert not offenders, (
+            "graph.py 还有 [engine] 前缀的 capture.write — "
+            "应改为 log.info/warning/error 让 root logger 接管：\n  "
+            + "\n  ".join(offenders)
+        )
+
+    def test_engine_log_uses_module_logger(self):
+        """graph.py 顶部必须定义了 novel_ai.engine logger。"""
+        from pathlib import Path
+        graph_py = Path(__file__).resolve().parents[2] / "backend" / "engine" / "graph.py"
+        content = graph_py.read_text(encoding="utf-8")
+        assert 'logging.getLogger("novel_ai.engine")' in content, (
+            "graph.py 顶部必须有 logging.getLogger('novel_ai.engine')"
         )
 
 

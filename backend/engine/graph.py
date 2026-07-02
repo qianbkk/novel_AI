@@ -317,7 +317,7 @@ def run_graph_task(
         export / stats / show / init_arc → auxiliary commands
     """
     capture = SSECapture(queue)
-    capture.write(f"[engine] run_id={run_id} project={project_id} cmd={command}\n")
+    log.info("run_id={run_id} project={project_id} cmd={command}")
 
     try:
         # Build graph (also installs the router for the agents)
@@ -337,7 +337,7 @@ def run_graph_task(
                     result = run_all_tests()
                 exit_code = 0 if result else 1
             except ImportError:
-                capture.write("[engine] WARN: backend.engine.tools.system_test not yet ported (P3)\n")
+                log.warning("backend.engine.tools.system_test not yet ported (P3)")
                 exit_code = 0
         elif command == "planner":
             try:
@@ -346,7 +346,7 @@ def run_graph_task(
                     _run_planner(args, str(DATA_DIR / "engine" / "output"))
                 exit_code = 0
             except ImportError:
-                capture.write("[engine] WARN: planner agent not yet ported (P2)\n")
+                log.warning("planner agent not yet ported (P2)")
                 exit_code = 0
         elif command == "bootstrap":
             try:
@@ -355,7 +355,7 @@ def run_graph_task(
                     run_bootstrap(novel_id=project_id)
                 exit_code = 0
             except Exception as e:
-                capture.write(f"[engine] bootstrap failed: {e}\n")
+                log.error(f"bootstrap failed: {e}")
                 exit_code = 1
         elif command in ("run", "resume"):
             chapters = int(args[0]) if args else 10
@@ -380,7 +380,7 @@ def run_graph_task(
                     capture.write("状态未初始化\n")
             exit_code = 0
         elif command == "dashboard":
-            capture.write("[engine] WARN: dashboard command not yet ported (P3)\n")
+            log.warning("dashboard command not yet ported (P3)")
             exit_code = 0
         elif command == "budget":
             try:
@@ -389,7 +389,7 @@ def run_graph_task(
                     print_report()
                 exit_code = 0
             except Exception as e:
-                capture.write(f"[engine] budget failed: {e}\n")
+                log.error(f"budget failed: {e}")
                 exit_code = 1
         elif command == "scan":
             try:
@@ -398,7 +398,7 @@ def run_graph_task(
                     scan_all_chapters(novel_id=project_id)
                 exit_code = 0
             except Exception as e:
-                capture.write(f"[engine] scan failed: {e}\n")
+                log.error(f"scan failed: {e}")
                 exit_code = 1
         elif command == "pending":
             pending = state.get("human_pending", [])
@@ -421,7 +421,7 @@ def run_graph_task(
                     cmd_scan()
                 exit_code = 0
             except Exception as e:
-                capture.write(f"[engine] fingerprint failed: {e}\n")
+                log.error(f"fingerprint failed: {e}")
                 exit_code = 1
         elif command == "export":
             try:
@@ -434,7 +434,7 @@ def run_graph_task(
                         export_chapters()
                 exit_code = 0
             except Exception as e:
-                capture.write(f"[engine] export failed: {e}\n")
+                log.error(f"export failed: {e}")
                 exit_code = 1
         elif command == "stats":
             try:
@@ -443,7 +443,7 @@ def run_graph_task(
                     print_stats()
                 exit_code = 0
             except Exception as e:
-                capture.write(f"[engine] stats failed: {e}\n")
+                log.error(f"stats failed: {e}")
                 exit_code = 1
         elif command == "init_arc":
             try:
@@ -452,7 +452,7 @@ def run_graph_task(
                     build_state_from_setting(project_id)
                 exit_code = 0
             except Exception as e:
-                capture.write(f"[engine] init_arc failed: {e}\n")
+                log.error(f"init_arc failed: {e}")
                 exit_code = 1
         elif command == "human_review":
             try:
@@ -461,7 +461,7 @@ def run_graph_task(
                     run_review()
                 exit_code = 0
             except Exception as e:
-                capture.write(f"[engine] human_review failed: {e}\n")
+                log.error(f"human_review failed: {e}")
                 exit_code = 1
         elif command == "style":
             try:
@@ -474,7 +474,7 @@ def run_graph_task(
                         cmd_list()
                 exit_code = 0
             except Exception as e:
-                capture.write(f"[engine] style failed: {e}\n")
+                log.error(f"style failed: {e}")
                 exit_code = 1
         elif command == "calibrate":
             try:
@@ -483,7 +483,7 @@ def run_graph_task(
                     run_calibration()
                 exit_code = 0
             except Exception as e:
-                capture.write(f"[engine] calibrate failed: {e}\n")
+                log.error(f"calibrate failed: {e}")
                 exit_code = 1
         elif command == "acceptance":
             try:
@@ -492,7 +492,7 @@ def run_graph_task(
                     ok = run_all()
                 exit_code = 0 if ok else 1
             except Exception as e:
-                capture.write(f"[engine] acceptance failed: {e}\n")
+                log.error(f"acceptance failed: {e}")
                 exit_code = 1
         elif command == "show":
             n = int(args[0]) if args else 1
@@ -509,7 +509,7 @@ def run_graph_task(
             exit_code = 1
 
     except Exception as exc:
-        capture.write(f"[engine] ERROR: {exc}\n")
+        log.error(str({exc}))
         exit_code = 1
 
     capture.flush()
