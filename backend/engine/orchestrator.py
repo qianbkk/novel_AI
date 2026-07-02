@@ -100,6 +100,22 @@ def _add_cost(state: OrchestratorState, cost: float) -> None:
     state["budget_used_usd"] = state.get("budget_used_usd", 0.0) + cost
 
 
+class WriterFailedError(Exception):
+    """Writer agent 完全失败的 sentinel 异常。
+
+    之前（你独立验证的 bug）：
+      writer 抛 Connection error / SSL 错误时，orchestrator 写一个
+      `[writer-stub] {goal}` 占位文本（47 字）并继续 pipeline，checker
+      给这个假文本打 7.0 分 PASS，save_and_track 落盘 ch_0064.txt —
+      用户视角"7.0 分 PASS"，实际是 47 字占位。
+    修复（Commit N）：
+      writer 失败时抛 WriterFailedError（不降级到占位），让
+      node_write_pipeline 把 task 标为 _writer_failed=True，
+      route_after_pipeline 路由到 escalate 而不是 save，
+      避免污染下游。
+    """
+
+
 def _budget_ok(state: OrchestratorState) -> bool:
     used  = state.get("budget_used_usd", 0.0)
     limit = state.get("budget_limit_usd", 500.0)
@@ -238,10 +254,19 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
     log("  ✍️  Writer生成中...", state)
     try:
         raw_text, cost = run_writer(task, {}, setting)
+        _add_cost(state, cost)
     except Exception as e:
+        # 之前：写 "[writer-stub] {goal}" 占位并继续 pipeline → checker 给
+        # 占位文本打 7.0 分 PASS，save_and_track 落盘假章节（ch_0064 bug）。
+        # 现在：raw_text 留空、task._writer_failed=True，route_after_pipeline
+        # 会路由到 escalate 而不是 save，下游不会再处理。
         log(f"ERR writer failed: {e}", state)
-        raw_text, cost = f"[writer-stub] {task.get('chapter_goal','')}", 0.0
-    _add_cost(state, cost)
+        state["error_log"] = (state.get("error_log", []) +
+                              [f"writer failed ch{task['chapter_number']}: {e}"])
+        task["_writer_failed"] = True
+        task["_draft_text"]    = ""
+        state["current_task"]  = task
+        return state
 
     log("  🔧 Normalizer处理...", state)
     try:
@@ -439,6 +464,10 @@ def route_after_pipeline(state) -> Literal["save", "rewrite", "escalate", "budge
     if state.get("current_phase") in ("done", "budget_paused"):
         return "save"
     task = state.get("current_task", {})
+    # writer 完全失败时直接 escalate，不进入 normalizer/checker/save
+    # 之前会写 [writer-stub] 占位并跑完 pipeline → 假 7.0 分 PASS（ch_0064）
+    if task.get("_writer_failed"):
+        return "escalate"
     score = task.get("_checker_result", {}).get("score", 0) if task.get("_checker_result") else 0
     rw = state.get("rewrite_count_current", 0)
     if task.get("_compliance_failed"):

@@ -749,3 +749,119 @@ class TestSaveStateUpdatesLastUpdated:
         assert state["last_updated"] == before_ts, (
             f"save_state 不应修改入参，但 last_updated 现在是 {state['last_updated']!r}"
         )
+
+
+# ───────────────────────────────────────────
+# M: writer 失败时不能写占位文本继续 pipeline（防止假 PASS 章节）
+# ───────────────────────────────────────────
+class TestWriterFailureNoFakeStub:
+    """历史 bug（你独立验证）：
+      writer 抛 Connection error / SSL 错误时，orchestrator 写
+      `f"[writer-stub] {task.get('chapter_goal','')}"` 占位文本（47 字）
+      并继续 pipeline → checker 给这个假文本打 7.0 分 PASS，save_and_track
+      落盘 ch_0064.txt — 用户视角"7.0 分 PASS"，实际是 47 字假文本。
+
+    修复：
+      writer 失败时设 task._writer_failed=True + raw_text=""，提前 return
+      node_write_pipeline；route_after_pipeline 检查 _writer_failed → escalate
+      → node_human_escalation 走人工 review 流程（不会再写 [writer-stub]）。
+
+    本测试锁死：
+      1) writer-stub 占位文本不再被使用
+      2) WriterFailedError 类存在
+      3) route_after_pipeline 在 _writer_failed=True 时返回 escalate
+    """
+
+    def test_no_writer_stub_in_orchestrator(self):
+        """orchestrator.py 真代码行不能写 [writer-stub] 占位文本。
+        之前 line 243: raw_text = f"[writer-stub] {task.get('chapter_goal','')}", 0.0
+        （docstring 里提到 [writer-stub] 是历史说明，OK；真代码行不能用）
+
+        实现：在源码中跟踪三引号 docstring 范围（docstring 内部）和 # 注释
+        行，只检查真代码行。
+        """
+        import inspect
+        from engine import orchestrator as orch
+        src = inspect.getsource(orch)
+        in_docstring = False
+        for line in src.splitlines():
+            stripped = line.strip()
+            # 跟踪三引号 docstring 边界
+            triple_count = stripped.count('"""') + stripped.count("'''")
+            if triple_count % 2 == 1:
+                in_docstring = not in_docstring
+                if stripped.startswith(('"""', "'''")) and len(stripped) > 3:
+                    continue
+            if in_docstring:
+                continue
+            # 跳过纯注释
+            if stripped.startswith("#"):
+                continue
+            assert "[writer-stub]" not in line, (
+                f"orchestrator 真代码行仍写 [writer-stub] 占位: {line!r}。"
+                f"writer 失败时应让 task._writer_failed=True + 提前 return。"
+            )
+
+    def test_writer_failed_error_class_exists(self):
+        from engine.orchestrator import WriterFailedError
+        assert issubclass(WriterFailedError, Exception)
+
+    def test_route_after_pipeline_escalates_on_writer_failed(self):
+        """_writer_failed=True → route_after_pipeline 必须返回 escalate。"""
+        from engine.orchestrator import route_after_pipeline
+        state = {
+            "current_phase": "writing",
+            "current_task": {"_writer_failed": True, "_checker_result": {"score": 7.0}},
+            "rewrite_count_current": 0,
+        }
+        # 即便 checker "通过"了，writer 失败也必须 escalate（不能 save）
+        result = route_after_pipeline(state)
+        assert result == "escalate", (
+            f"_writer_failed=True 时 route_after_pipeline 应返回 escalate，"
+            f"实际: {result!r}"
+        )
+
+    def test_route_after_pipeline_saves_normal_pass(self):
+        """_writer_failed=False + score>=PASS_SCORE → save（正常路径不能误伤）。"""
+        from engine.orchestrator import route_after_pipeline, PASS_SCORE
+        state = {
+            "current_phase": "writing",
+            "current_task": {"_writer_failed": False, "_checker_result": {"score": PASS_SCORE}},
+            "rewrite_count_current": 0,
+        }
+        result = route_after_pipeline(state)
+        assert result == "save", (
+            f"正常 PASS 章节应 save，实际: {result!r}"
+        )
+
+    def test_node_write_pipeline_short_circuits_on_writer_exception(self, monkeypatch):
+        """node_write_pipeline 在 writer 抛异常时不能继续 pipeline。
+        模拟 run_writer 抛 ConnectionError，看 task._writer_failed 是否置位。
+        """
+        from engine import orchestrator as orch
+        # monkeypatch run_writer 抛异常
+        def fake_run_writer(task, memory, setting):
+            raise ConnectionError("simulated writer failure")
+        monkeypatch.setattr(orch, "run_writer", fake_run_writer)
+
+        state = {
+            "current_task": {"chapter_number": 99, "chapter_goal": "test"},
+            "current_chapter": 99,
+            "rewrite_count_current": 0,
+            "error_log": [],
+            "chapter_task_queue": [],
+        }
+        result = orch.node_write_pipeline(state)
+        # 必须标记 _writer_failed=True
+        assert result["current_task"].get("_writer_failed") is True, (
+            "writer 抛异常时 task._writer_failed 必须置 True"
+        )
+        # 不能再有 checker_result（避免后续 save 假章节）
+        assert "_checker_result" not in result["current_task"] or \
+               not result["current_task"].get("_checker_result"), (
+            "writer 失败时不应有 _checker_result（说明 pipeline 跑完了）"
+        )
+        # error_log 记录
+        assert any("writer failed" in e for e in result.get("error_log", [])), (
+            f"error_log 应记录 writer 失败，实际: {result.get('error_log', [])[-3:]}"
+        )
