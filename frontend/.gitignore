@@ -3,3 +3,8 @@ dist/
 .env
 *.local
 *.tsbuildinfo
+
+# Auto-exported OpenAPI spec — regenerate via backend/scripts/export_openapi.py
+# 后端 schema 每次变动需要重新导出，避免漂移（commit 17a20fc 提到的：
+# 旧 openapi.json 缺 rules / foreshadowings / ai-assist-level 等 10+ 项）
+openapi.json
