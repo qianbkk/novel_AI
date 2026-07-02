@@ -70,3 +70,52 @@ python -m scripts.run_mvp <project_id>
 ## 注意
 
 `.env`、运行日志、数据库、构建产物和缓存不会提交到仓库。
+
+## 部署
+
+> ⚠️ 当前是原型阶段。生产部署**至少**要做以下配置：
+
+### 1. Provider API Key 加密（必须）
+
+`Provider.api_key` 列在 SQLite 中以 **Fernet ciphertext** 存储，密钥来自环境变量 `MASTER_KEY`。
+设了 `MASTER_KEY` → 用它解密；没设 → 启动时**临时生成**一个 + 警告。临时生成的 key 重启后会失效（已加密的 key 解不开）。
+
+**生产部署务必设置：**
+
+```bash
+# 生成一个新的 MASTER_KEY
+python -m scripts.generate_master_key
+# 输出示例：MASTER_KEY=<base64-urlsafe-44-chars>
+
+# 启动后端时注入
+export MASTER_KEY='<上面生成的 key>'
+uvicorn app.main:app --host 0.0.0.0 --port 8132 --workers 1
+```
+
+⚠️ **多 worker 部署（gunicorn / uvicorn --workers N>1）暂不支持**：每个 worker 进程独立加载 MASTER_KEY，目前 OK；但若未来做加密缓存或 sticky session，**必须**保证所有 worker 用同一个 MASTER_KEY。
+
+### 2. CORS 收紧（必须）
+
+默认 `ALLOWED_ORIGINS=http://localhost:5293`（前端 dev 端口）。
+部署前端到 `https://your-frontend.example.com` 时：
+
+```bash
+export ALLOWED_ORIGINS='https://your-frontend.example.com,https://www.your-frontend.example.com'
+```
+
+### 3. 端口与绑定（推荐）
+
+- 后端：`uvicorn ... --host 0.0.0.0 --port 8132`，前面套 nginx/Caddy 反代 + HTTPS
+- 前端：`npm run build` 后 `dist/` 是静态文件，nginx 直接 serve
+
+### 4. 启动时自动迁移
+
+后端 lifespan handler 启动时会自动跑 `run_migrations()`（给已有表加新列）。
+SQLite 适合原型；生产建议迁 PostgreSQL（改 `database_url` 即可）。
+
+### 5. 不在这次范围内的项
+
+- 速率限制 / WAF
+- 多用户认证（当前是单租户原型）
+- 分布式任务队列（现在是进程内 lock + SQLite）
+- 密钥管理服务（Vault / AWS KMS 之类）

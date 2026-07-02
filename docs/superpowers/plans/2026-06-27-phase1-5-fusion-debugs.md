@@ -1,5 +1,23 @@
 # Phase 1.5 收尾排雷 — 实施计划
 
+> ⚠️ **SUPERSEDED** — 本计划的所有 12 个 Task 已在 2026-06-27 至 2026-07-01 期间通过独立 commit 链执行完毕。
+> 不再追踪 checkbox 状态。如需追溯执行证据，请按以下 commit 索引核对：
+>
+> | Plan Task | 关联 commit | 标题 |
+> |-----------|------------|------|
+> | Task 1-3 (sync / config / auth) | (与 Phase 1 同期) | 已被后续 commit 覆盖 |
+> | Task 4 (delete dead code) | `4a79422` | chore: 删 writer.py 死代码 + 显式声明 tenacity |
+> | Task 5 (langgraph checkpointer config) | `bdff57a` | fix(engine): graph.stream 必须传 config.configurable.thread_id |
+> | Task 6 (run_graph_task to_thread) | (合并到 `bdff57a`) | — |
+> | Task 7 (delete invoke.py / env_writer.py) | (Phase 1 同期) | — |
+> | Task 8 (checkpoint path 绝对化) | (合并到 `bdff57a`) | — |
+> | Task 9 (parse type guard) | `af8f073` | fix(engine): parse_llm_json_response 加类型保护 |
+> | Task 10 (frontend 8123→8132) | `3278a77` | fix(frontend): 默认 backend 端口 8123 → 8132 |
+> | Task 11 (smoke test 步骤 3 校验) | `45721c7` | fix: writing-path length budget + tests dir collection error |
+> | Task 12 (completion summary) | (最终 commit 链) | — |
+>
+> 本文件保留是因为它记录了 Phase 1.5 的设计决策；新读者应直接看 git history 而不是 plan checkbox。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (- [ ]) syntax for tracking. **Hard rule: do NOT modify any file under `D:/AI/Codex_workspace/Novel_AI/novel_AI/` — that directory is a gitignored reference and must stay untouched.** All steps are atomic (one command / one function / one file edit / one test) so progress is verifiable per step.
 
 **Goal:** Clean up the four "fusion aftermath" defects + two real bugs + dead code + a path robustness issue left over after Phase 1's in-process engine integration, so the branch can move on to Spec B / Spec C. **Do not touch `novel_AI/`.**
