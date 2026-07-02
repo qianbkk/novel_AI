@@ -65,8 +65,13 @@ export default function BridgeConsole() {
         setNovelAiDir(binding.novel_ai_dir);
         setNovelId(binding.novel_id);
       })
-      .catch(() => {
+      .catch((e) => {
         setNovelAiDir("");
+        // binding 缺失不算静默 — 让用户知道要先去 binding 页面设置
+        // （之前 .catch(()=>{}) 完全吞掉，用户不知道为啥 bridge 跑不动）
+        setError(
+          `尚未绑定 NovelAI 目录：${String(e)}。请先在「NovelAI 绑定」卡片填写 novel_ai_dir。`
+        );
       });
     api.listChapters(projectId)
       .then(setChapters)
