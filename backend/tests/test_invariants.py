@@ -2271,3 +2271,62 @@ class TestStatePathFromBinding:
         assert "NovelAIBinding" in src and "novel_ai_dir" in src, (
             "必须从 binding 读 novel_ai_dir 再注入 env"
         )
+
+
+# ───────────────────────────────────────────
+# LL: acceptance_tests 验收套件核心逻辑（5 个 AC 测试无覆盖风险）
+# ───────────────────────────────────────────
+class TestAcceptanceTestsCovered:
+    """历史背景（最终全面审计 P2）：
+      engine/tools/acceptance_tests.py 是 V3 方案 8.5 节的 5 个验收标准
+      （AC-1 设定一致性 / AC-2 题材切换 / AC-3 任务单质量 / AC-4 平台适配
+      / AC-5 人物弧光），核心验收逻辑**零测试覆盖**。
+
+      本轮至少锁死 AC-2（题材切换）—— 它是最纯函数（不依赖文件系统），
+      也是 prompt_templates 的核心契约。其他 AC 依赖具体 novel 数据，留待后续。
+    """
+
+    def test_ac2_genre_switch_pure_function(self):
+        """AC-2 题材切换：每个题材必须返回 >= 50 字指令，未知题材兜底。"""
+        from engine.tools.acceptance_tests import ac2_genre_switch
+        # 注意：print 副作用不影响测试结果
+        assert ac2_genre_switch() is True, (
+            "AC-2 题材切换测试必须返回 True（所有题材 + 兜底都正常）"
+        )
+
+    def test_ac2_genre_instruction_min_length(self):
+        """prompt_templates.get_genre_instruction 必须返回 >= 50 字指令。"""
+        from engine.config.prompt_templates import get_genre_instruction
+        for genre in ["都市", "玄幻", "科幻", "都市系统流", "玄幻修仙", "萌宝甜宠"]:
+            instruction = get_genre_instruction(genre)
+            assert isinstance(instruction, str) and len(instruction) >= 50, (
+                f"题材「{genre}」指令太短或非字符串：len={len(instruction) if instruction else 0}"
+            )
+
+    def test_ac2_unknown_genre_has_fallback(self):
+        """未知题材必须有兜底指令（不能让 LLM 收到空 prompt）。"""
+        from engine.config.prompt_templates import get_genre_instruction
+        for unknown in ["未知", "不存在题材XYZ", "", "random_genre_999"]:
+            instruction = get_genre_instruction(unknown)
+            assert instruction, f"未知题材「{unknown!r}」必须返回兜底指令，实际 {instruction!r}"
+            assert len(instruction) >= 10, (
+                f"未知题材「{unknown!r}」兜底指令太短：{instruction!r}"
+            )
+
+    def test_ac2_urban_system_flow_marker(self):
+        """「都市」题材指令必须含「系统流」要求（AC-2 验收关键点）。"""
+        from engine.config.prompt_templates import get_genre_instruction
+        urban = get_genre_instruction("都市")
+        assert "系统流" in urban, (
+            f"「都市」指令缺「系统流」marker（AC-2 验收点）：{urban[:100]!r}"
+        )
+
+    def test_run_all_returns_bool(self):
+        """run_all() 返回 True/False（不是 None / 抛异常）。"""
+        from engine.tools.acceptance_tests import run_all
+        result = run_all()
+        assert isinstance(result, bool), (
+            f"run_all() 必须返回 bool，实际 {type(result).__name__}"
+        )
+        # 项目当前数据不全 → 至少 AC-2 应该 PASS，其他可能 SKIP
+        # 我们不强求 5/5 PASS（数据依赖），但 True/False 边界要对
