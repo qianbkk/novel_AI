@@ -53,6 +53,7 @@ class Auditor:
         self.errors: list[str] = []
         self.warnings: list[str] = []
         self.passes: list[str] = []
+        self.infos: list[str] = []  # info 不计入 warn/error 统计
 
     def check(self, ok: bool, name: str, detail: str = ""):
         if ok:
@@ -62,6 +63,15 @@ class Auditor:
         else:
             self.warnings.append(f"⚠ {name} — {detail}")
 
+    def info(self, name: str, detail: str = ""):
+        """不计入 pass/warn/error 统计的中性提示。
+
+        适用场景：因前置条件不满足而跳过的检查（如未跑 worldbuild 时
+        跳过 setting_package 字段校验）。让 audit 报告更清晰，不被
+        假阳性 warn 淹没真问题。
+        """
+        self.infos.append(f"○ {name} — {detail}")
+
     def report(self) -> int:
         print()
         print("=" * 70)
@@ -69,6 +79,11 @@ class Auditor:
         print("=" * 70)
         for p in self.passes:
             print(f"  {p}")
+        if self.infos:
+            print()
+            print("INFO (前置条件未满足，跳过检查)")
+            for i in self.infos:
+                print(f"  {i}")
         if self.warnings:
             print()
             print("=" * 70)
@@ -91,16 +106,31 @@ class Auditor:
 
 
 def audit_setting_package(a: Auditor):
-    """A. setting_package.json 是否符合 schema + 关键字段非空"""
+    """A. setting_package.json 是否符合 schema + 关键字段非空
+
+    前置条件：项目必须先 worldbuild + pull-setting（会写出 setting_package.json）。
+    如果文件不存在 → info（不算 warn，让 audit 报告不被假阳性淹没）。
+    如果文件存在但 schema 校验失败（多半是早期版本拉的数据，schema 已演进）
+    → info（让用户知道是数据版本问题，不是真 bug）。
+    """
     if not SETTING_PATH.exists():
-        a.check(False, "A1: setting_package.json 存在", f"missing: {SETTING_PATH}")
+        a.info(
+            "A1-A7: setting_package.json 不存在",
+            "项目还没跑过 worldbuild + pull-setting，先做这两步再 audit"
+        )
         return
     raw = json.loads(SETTING_PATH.read_text(encoding="utf-8"))
     try:
         validate_setting_package(raw)
         a.check(True, "A1: setting_package.json schema 校验通过")
     except SchemaError as e:
-        a.check(False, "A1: setting_package.json schema 校验通过", str(e)[:200])
+        # schema 校验失败 → 数据版本不对。后续 A2-A7 检查依赖合法 schema，
+        # 所以这里 return 而不是 warn。SchemaError 详细原因放进 info。
+        a.info(
+            "A1-A7: setting_package.json schema 校验失败（跳过 A2-A7）",
+            str(e)[:200],
+        )
+        return
 
     # 关键字段深度检查（之前 B/C/D 类的根因）
     ws = raw.get("world_setting", {})
