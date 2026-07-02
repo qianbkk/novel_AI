@@ -10,6 +10,7 @@ state.
 Supported providers: anthropic / deepseek / gemini / kimi / MiniMax / custom
 """
 from __future__ import annotations
+import json
 import os
 import threading
 from typing import Optional
@@ -252,6 +253,7 @@ class LLMRouter:
             "kimi":      self._kimi,
             "minimax":   self._minimax,
             "custom":    self._custom,
+            "mock":      self._mock,   # 无需 API key 的测试 provider
         }
         fn = dispatch.get(provider)
         if fn is None:
@@ -263,6 +265,32 @@ class LLMRouter:
         return fn(agent_name, system_prompt, user_prompt, model, max_tokens, temperature)
 
     # ---------- Provider implementations ----------
+    def _mock(self, agent, system_prompt, user_prompt, model, max_tokens, temperature):
+        """Mock LLM provider：无需 API key，返回 schema 化固定响应。
+
+        历史背景（独立审查标记的中危点）：
+          之前要验证 engine 端到端机制（schema 校验、字数 budget、orchestrator
+          编排、tools 调用）必须真花钱调 LLM。Mock provider 让这一切离线跑：
+          - 单元测试 / 集成测试不依赖外部 API
+          - CI 不需要 secret
+          - 引擎质量验证（schema 契约）独立于生成质量（LLM 内容）
+
+        返回内容：根据 agent_name 给 schema 化 JSON/文本，每个 agent 走不同
+        结构以模拟真实生成场景。writer 模拟生成 ~2000 字章节文本（满足
+        call_with_length_budget 区间），其他 agent 返回符合 schema 的 JSON。
+
+        注意：Mock 模式**只是引擎机制测试**，不验证生成内容质量。生产
+        生成质量仍要走真 provider。
+        """
+        text = _MOCK_RESPONSES.get(agent, _MOCK_DEFAULT_TEXT)
+        # writer 模拟接近目标字数的章节（满足 call_with_length_budget）
+        if agent == "writer":
+            text = _mock_chapter_text(agent_name=agent, target_chars=max_tokens)
+        # 计费：模拟 $0.001/调用
+        cost = 0.001
+        self._record(agent, cost, len(user_prompt) // 4, len(text) // 4)
+        return text, cost
+
     def _anthropic(self, agent, system_prompt, user_prompt, model, max_tokens,
                    temperature, use_cache=False, cached_system=None):
         if Anthropic is None:
@@ -565,4 +593,100 @@ def _truncate_at_sentence_boundary(text: str, max_chars: int) -> str:
     # last_end 是 candidate 内的索引，转回 text 全局索引
     cut_pos = search_start + last_end + 1  # +1 是要包含这个标点
     return text[:cut_pos]
+
+
+# ══════════════════════════════════════════════
+# Mock provider 数据（不依赖外部 API）
+# ══════════════════════════════════════════════
+# 每个 agent 的固定响应模板：让 orchestrator / agent 拿到符合 schema 的内容
+# 而不是空字符串 / 假 pass。Mock 模式**只是引擎机制测试**。
+
+_MOCK_RESPONSES: dict[str, str] = {
+    "planner": json.dumps({
+        "title": "（Mock）未命名设定",
+        "world_view": "（Mock）世界观简述：这是一个由 Mock LLM 生成的测试项目，仅用于验证引擎机制，不产出真实内容。",
+        "story_core": "（Mock）故事核心：主角在测试场景中跑通 schema 校验、字数 budget、orchestrator 编排等所有管线。",
+        "platform": "fanqie",
+        "genre": "都市",
+        "setting_concept": "（Mock）长篇网文测试场景",
+        "title_candidates": ["测试标题A", "测试标题B"],
+    }, ensure_ascii=False),
+
+    "outline": json.dumps({
+        "arcs": [
+            {"arc_no": 1, "title": "（Mock）第 1 弧", "summary": "测试弧，schema 校验 + 字数 budget 验证。"},
+        ],
+        "chapters": [
+            {"chapter_no": 1, "arc_no": 1, "title": "（Mock）第 1 章", "goal": "跑通 schema 校验", "key_beats": ["开场", "冲突", "收束"]},
+        ],
+    }, ensure_ascii=False),
+
+    "tracker": json.dumps({
+        "entity_updates": [
+            {"name": "（Mock）主角", "type": "character", "status": "active",
+             "new_detail": {"name": "（Mock）主角", "role": "主角", "first_appearance_chapter": 1}},
+        ],
+        "foreshadow_updates": [
+            {"id": "fs_mock_1", "status": "已铺垫", "planted_chapter": 1},
+        ],
+        "continuity_alerts": [],
+    }, ensure_ascii=False),
+
+    "summarizer": "（Mock）本章摘要：跑通 mock LLM → parse_llm_json_response → orchestrator 状态更新整条链路。",
+
+    "compliance": json.dumps({
+        "violations": [],
+        "risk_level": "low",
+        "risk_score": 0.1,
+        "rationale": "（Mock）合规通过：mock 文本不触发任何禁忌词。",
+    }, ensure_ascii=False),
+
+    "checker_main": json.dumps({
+        "score": 7.5,
+        "verdict": "PASS",
+        "issues": [],
+        "rationale": "（Mock）checker_main 通过：mock 章节符合目标区间。",
+    }, ensure_ascii=False),
+
+    "checker_cross1": json.dumps({
+        "score": 7.2,
+        "verdict": "PASS",
+        "issues": [],
+        "rationale": "（Mock）checker_cross1 通过：与前情一致性无矛盾。",
+    }, ensure_ascii=False),
+
+    "checker_cross2": json.dumps({
+        "score": 7.0,
+        "verdict": "PASS",
+        "issues": [],
+        "rationale": "（Mock）checker_cross2 通过：人物动机连贯。",
+    }, ensure_ascii=False),
+
+    "rewriter": "（Mock）改写后章节：与原章节同义但用词略有调整，验证 rewriter 路径可正常返回。",
+
+    "normalizer": "（Mock）normalized_text: 测试文本已通过 normalizer schema 校验。",
+}
+
+_MOCK_DEFAULT_TEXT = "（Mock）默认响应：未识别的 agent，请检查 routes 配置。"
+
+
+def _mock_chapter_text(agent_name: str, target_chars: int) -> str:
+    """生成接近 target_chars 字数的章节文本（满足 call_with_length_budget）。
+
+    中文字符，每个字占 1 字符；句末用「。」保证 _truncate_at_sentence_boundary
+    能找到句子边界。
+    """
+    sentence_unit = "（Mock）这是 mock writer 生成的测试章节，用于验证 engine 端到端机制，包括 schema 校验、字数 budget 截断 + 续写、orchestrator 编排。"
+    # 重复直到接近 target_chars
+    out = ""
+    while len(out) < target_chars:
+        out += sentence_unit
+    # 截到 target_chars 附近 + 句末标点
+    cut = _truncate_at_sentence_boundary(out, target_chars)
+    return cut if cut else out[:target_chars]
+
+
+def _truncate_at_sentence_boundary_for_mock(text: str, max_chars: int) -> str:
+    """_truncate_at_sentence_boundary 的公共可见别名（mock 调用）。"""
+    return _truncate_at_sentence_boundary(text, max_chars)
 
