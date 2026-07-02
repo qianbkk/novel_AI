@@ -966,6 +966,135 @@ class TestMockLLMProvider:
 
 
 # ───────────────────────────────────────────
+# CC: 前后端 types 对齐（BridgeRun / ChapterFull schema 漂移）
+# ───────────────────────────────────────────
+class TestFrontendTypesAligned:
+    """历史背景（独立审查标记的低优先级）：
+      前端 types.ts 之前缺：
+        - BridgeRun.args_json / stdout_text / started_at / finished_at
+          （SSE 处理逻辑依赖这些字段，但类型声明里没有）
+        - ChapterFull.created_at 应为 string | null（后端 Optional[datetime]）
+      后端 schema 实际有这些字段，TypeScript 类型漂移会让 IDE 静默接受错误字段名。
+
+      本轮修复：补齐字段类型，optional/required 与后端 schema 对齐。
+    """
+
+    def test_frontend_bridge_run_type_has_all_fields(self):
+        """前端 BridgeRun 类型必须含 args_json / stdout_text / started_at / finished_at。"""
+        from pathlib import Path
+        types_ts = Path(__file__).resolve().parents[2] / "frontend" / "src" / "types.ts"
+        content = types_ts.read_text(encoding="utf-8")
+        # 提取 BridgeRun interface 块
+        import re
+        m = re.search(r"export interface BridgeRun\s*\{([^}]*)\}", content)
+        assert m, "找不到 export interface BridgeRun"
+        block = m.group(1)
+        for field in ["args_json", "stdout_text", "started_at", "finished_at"]:
+            assert f"{field}" in block, (
+                f"前端 BridgeRun interface 缺 {field} 字段 — "
+                f"后端 BridgeRunOut 有，但前端类型漏声明"
+            )
+
+    def test_frontend_chapter_full_created_at_nullable(self):
+        """前端 ChapterFull.created_at 应为 string | null（后端允许 None）。"""
+        from pathlib import Path
+        types_ts = Path(__file__).resolve().parents[2] / "frontend" / "src" / "types.ts"
+        content = types_ts.read_text(encoding="utf-8")
+        import re
+        m = re.search(r"export interface ChapterFull\s*\{([^}]*)\}", content)
+        assert m, "找不到 export interface ChapterFull"
+        block = m.group(1)
+        # 必须有 "created_at: string | null" 形式（允许 None）
+        assert re.search(r"created_at:\s*string\s*\|\s*null", block), (
+            "前端 ChapterFull.created_at 应为 string | null，"
+            "与后端 Optional[datetime] 对齐"
+        )
+
+
+# ───────────────────────────────────────────
+# DD: MASTER_KEY 生成脚本存在 + README 部署章节
+# ───────────────────────────────────────────
+class TestDeploymentDocs:
+    """历史背景（独立审查标记的高危点修复配套）：
+      Provider.api_key 改 Fernet 加密后，部署必须设 MASTER_KEY env。
+      没有 generate 脚本 + README 部署文档，用户部署时不知道这步。
+
+      本轮新增：
+        - backend/scripts/generate_master_key.py — 输出 MASTER_KEY=...
+        - README.md 加「部署」章节：MASTER_KEY / CORS / 端口 / 迁移 / 范围外
+    """
+
+    def test_generate_master_key_script_exists(self):
+        """generate_master_key.py 必须存在且能跑（生成有效 Fernet key）。"""
+        import subprocess
+        from pathlib import Path
+        script = Path(__file__).resolve().parents[2] / "backend" / "scripts" / "generate_master_key.py"
+        assert script.exists(), (
+            "backend/scripts/generate_master_key.py 不存在 — "
+            "部署时无法生成 MASTER_KEY，Provider API key 加密没人能用"
+        )
+        # 真跑一遍
+        result = subprocess.run(
+            ["python", "-m", "scripts.generate_master_key"],
+            cwd=script.parent.parent,
+            capture_output=True, text=True, timeout=10,
+        )
+        assert result.returncode == 0, f"脚本失败：{result.stderr}"
+        assert "MASTER_KEY=" in result.stdout, "脚本输出必须含 MASTER_KEY="
+        # 提取 key，校验长度
+        for line in result.stdout.splitlines():
+            if line.startswith("MASTER_KEY="):
+                key = line.split("=", 1)[1].strip()
+                assert len(key) == 44, f"MASTER_KEY 长度 {len(key)} ≠ 44"
+                # Fernet round-trip 验证
+                from cryptography.fernet import Fernet
+                f = Fernet(key.encode("ascii"))
+                token = f.encrypt(b"sanity")
+                assert f.decrypt(token) == b"sanity"
+                return
+        assert False, "脚本输出里没找到 MASTER_KEY=..."
+
+    def test_readme_has_deployment_section(self):
+        """README 必须有「部署」章节且提到 MASTER_KEY + ALLOWED_ORIGINS。"""
+        from pathlib import Path
+        readme = Path(__file__).resolve().parents[2] / "README.md"
+        content = readme.read_text(encoding="utf-8")
+        assert "## 部署" in content, "README 缺「部署」章节"
+        assert "MASTER_KEY" in content, "部署章节必须提到 MASTER_KEY"
+        assert "ALLOWED_ORIGINS" in content, "部署章节必须提到 ALLOWED_ORIGINS（CORS）"
+
+
+# ───────────────────────────────────────────
+# EE: CHANGELOG.md 存在且非占位
+# ───────────────────────────────────────────
+class TestChangelogExists:
+    """历史背景（独立审查标记的低优先级）：
+      项目在 2026-06-26 至 2026-07-02 期间经历重大架构变更（Phase 1 / 1.5 /
+      深度修复轮），但仓库一直没 CHANGELOG.md，新读者只能翻 git log。
+      本轮新增 CHANGELOG.md 记录关键修复链。
+    """
+
+    def test_changelog_md_exists(self):
+        from pathlib import Path
+        changelog = Path(__file__).resolve().parents[2] / "CHANGELOG.md"
+        assert changelog.exists(), "CHANGELOG.md 不存在 — 新读者无法快速了解变更历史"
+
+    def test_changelog_not_placeholder(self):
+        """CHANGELOG.md 必须有实质内容（>= 50 行 + 提到关键修复）。"""
+        from pathlib import Path
+        changelog = Path(__file__).resolve().parents[2] / "CHANGELOG.md"
+        content = changelog.read_text(encoding="utf-8")
+        line_count = len(content.splitlines())
+        assert line_count >= 50, f"CHANGELOG.md 只有 {line_count} 行（应 >= 50）"
+        # 关键修复必须提到
+        for keyword in ["Provider API key", "MASTER_KEY", "lifespan",
+                        "thread_id", "subprocess", "parse_llm_json_response"]:
+            assert keyword in content or keyword.lower() in content.lower(), (
+                f"CHANGELOG.md 缺关键字 '{keyword}' — 关键修复没记到"
+            )
+
+
+# ───────────────────────────────────────────
 # BB: engine/graph.py 日志统一（capture.write [engine] → log.xxx）
 # ───────────────────────────────────────────
 class TestEngineLoggingUnified:
