@@ -429,6 +429,25 @@ class TestSchemaValidatorFailFast:
 # ───────────────────────────────────────────
 # G: 整体测试目录 collection 不能报错
 # ───────────────────────────────────────────
+def _backend_alive(base_url: str, timeout: float = 1.0) -> bool:
+    """探测后端是否在指定 URL 监听。
+    用 socket TCP 探测而非 HTTP 请求——更轻、更快、不依赖 httpx 异常类型。
+    skipif 装饰器在 collection 阶段执行，所以必须快（默认 1s timeout）。
+    """
+    import socket
+    from urllib.parse import urlparse
+    parsed = urlparse(base_url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port
+    if not port:
+        return False
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except (OSError, socket.timeout):
+        return False
+
+
 class TestPytestCollection:
     """历史 bug：`pytest tests/` 在 collection 阶段会报 1 个 error，
     因为 test_alignment_smoke.py 里有个 def test(name: str) 装饰器工厂
@@ -485,43 +504,56 @@ class TestFrontendBackendPortConsistency:
         self.fe_src = fe / "src"
         self.fe_env = fe / ".env"
 
-    def test_frontend_default_url_is_reachable(self):
-        """前端默认 URL 必须能联通后端（health=200）。
-        通过读 client.ts 提取默认 URL（fallback 部分），如果 VITE_API_BASE
-        没设就用它；测试也读 .env 看是否覆盖。
+    def test_frontend_default_url_is_valid(self):
+        """前端 client.ts 默认 fallback URL 必须是合法的 http://localhost:PORT。
+        纯静态检查（不联网），CI 无需起服务即可跑。
         """
         import re
         client = (self.fe_src / "api" / "client.ts").read_text(encoding="utf-8")
-        # 提取 `|| "http://localhost:XXXX"` fallback
         m = re.search(r'\|\|\s*"(http://localhost:\d+)"', client)
-        assert m, "client.ts 必须有 `|| \"http://localhost:XXXX\"` fallback"
+        assert m, (
+            "client.ts 必须有 `|| \"http://localhost:XXXX\"` fallback。"
+            f"实际 client.ts 顶部 200 字: {client[:200]!r}"
+        )
         default_url = m.group(1)
-        import httpx
-        try:
-            r = httpx.get(f"{default_url}/health", timeout=2.0)
-            assert r.status_code == 200, (
-                f"前端默认 {default_url} 不可达 (status={r.status_code})。"
-                f"前端实际打开会全 404。改 frontend/.env 或 client.ts 默认端口。"
-            )
-        except httpx.ConnectError as e:
-            pytest.fail(
-                f"前端默认 {default_url} 连不上：{e}。"
-                f"前端实际打开会全 404。"
-            )
+        # URL 形态必须合法
+        assert re.match(r"^http://localhost:\d{4,5}$", default_url), (
+            f"fallback URL 形态异常: {default_url!r}（期望 http://localhost:PORT，4-5 位端口）"
+        )
 
+    @pytest.mark.skipif(
+        not _backend_alive("http://localhost:8132", timeout=1.0),
+        reason="需要本机 8132 后端在跑（start.sh 或 uvicorn app.main:app --port 8132）"
+    )
+    def test_frontend_default_url_reachable_at_runtime(self):
+        """运行时验证：client.ts 默认 URL 真的能联通后端。
+        跳过条件：8132 不可达（CI / 冷启动）。
+        本地开发：跑 `uvicorn app.main:app --port 8132` 后此测试会真的 ping。
+        """
+        import re
+        import httpx
+        client = (self.fe_src / "api" / "client.ts").read_text(encoding="utf-8")
+        m = re.search(r'\|\|\s*"(http://localhost:\d+)"', client)
+        assert m
+        default_url = m.group(1)
+        r = httpx.get(f"{default_url}/health", timeout=2.0)
+        assert r.status_code == 200, (
+            f"前端默认 {default_url} 不可达 (status={r.status_code})。"
+            f"前端实际打开会全 404。"
+        )
+
+    @pytest.mark.skipif(
+        not _backend_alive("http://localhost:8132", timeout=1.0),
+        reason="需要本机 8132 后端在跑（openapi.json 探测）"
+    )
     def test_backend_registers_frontend_contract_paths(self):
         """后端必须注册前端 client.ts 实际调用的 6 个契约 path。
-        通过读 client.ts 提取所有 `${API_BASE}/projects/...` 路径，再实测
-        后端（读默认 URL 推断）。这里直接实测 backend 8132 上注册情况。
+        运行时验证：读后端 openapi.json，检查必需 path 都已注册。
+        跳过条件：8132 不可达（CI）。
         """
         import httpx
-        import re
-        # 读 client.ts 提取所有 paths
         client = (self.fe_src / "api" / "client.ts").read_text(encoding="utf-8")
-        # 匹配 `request<...>(`...${...}/projects/...`,` 里的 `/projects/...` 部分
-        paths = set(re.findall(r'`[^`]*?(/projects/[^`]+?)`', client))
-        # 过滤掉动态插值的部分，留下基础 path 模板
-        # 简化为只关心 6 个核心契约 path
+        # 6 个核心契约 path
         required = {
             "/projects/{project_id}/rules",
             "/projects/{project_id}/foreshadowings",
@@ -529,11 +561,8 @@ class TestFrontendBackendPortConsistency:
             "/projects/{project_id}/chapters/{chapter_id}/characters",
             "/projects/{project_id}/ai-assist-level",
         }
-        # 路径模板里要 pid；测试用真实 pid 占位
-        pid_real = "c12345678901234567890123456789012"
         openapi = httpx.get("http://localhost:8132/openapi.json", timeout=2.0).json()
         backend_paths = set(openapi.get("paths", {}).keys())
-        # 检查 6 个契约 path 在后端 openapi 里
         for p in required:
             assert p in backend_paths, (
                 f"前端调 {p}，后端 openapi 没注册这条 → 必然 404"

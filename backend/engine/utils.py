@@ -27,6 +27,10 @@ def _coerce_type(parsed: Any, default: Any) -> Any:
     模型；这里只做"软保护"避免下游整个崩。
     """
     if parsed is None:
+        # 全部 parse 失败 → 根据 default 类型返回空值（fail-soft）
+        # - summarizer.py 传 default=None → 走最后一行 return default，
+        #   调用方有 if arc_summary is None 兜底
+        # - 其他 agent 传 dict/list/str → 返回对应空值
         if isinstance(default, dict):
             return {}
         if isinstance(default, list):

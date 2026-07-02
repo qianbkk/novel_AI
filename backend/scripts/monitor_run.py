@@ -22,7 +22,8 @@ monitor_run.py — 端到端测试的**真实时**后台监控脚本（不是 ag
 
 历史动机：
   之前的"监控 agent"只是 30 秒轮询 + 离线分析，跑 50 章时大量异常被吞掉。
-  本脚本用 watchdog 监 file system + state polling，事件触发后立刻记录，
+  本脚本用 file mtime 轮询（state.json + chapters/*.json） + 事件触发后立即
+  记录（不依赖 watchdog，避免增加第三方依赖），事件触发后立刻落盘。
   真正实时。
 """
 from __future__ import annotations
