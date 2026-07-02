@@ -11,6 +11,7 @@ Supported providers: anthropic / deepseek / gemini / kimi / MiniMax / custom
 """
 from __future__ import annotations
 import json
+import logging
 import os
 import threading
 from typing import Optional
@@ -27,6 +28,9 @@ try:
     from anthropic import Anthropic
 except ImportError:  # allow import without anthropic installed
     Anthropic = None  # type: ignore
+
+
+log = logging.getLogger("novel_ai.engine.llm")
 
 
 # ── Defaults (used if RoleAssignment rows are absent) ──
@@ -175,8 +179,29 @@ class LLMRouter:
         self.budget: dict[str, tuple[int, int, int]] = dict(TOKEN_BUDGET_DEFAULT)
         self._stats: dict = {"total_calls": 0, "total_cost_usd": 0.0, "by_agent": {}}
         self._stats_lock = threading.Lock()
+        # Mock 模式：如果设置了 NOVEL_ENGINE_MOCK=1 或调用方显式 use_mock()，
+        # 把所有 routes 切到 mock provider（无需任何 API key 即可端到端跑通）。
+        if os.getenv("NOVEL_ENGINE_MOCK") == "1":
+            self.use_mock()
 
     # ---------- DB-driven configuration ----------
+    def use_mock(self) -> None:
+        """把全部 agent routes 切到 mock provider。
+
+        适用场景：
+          - CI / 单元测试（无需 API key 即可端到端跑通）
+          - 引擎机制验证（schema 校验、字数 budget、orchestrator 编排）
+          - demo / 本地开发（没配 API key 时仍能跑起来）
+
+        调用方式：
+          - 设 env NOVEL_ENGINE_MOCK=1 → 构造时自动调
+          - 显式 r.use_mock() → 任何时候切
+        """
+        # 把所有 9 个 agent 切到 mock
+        for agent in MODEL_ROUTES_DEFAULT:
+            self.routes[agent] = ("mock", "mock-model")
+        log.info("LLMRouter.use_mock: 全部 agent routes 切到 mock provider")
+
     def configure(
         self,
         *,
