@@ -6,6 +6,19 @@
 
 ## [Unreleased] — 2026-07-04
 
+### Bug Fix（迭代 #36 — 内部审计）
+- **`fix(engine): save_l2 / save_l5 atomic write + 损坏文件备份**
+  - `engine/memory/manager.py` save_l2 / save_l5 之前直接 `open(path, "w")`
+    写一半进程被杀 → 文件损坏 → get_l2 / get_l5 静默返回 empty
+    → 下次 save 覆盖空数据 → **L2/L5 记忆永久丢失**。
+  - 跟 `engine.state.save_state` 同样的 atomic write 模式：
+    1. 写 `.tmp` + `os.replace`（原子重命名，Windows 上重试 3 次）
+    2. `fsync` 强制落盘（best-effort）
+  - `get_l2` / `get_l5` 损坏文件不再静默 fallback，而是备份为
+    `.corrupted.{ts}` 后再返回 default（让用户能事后取回数据）。
+  - 加 5 个 invariant test 锁死：源码必须 atomic write / 必须备份损坏
+    文件 / save→get round-trip 数据不丢。
+
 ### Bug Fix（迭代 #35 — 内部审计）
 - **`fix(bridge): pull_setting_package JSON 错误返回清晰信息**
   - `app/bridge/setting_sync.py` 之前损坏的 setting_package.json
@@ -135,7 +148,7 @@
   TestLoadStateRobustness / TestDocCodeConsistency /
   TestSecurityConstants / TestProviderTableSchema /
   TestHumanEscalationNotEndRun / 等
-- 总 invariant suite：**219 passed / 0 warnings**
+- 总 invariant suite：**224 passed / 0 warnings**
 
 ## [Unreleased] — 2026-07-02
 

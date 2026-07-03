@@ -4211,6 +4211,147 @@ class TestPullSettingJsonErrorHandling:
 
 
 # ───────────────────────────────────────────
+# OOO: save_l2 / save_l5 atomic write（迭代 #36）
+# ───────────────────────────────────────────
+class TestMemorySaveAtomic:
+    """迭代 #36: save_l2 / save_l5 之前直接 open(path, "w") 写一半进程被杀
+    → 文件损坏 → get_l2 静默返回 empty_l2 → 下次 save 覆盖空数据
+    → L2/L5 记忆永久丢失。
+
+    修法：
+      1. save_l2/save_l5 用 atomic write（先 .tmp + os.replace + 失败重试 3 次）
+      2. get_l2/get_l5 损坏文件不再静默返回空，而是备份为 .corrupted.{ts}
+         后再返回 default（让用户能事后取回数据）
+    """
+    def test_save_l2_atomic_write_uses_tmp_file(self, monkeypatch):
+        """save_l2 源码必须用 atomic write（.tmp + os.replace）。"""
+        from pathlib import Path
+        manager_py = Path(__file__).resolve().parents[1] / "engine" / "memory" / "manager.py"
+        content = manager_py.read_text(encoding="utf-8")
+        # 用基于行的解析：找 def save_l2 行，下一个 def 之前都是 body
+        lines = content.splitlines()
+        body_start = None
+        for i, line in enumerate(lines):
+            if line.startswith("def save_l2("):
+                body_start = i + 1
+                break
+        assert body_start is not None, "找不到 save_l2"
+        body_lines = []
+        for line in lines[body_start:]:
+            if line.startswith("def ") or line.startswith("class "):
+                break
+            body_lines.append(line)
+        body = "\n".join(body_lines)
+        # 排除纯注释行
+        code_lines = [
+            line for line in body.splitlines()
+            if not line.strip().startswith("#")
+        ]
+        code_body = "\n".join(code_lines)
+        assert ".tmp" in code_body, (
+            "save_l2 体内必须用 .tmp 中间文件做 atomic write（之前直接 open path 直接写）"
+        )
+        assert "os.replace" in code_body, (
+            "save_l2 必须用 os.replace 原子重命名（不是直接 shutil.move）"
+        )
+
+    def test_save_l5_atomic_write_uses_helper(self):
+        """save_l5 调用 _atomic_write_json helper（包含 .tmp + os.replace）。"""
+        from pathlib import Path
+        manager_py = Path(__file__).resolve().parents[1] / "engine" / "memory" / "manager.py"
+        content = manager_py.read_text(encoding="utf-8")
+        lines = content.splitlines()
+        body_start = None
+        for i, line in enumerate(lines):
+            if line.startswith("def save_l5("):
+                body_start = i + 1
+                break
+        assert body_start is not None, "找不到 save_l5"
+        body_lines = []
+        for line in lines[body_start:]:
+            if line.startswith("def ") or line.startswith("class "):
+                break
+            body_lines.append(line)
+        body = "\n".join(body_lines)
+        code_lines = [
+            line for line in body.splitlines()
+            if not line.strip().startswith("#")
+        ]
+        code_body = "\n".join(code_lines)
+        # save_l5 自己不一定有 .tmp（可以走 helper），但必须调 _atomic_write_json
+        # 且整个文件里 _atomic_write_json 函数体必须有 .tmp + os.replace
+        assert "_atomic_write_json" in code_body, (
+            "save_l5 必须调 _atomic_write_json helper（atomic write）"
+        )
+        # 检查 helper 函数本身包含 .tmp + os.replace
+        helper_start = None
+        for i, line in enumerate(lines):
+            if line.startswith("def _atomic_write_json"):
+                helper_start = i + 1
+                break
+        assert helper_start is not None, "找不到 _atomic_write_json helper"
+        helper_lines = []
+        for line in lines[helper_start:]:
+            if line.startswith("def ") or line.startswith("class "):
+                break
+            helper_lines.append(line)
+        helper_body = "\n".join(helper_lines)
+        assert ".tmp" in helper_body, (
+            "_atomic_write_json helper 必须用 .tmp 中间文件"
+        )
+        assert "os.replace" in helper_body, (
+            "_atomic_write_json helper 必须用 os.replace 原子重命名"
+        )
+
+    def test_get_l2_corrupt_file_backed_up_not_silently_lost(self, tmp_path, monkeypatch):
+        """get_l2 读到损坏文件时必须备份（不能静默返回空）。"""
+        from engine.memory import manager
+        # 切到临时 L2 目录
+        monkeypatch.setattr(manager, "L2_DIR_STR", str(tmp_path))
+        # 写一个损坏文件
+        bad_path = tmp_path / "test-novel_memory.json"
+        bad_path.write_text("{not valid json", encoding="utf-8")
+        # 调 get_l2
+        result = manager.get_l2("test-novel")
+        # 应返回空 L2（不抛）
+        assert result["meta"]["novel_id"] == "test-novel"
+        # 损坏文件应被备份（文件名含 .corrupted.）
+        backups = list(tmp_path.glob("test-novel_memory.json.corrupted.*"))
+        assert len(backups) == 1, (
+            f"损坏文件应被备份为 .corrupted.{{ts}}，实际备份：{backups}"
+        )
+
+    def test_get_l5_corrupt_file_backed_up_not_silently_lost(self, tmp_path, monkeypatch):
+        """get_l5 同样：损坏文件备份。"""
+        from engine.memory import manager
+        monkeypatch.setattr(manager, "L5_DIR_STR", str(tmp_path))
+        bad_path = tmp_path / "test-novel_l5.json"
+        bad_path.write_text("{not valid json", encoding="utf-8")
+        result = manager.get_l5("test-novel")
+        # 默认 L5
+        assert result == {
+            "arc_summaries": [], "character_arcs": {},
+            "major_revelations": [], "compressed_history": ""
+        }
+        backups = list(tmp_path.glob("test-novel_l5.json.corrupted.*"))
+        assert len(backups) == 1, (
+            f"L5 损坏文件应被备份，实际：{backups}"
+        )
+
+    def test_save_l2_then_load_roundtrip(self, tmp_path, monkeypatch):
+        """save_l2 → get_l2 round-trip 数据不丢。"""
+        from engine.memory import manager
+        monkeypatch.setattr(manager, "L2_DIR_STR", str(tmp_path))
+        original = manager.empty_l2()
+        original["hot"]["protagonist_points"] = 9999
+        original["hot"]["active_threads"] = ["线A", "线B"]
+        manager.save_l2("test-rt", original)
+        loaded = manager.get_l2("test-rt")
+        assert loaded["hot"]["protagonist_points"] == 9999
+        assert loaded["hot"]["active_threads"] == ["线A", "线B"]
+
+
+# ───────────────────────────────────────────
 # WW: rate_limit X-RateLimit-Remaining 准确性（最后 #18 迭代）
 # ───────────────────────────────────────────
 class TestRateLimitHeaderAccuracy:

@@ -21,6 +21,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import time
 from typing import Tuple
 
 from ..config.paths import (
@@ -70,25 +71,63 @@ def empty_l2() -> dict:
 
 
 def get_l2(novel_id: str) -> dict:
-    """Load L2 from {L2_DIR}/{novel_id}_memory.json; returns empty_l2 if absent."""
+    """Load L2 from {L2_DIR}/{novel_id}_memory.json; returns empty_l2 if absent.
+
+    迭代 #36：损坏文件不再静默返回空，而是备份为 .corrupted.{ts} 后返回空。
+    下次 save_l2 仍能正常工作（写新文件），但损坏的数据被保留在备份里供排查。
+    """
     os.makedirs(L2_DIR_STR, exist_ok=True)
     path = os.path.join(L2_DIR_STR, f"{novel_id}_memory.json")
-    if os.path.exists(path):
-        try:
-            with open(path, encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    m = empty_l2()
-    m["meta"]["novel_id"] = novel_id
-    return m
+    result = _load_json_or_default(path, empty_l2)
+    # 兼容旧调用：补上 novel_id
+    if not result.get("meta", {}).get("novel_id"):
+        result["meta"]["novel_id"] = novel_id
+    return result
 
 
 def save_l2(novel_id: str, memory: dict) -> None:
+    """Atomic write L2 记忆：先 .tmp + os.replace，避免半写文件被下次 load 读到。
+    迭代 #36：之前直接 open(path, "w") 写一半进程被杀 → 文件损坏 → get_l2 静默
+    返回 empty_l2 → 下次 save 覆盖空数据 → L2 记忆永久丢失。
+    跟 engine.state.save_state 同样的 atomic write 模式。
+    """
     os.makedirs(L2_DIR_STR, exist_ok=True)
     path = os.path.join(L2_DIR_STR, f"{novel_id}_memory.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(memory, f, ensure_ascii=False, indent=2)
+    _atomic_write_json(path, memory)
+
+
+def save_l5(novel_id: str, data: dict) -> None:
+    """Atomic write L5 弧总结：同 save_l2 的修法。"""
+    os.makedirs(L5_DIR_STR, exist_ok=True)
+    path = os.path.join(L5_DIR_STR, f"{novel_id}_l5.json")
+    _atomic_write_json(path, data)
+
+
+def _atomic_write_json(path: str, data: dict) -> None:
+    """原子写 JSON：先 .tmp + os.replace，避免半写文件被读到。
+
+    进程被杀 / 写一半断电 → 老的完整 .json 保留，.tmp 可能是损坏的。
+    """
+    import os as _os
+    import time
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        try:
+            _os.fsync(f.fileno())
+        except OSError:
+            pass  # Windows 上 fsync 有时不支持，best-effort
+    # atomic rename（Windows 上并发 rename 可能 WinError 32 — 重试 3 次）
+    last_exc = None
+    for attempt in range(3):
+        try:
+            _os.replace(tmp_path, path)
+            return
+        except OSError as e:
+            last_exc = e
+            time.sleep(0.05 * (attempt + 1))
+    raise last_exc  # type: ignore
 
 
 # ══════════════════════════════════════════════
@@ -172,23 +211,34 @@ def get_chapter_relevant_context(memory: dict, task: dict) -> dict:
 # L5 helpers
 # ══════════════════════════════════════════════
 def get_l5(novel_id: str) -> dict:
+    """Load L5 from {L5_DIR}/{novel_id}_l5.json。损坏文件备份后返回默认（迭代 #36）。"""
     os.makedirs(L5_DIR_STR, exist_ok=True)
     path = os.path.join(L5_DIR_STR, f"{novel_id}_l5.json")
+    return _load_json_or_default(path, lambda: {
+        "arc_summaries": [], "character_arcs": {},
+        "major_revelations": [], "compressed_history": ""
+    })
+
+
+def _load_json_or_default(path: str, default_factory):
+    """读 JSON，损坏时返回 default_factory()（不抛）。与 get_l2/get_l5 共享。"""
     if os.path.exists(path):
         try:
             with open(path, encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
-            pass
-    return {"arc_summaries": [], "character_arcs": {},
-            "major_revelations": [], "compressed_history": ""}
-
-
-def save_l5(novel_id: str, data: dict) -> None:
-    os.makedirs(L5_DIR_STR, exist_ok=True)
-    path = os.path.join(L5_DIR_STR, f"{novel_id}_l5.json")
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+            # 迭代 #36：损坏文件备份到 .corrupted（不静默丢失），
+            # 让用户能事后取回数据
+            try:
+                corrupted = path + f".corrupted.{int(time.time())}"
+                os.replace(path, corrupted)
+                import logging
+                logging.getLogger("novel_ai.memory").warning(
+                    "memory file corrupted, backed up to %s: %s", corrupted, e
+                )
+            except Exception:
+                pass
+    return default_factory()
 
 
 # ══════════════════════════════════════════════
