@@ -3181,3 +3181,50 @@ class TestBudgetManager:
         assert report["by_agent"]["checker"]["calls"] == 1
         assert abs(report["by_agent"]["writer"]["cost"] - 0.13) < 1e-3
         assert abs(report["by_agent"]["checker"]["cost"] - 0.02) < 1e-3
+
+
+# ───────────────────────────────────────────
+# VV: scripts/audit_project.py 自身测试（迭代 #17 收尾）
+# ───────────────────────────────────────────
+class TestAuditProjectItself:
+    """最后 53 分钟收尾：audit_project 是 CI 看守者，自身没测试。
+
+    Auditor 类决定哪些 check 算 pass / warn / error。
+    strict / non-strict 模式行为必须锁死。
+    """
+
+    def test_auditor_strict_mode_promotes_warn_to_error(self):
+        """strict=True 时 warn 应升级为 error（CI 严格模式）。"""
+        from scripts.audit_project import Auditor
+        a = Auditor(project_id="test", strict=True)
+        a.check(False, "test condition")
+        assert len(a.warnings) == 0, "strict 模式下不应收集 warn"
+        assert len(a.errors) == 1, "strict 模式下 False 应进 errors"
+        assert a.errors[0].startswith("✗ test condition")
+
+    def test_auditor_non_strict_collects_warnings(self):
+        """strict=False 时 False 进 warnings（默认 / 友好模式）。"""
+        from scripts.audit_project import Auditor
+        a = Auditor(project_id="test", strict=False)
+        a.check(False, "test condition")
+        assert len(a.warnings) == 1
+        assert len(a.errors) == 0
+        assert a.warnings[0].startswith("⚠ test condition")
+
+    def test_auditor_info_does_not_count_as_warning(self):
+        """info() 必须不计入 pass/warn/error 统计。"""
+        from scripts.audit_project import Auditor
+        a = Auditor(project_id="test", strict=True)
+        a.info("test info", "前置条件未满足")
+        # strict 模式下 info 也不变 error（设计：info 是中性）
+        assert len(a.warnings) == 0
+        assert len(a.errors) == 0
+        assert len(a.infos) == 1
+
+    def test_auditor_pass_collected_correctly(self):
+        """True 条件 → pass 列表。"""
+        from scripts.audit_project import Auditor
+        a = Auditor(project_id="test")
+        a.check(True, "all good")
+        assert len(a.passes) == 1
+        assert a.passes[0].startswith("✓ all good")
