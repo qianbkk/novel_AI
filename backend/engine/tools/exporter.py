@@ -85,9 +85,22 @@ def export_chapters(start: int = 1, end: int = 9999,
     chapter_stats: list[dict] = []
 
     for ch_num, ch_path in chapters:
-        with open(ch_path, encoding="utf-8") as f:
-            text = f.read().strip()
-        meta = load_meta(ch_num)
+        # 迭代 #34：每章独立 try/except，跟 import_chapters 一样的修法。
+        # 之前 1 章编码错 / 损坏 → 整批 export 失败 → 之前已写好的 chapters 也没保存。
+        try:
+            with open(ch_path, encoding="utf-8") as f:
+                text = f.read().strip()
+        except (UnicodeDecodeError, OSError) as e:
+            print(f"  ⚠️  跳过第{ch_num}章（{type(e).__name__}）：{e}")
+            continue
+
+        try:
+            meta = load_meta(ch_num)
+        except Exception as e:
+            # meta 损坏不应阻断该章导出
+            print(f"  ⚠️  第{ch_num}章 meta 加载失败（{e}），用空 meta 继续")
+            meta = {}
+
         word_count = len(text)
         total_words += word_count
         if include_titles:
@@ -151,10 +164,18 @@ def print_stats() -> None:
     roles: dict = {}
 
     for ch_num, ch_path in chapters:
-        with open(ch_path, encoding="utf-8") as f:
-            text = f.read()
+        # 迭代 #34：同 export_chapters，单章坏不阻断整个 stats
+        try:
+            with open(ch_path, encoding="utf-8") as f:
+                text = f.read()
+        except (UnicodeDecodeError, OSError) as e:
+            print(f"  ⚠️  跳过第{ch_num}章（{type(e).__name__}）：{e}")
+            continue
         total_words += len(text)
-        meta = load_meta(ch_num)
+        try:
+            meta = load_meta(ch_num)
+        except Exception as e:
+            meta = {}
         if meta.get("score"):
             scores.append(meta["score"])
         role = meta.get("chapter_role", "未知")

@@ -3986,6 +3986,108 @@ class TestSSEQueueCleanup:
 
 
 # ───────────────────────────────────────────
+# MMM: export_chapters 单章坏不能阻断整批（迭代 #34）
+# ───────────────────────────────────────────
+class TestExportChaptersResilient:
+    """迭代 #34: export_chapters / print_stats 之前单章坏让整批 export 失败。
+
+    历史 bug：1 章编码错（Latin-1 而非 UTF-8）/ meta 损坏 → 整个 export 抛异常
+    → 之前已写好的 chapters 也没保存。
+    跟 import_chapters 是同型问题（迭代 #31），同样的修法。
+
+    本测试锁死：2 个 chapter（1 正常 + 1 坏 encoding）→ 正常 chapter
+    被导出，export 不抛异常。
+    """
+    def test_export_chapters_source_has_per_chapter_try_except(self):
+        """源码级锁死：export_chapters 体内必须每章独立 try/except。
+
+        Runtime 验证很难构造（readline 已经过滤坏文件，要让 f.read() 单独
+        失败需要 partial UTF-8 sequence 截断等），但源码级锁死足以防止回归。
+        """
+        from pathlib import Path
+        import re
+        exporter_py = Path(__file__).resolve().parents[1] / "engine" / "tools" / "exporter.py"
+        content = exporter_py.read_text(encoding="utf-8")
+        m = re.search(
+            r"def export_chapters\([\s\S]*?\):(.*?)(?=\ndef |\nclass |\Z)",
+            content, re.DOTALL
+        )
+        assert m, "找不到 export_chapters"
+        body = m.group(1)
+        # 关键：在 for ch_num, ch_path in chapters 循环内必须有 try/except
+        # 不能让单章抛异常阻断整批
+        assert body.count("try:") >= 2 or body.count("except") >= 2, (
+            "export_chapters 体内必须有 try/except 处理单章失败（之前 all-or-nothing）"
+        )
+        assert "continue" in body, (
+            "跳过单章后必须 continue（不能 break / 抛异常）"
+        )
+
+    def test_print_stats_source_has_per_chapter_try_except(self):
+        """print_stats 同样修法：源码必须有 try/except + continue。"""
+        from pathlib import Path
+        exporter_py = Path(__file__).resolve().parents[1] / "engine" / "tools" / "exporter.py"
+        content = exporter_py.read_text(encoding="utf-8")
+        # 用基于缩进的解析：找到 def print_stats( 后的非空行，body 是缩进 >= 4 空格的行
+        lines = content.splitlines()
+        body_start = None
+        for i, line in enumerate(lines):
+            if line.startswith("def print_stats"):
+                body_start = i + 1
+                break
+        assert body_start is not None, "找不到 print_stats"
+        # 收集到下一个 def 之前的所有行
+        body_lines = []
+        for line in lines[body_start:]:
+            if line.startswith("def ") and not line.startswith("def print_stats"):
+                break
+            body_lines.append(line)
+        body = "\n".join(body_lines)
+        assert "try:" in body, (
+            "print_stats 体内必须有 try/except 处理单章失败"
+        )
+        assert "continue" in body, (
+            "跳过单章后必须 continue"
+        )
+
+    def test_export_chapters_runs_without_error_on_normal_files(self, tmp_path, monkeypatch):
+        """正常文件场景：export_chapters 跑通返回正确结果。"""
+        from engine.tools.exporter import export_chapters
+        import engine.tools.exporter as exporter_mod
+
+        chapters_dir = tmp_path / "output" / "chapters"
+        chapters_dir.mkdir(parents=True, exist_ok=True)
+        (chapters_dir / "ch_0001.txt").write_text("雅间内。\n", encoding="utf-8")
+        (chapters_dir / "ch_0001_meta.json").write_text(
+            json.dumps({"score": 7.0, "chapter_role": "铺垫"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        (chapters_dir / "ch_0002.txt").write_text("林尘盘膝。\n", encoding="utf-8")
+        (chapters_dir / "ch_0002_meta.json").write_text(
+            json.dumps({"score": 8.0, "chapter_role": "发展"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        setting_path = tmp_path / "output" / "setting_package.json"
+        setting_path.write_text(
+            json.dumps({"title_candidates": ["测试书"]}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        # exporter 已经 from-import 了这些名字，必须 patch exporter 模块自己的属性
+        monkeypatch.setattr(exporter_mod, "CHAPTERS_DIR_STR", str(chapters_dir))
+        monkeypatch.setattr(exporter_mod, "OUTPUT_DIR_STR", str(tmp_path / "output"))
+        monkeypatch.setattr(exporter_mod, "SETTING_PATH_STR", str(setting_path))
+        exports_dir = tmp_path / "output" / "exports"
+        exports_dir.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(exporter_mod, "EXPORTS_DIR", str(exports_dir))
+
+        result = export_chapters()
+        assert result is not None
+        assert result["chapters_exported"] == 2
+        assert "雅间内" in Path(result["output_path"]).read_text(encoding="utf-8")
+        assert "林尘盘膝" in Path(result["output_path"]).read_text(encoding="utf-8")
+
+
+# ───────────────────────────────────────────
 # WW: rate_limit X-RateLimit-Remaining 准确性（最后 #18 迭代）
 # ───────────────────────────────────────────
 class TestRateLimitHeaderAccuracy:

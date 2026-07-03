@@ -4,7 +4,18 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
-## [Unreleased] — 2026-07-03
+## [Unreleased] — 2026-07-04
+
+### Bug Fix（迭代 #34 — 内部审计）
+- **`fix(engine): export_chapters 单章坏不能阻断整批导出**
+  - `engine/tools/exporter.py` 之前单章坏让整个 export 失败：
+    encoding 错 / meta 损坏 / OSError → 整批抛异常，**之前已写好的
+    chapters 也没保存**。
+  - 跟 import_chapters 是同型问题（迭代 #31），同样的修法。
+  - 修法：每章独立 try/except，log warning + `continue` 跳过该章。
+    同样修 `print_stats`（stats 视图同样需要单章坏不阻断）。
+  - 加 3 个 invariant test 锁死：源码必须有 try/except + continue，
+    正常文件场景跑通返回正确结果。
 
 ### Bug Fix（迭代 #33 — 内部审计）
 - **`fix(api): SSE queue 内存泄漏**
@@ -114,7 +125,7 @@
   TestLoadStateRobustness / TestDocCodeConsistency /
   TestSecurityConstants / TestProviderTableSchema /
   TestHumanEscalationNotEndRun / 等
-- 总 invariant suite：**213 passed / 0 warnings**
+- 总 invariant suite：**216 passed / 0 warnings**
 
 ## [Unreleased] — 2026-07-02
 
