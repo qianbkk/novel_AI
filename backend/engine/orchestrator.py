@@ -570,7 +570,10 @@ def build_graph(checkpointer=None):
         {"save": "save_and_track", "rewrite": "rewrite", "escalate": "human_escalation"})
     g.add_conditional_edges("save_and_track", route_after_save,
         {"next_task": "load_arc_tasks", "done": END})
-    g.add_edge("human_escalation", END)
+    # P3 fix: human_escalation 后回到 load_arc_tasks 继续下一章（不再 END）。
+    # 与 engine/graph.py 的 build_project_graph 保持一致（之前两边不同步，
+    # run/resume 走的是这里的图，导致章节触发人工介入时整次 run 静默终止）。
+    g.add_edge("human_escalation", "load_arc_tasks")
     if checkpointer is None:
         return g.compile()
     return g.compile(checkpointer=checkpointer)
@@ -608,19 +611,20 @@ def run_orchestrator(state: OrchestratorState, max_chapters: int = 10) -> Orches
                 save_state(new_state, str(STATE_PATH))
                 return new_state
         if node_name == "human_escalation":
-            # P3 fix: 不要因为一章卡死就终止整个 run。
-            # 把卡死的章节写入 [待修订]、登记 human_pending，然后**继续下一章**。
+            # 历史背景（独立 AI 深度审查发现的 bug，commit 待定）：
+            #   之前 g.add_edge("human_escalation", END) → 一旦某章触发
+            #   人工介入，整次 run 静默提前结束（即便 chapters_done < max_chapters）。
+            #   报告：orchestrator.py:573 与 graph.py:290 拓扑不一致 —
+            #   graph.py 是 human_escalation → load_arc_tasks（继续下一章），
+            #   orchestrator.py 是 human_escalation → END（提前终止）。
+            #
+            # 修法：把边改成 load_arc_tasks（与 graph.py 一致），
+            # 图自己循环，重新生成本章及后续章节。
             pending = new_state.get("human_pending", [])
             print(f"\n⚠  第{new_state.get('current_chapter',0)}章触发人工介入（共 {len(pending)} 待处理），继续下一章")
             for t in pending[-3:]:
                 print(f"   [{t.get('priority','?')}] {t['description']}")
-            # 把卡死章节从 queue 中"擦掉"，让后续 route_after_save → next_task
-            # 路径回到 load_arc_tasks 重新生成任务单
-            new_state["chapter_task_queue"] = new_state.get("chapter_task_queue", [])  # 已是空
-            new_state["current_task"] = None
-            new_state["current_chapter"] = (new_state.get("current_chapter", 0) or 0)  # 保持当前编号
             save_state(new_state, str(STATE_PATH))
-            # 继续循环（不 return）
             state = new_state
             continue
         state = new_state

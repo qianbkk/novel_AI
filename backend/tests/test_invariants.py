@@ -3631,3 +3631,65 @@ class TestProviderTableSchema:
         assert col.nullable is False, (
             f"Provider.name 应 NOT NULL，实际 nullable={col.nullable}"
         )
+
+
+# ───────────────────────────────────────────
+# GGG: orchestrator.py human_escalation bug 修复锁死（独立 AI 审查发现）
+# ───────────────────────────────────────────
+class TestHumanEscalationNotEndRun:
+    """独立 AI 深度审查发现（2026-07-03 报告）：
+       orchestrator.py:573 之前 g.add_edge("human_escalation", END)，
+       与 graph.py:290 的 human_escalation → load_arc_tasks 不一致。
+
+       后果：run/resume 走 orchestrator 的图，章节触发人工介入时
+       stream() 立即终止 → 整次 run 静默提前结束（即便 chapters_done
+       < max_chapters），用户视角"成功"但实际没写完。
+
+    本测试锁死：orchestrator.py 和 graph.py 的图拓扑必须一致。
+    """
+    def test_orchestrator_human_escalation_edge_target(self):
+        """orchestrator.py 的图 human_escalation 必须指向 load_arc_tasks（不是 END）。"""
+        import inspect
+        from engine import orchestrator as orch_mod
+        src = inspect.getsource(orch_mod.build_graph)
+        # 找 human_escalation 行的 add_edge
+        import re
+        m = re.search(r'g\.add_edge\(\s*"human_escalation"\s*,\s*([^)]+)\)', src)
+        assert m, "找不到 g.add_edge(human_escalation, ...)"
+        target = m.group(1).strip()
+        assert target == '"load_arc_tasks"', (
+            f"orchestrator 的 human_escalation 必须指向 load_arc_tasks（继续下一章），"
+            f"实际 {target!r}（独立 AI 审查发现的 bug）"
+        )
+
+    def test_graph_py_human_escalation_edge_target(self):
+        """graph.py 的图 human_escalation 也必须指向 load_arc_tasks（两个文件保持一致）。"""
+        import inspect
+        from engine import graph as graph_mod
+        src = inspect.getsource(graph_mod.build_project_graph)
+        import re
+        m = re.search(r'g\.add_edge\(\s*"human_escalation"\s*,\s*([^)]+)\)', src)
+        assert m, "graph.py 找不到 g.add_edge(human_escalation, ...)"
+        target = m.group(1).strip()
+        assert target == '"load_arc_tasks"', (
+            f"graph.py human_escalation 必须指向 load_arc_tasks，实际 {target!r}"
+        )
+
+    def test_both_graphs_have_consistent_topology(self):
+        """orchestrator.py 和 graph.py 的图拓扑必须一致（防再次漂移）。"""
+        import inspect
+        from engine import orchestrator as orch_mod
+        from engine import graph as graph_mod
+        # 提取两个文件里所有 g.add_edge(...)
+        def edges(src):
+            import re
+            return set(re.findall(r'g\.add_edge\(\s*"([^"]+)"\s*,\s*"([^"]+)"\s*\)', src))
+        orch_edges = edges(inspect.getsource(orch_mod.build_graph))
+        graph_edges = edges(inspect.getsource(graph_mod.build_project_graph))
+        # human_escalation 必须两边都是 load_arc_tasks（关键边）
+        assert ("human_escalation", "load_arc_tasks") in orch_edges, (
+            "orchestrator 缺 human_escalation → load_arc_tasks 边"
+        )
+        assert ("human_escalation", "load_arc_tasks") in graph_edges, (
+            "graph 缺 human_escalation → load_arc_tasks 边"
+        )
