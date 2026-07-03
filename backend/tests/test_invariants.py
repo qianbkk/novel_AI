@@ -3228,3 +3228,66 @@ class TestAuditProjectItself:
         a.check(True, "all good")
         assert len(a.passes) == 1
         assert a.passes[0].startswith("✓ all good")
+
+
+# ───────────────────────────────────────────
+# WW: rate_limit X-RateLimit-Remaining 准确性（最后 #18 迭代）
+# ───────────────────────────────────────────
+class TestRateLimitHeaderAccuracy:
+    """最后 #18 迭代：rate_limit middleware 的 X-RateLimit-Remaining
+    应该在被限流时返回 0 + Retry-After header。
+
+    之前 TestRateLimitMiddleware 测了基本流程，没验证 header 准确性。
+    生产监控可能根据 X-RateLimit-Remaining 做自动降级判断。
+    """
+
+    def test_rate_limited_response_has_zero_remaining(self):
+        """被限流的响应 X-RateLimit-Remaining 必须 = 0。"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.middleware import rate_limit
+        from app.middleware.rate_limit import reset_for_testing
+
+        rate_limit._limiter = rate_limit.IPRateLimiter(max_per_minute=1)
+        try:
+            client = TestClient(app)
+            client.post("/api/v1/providers", json={})  # 1
+            r2 = client.post("/api/v1/providers", json={})  # 2 → 限流
+            assert r2.status_code == 429
+            assert r2.headers.get("X-RateLimit-Remaining") == "0", (
+                f"被限流时 X-RateLimit-Remaining 必须 = 0，实际 {r2.headers.get('X-RateLimit-Remaining')}"
+            )
+        finally:
+            reset_for_testing()
+            rate_limit._limiter = rate_limit.IPRateLimiter(max_per_minute=10000)
+
+    def test_rate_limited_response_has_retry_after(self):
+        """429 响应必须含 Retry-After header（让客户端知道多久重试）。"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.middleware import rate_limit
+        from app.middleware.rate_limit import reset_for_testing
+
+        rate_limit._limiter = rate_limit.IPRateLimiter(max_per_minute=1)
+        try:
+            client = TestClient(app)
+            client.post("/api/v1/providers", json={})  # 1
+            r2 = client.post("/api/v1/providers", json={})  # 2 → 限流
+            assert r2.status_code == 429
+            retry_after = r2.headers.get("Retry-After")
+            assert retry_after is not None, "429 必须含 Retry-After header"
+            assert int(retry_after) > 0, f"Retry-After 必须 > 0，实际 {retry_after}"
+        finally:
+            reset_for_testing()
+            rate_limit._limiter = rate_limit.IPRateLimiter(max_per_minute=10000)
+
+    def test_health_endpoint_not_rate_limited(self):
+        """/health 是健康检查（k8s livenessProbe 高频调用）不能被限流。"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        client = TestClient(app)
+        for _ in range(10):
+            r = client.get("/health")
+            assert r.status_code in (200, 503), (
+                f"/health 不应被限流（GET 早退），实际 {r.status_code}"
+            )
