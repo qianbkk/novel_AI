@@ -3291,3 +3291,38 @@ class TestRateLimitHeaderAccuracy:
             assert r.status_code in (200, 503), (
                 f"/health 不应被限流（GET 早退），实际 {r.status_code}"
             )
+
+
+# ───────────────────────────────────────────
+# XX: audit_project.py 端到端（最后 #19 迭代）
+# ───────────────────────────────────────────
+class TestAuditProjectRunEndToEnd:
+    """最后 #19：audit_project 是 CI 入口，必须能真跑通（不 crash）。"""
+    import subprocess
+
+    def test_audit_runs_successfully_returns_zero_or_one_exit(self):
+        """audit_project 在当前 DB 上应正常返回（exit 0 或 1）。"""
+        from pathlib import Path
+        backend_root = Path(__file__).resolve().parents[1]
+        result = self.subprocess.run(
+            ["python", "-m", "scripts.audit_project"],
+            cwd=backend_root,
+            capture_output=True, text=True, timeout=30,
+        )
+        assert result.returncode in (0, 1), (
+            f"audit 应返回 0/1，实际 {result.returncode}。stderr: {result.stderr[:300]}"
+        )
+
+    def test_audit_collects_pass_and_info(self):
+        """audit 报告应同时含 PASS 段 + INFO 段。"""
+        from pathlib import Path
+        backend_root = Path(__file__).resolve().parents[1]
+        result = self.subprocess.run(
+            ["python", "-m", "scripts.audit_project"],
+            cwd=backend_root,
+            capture_output=True, text=True, timeout=30,
+        )
+        assert "PASS" in result.stdout, "audit 输出应有 PASS 段"
+        assert "INFO" in result.stdout, (
+            "audit 输出应有 INFO 段（前置条件未满足的跳过）"
+        )
