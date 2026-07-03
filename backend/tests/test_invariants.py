@@ -3494,3 +3494,32 @@ class TestLoadStateRobustness:
         loaded = load_state(path)
         assert loaded["novel_id"] == "test"
         assert loaded["title"] == "title"
+
+
+# ───────────────────────────────────────────
+# CCC: 文档与代码一致性 invariants（最后 #24）
+# ───────────────────────────────────────────
+class TestDocCodeConsistency:
+    """最后 #24：锁死 CHANGELOG / README / 前端类型 跟代码状态一致。"""
+    def test_changelog_mentions_recent_security_fixes(self):
+        from pathlib import Path
+        cl = (Path(__file__).resolve().parents[2] / "CHANGELOG.md").read_text(encoding="utf-8")
+        for keyword in ["API key", "MASTER_KEY", "subprocess", "Mock"]:
+            assert keyword in cl, f"CHANGELOG 缺关键字 '{keyword}'"
+
+    def test_readme_has_deployment_section_and_master_key(self):
+        from pathlib import Path
+        readme = (Path(__file__).resolve().parents[2] / "README.md").read_text(encoding="utf-8")
+        assert "## 部署" in readme, "README 缺「部署」章节"
+        assert "MASTER_KEY" in readme, "README 部署章节必须提到 MASTER_KEY"
+
+    def test_scripts_directory_lists_operational_tools(self):
+        from pathlib import Path
+        scripts = Path(__file__).resolve().parents[2] / "backend" / "scripts"
+        for tool in ["generate_master_key.py", "rotate_master_key.py", "export_openapi.py"]:
+            assert (scripts / tool).exists(), f"scripts/{tool} 不存在"
+
+    def test_frontend_gitignore_excludes_openapi_json(self):
+        from pathlib import Path
+        gi = (Path(__file__).resolve().parents[2] / "frontend" / ".gitignore").read_text(encoding="utf-8")
+        assert "openapi.json" in gi, "frontend/.gitignore 必须含 openapi.json"
