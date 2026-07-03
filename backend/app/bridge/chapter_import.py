@@ -82,39 +82,57 @@ async def import_chapters_from_novel_ai(project_id: str, novel_ai_dir: str, db: 
     force = False  # 调用方通过 import_chapters_force 单独传
 
     for txt_path in sorted(chapters_dir.glob("ch_*.txt")):
-        n = int(txt_path.stem.split("_")[1])
-        existing = db.query(Chapter).filter_by(project_id=project_id, chapter_no=n).first()
-        if existing and not force:
-            continue  # 已经导入过，跳过——避免重复 embed 同一章
+        # 迭代 #31：每个文件独立 try/except，单文件坏不能阻断整批 import。
+        # 之前一行错就全抛异常 → 用户看到的现象是"0 章导入"，没法定位是哪个文件坏。
+        try:
+            # 文件名 ch_<N>.txt → 取 N；malformed 跳过
+            try:
+                n = int(txt_path.stem.split("_")[1])
+            except (IndexError, ValueError):
+                log.warning("import-chapters: 跳过畸形文件名 %s", txt_path.name)
+                continue
 
-        content = txt_path.read_text(encoding="utf-8")
-        meta_path = txt_path.with_name(txt_path.stem + "_meta.json")
-        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+            content = txt_path.read_text(encoding="utf-8")
+            meta_path = txt_path.with_name(txt_path.stem + "_meta.json")
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                # meta 损坏不能阻断 txt 导入 — 没 meta 仍能 derive title/summary
+                log.warning("import-chapters: %s meta.json 损坏（%s），跳过 meta", txt_path.name, e)
+                meta = {}
 
-        # 派生一个像样的标题，避免显示"【修改后正文】"
-        derived_title = _derive_title(n, meta, content)
-        derived_summary = _build_summary(meta, content)
+            existing = db.query(Chapter).filter_by(project_id=project_id, chapter_no=n).first()
+            if existing and not force:
+                continue  # 已经导入过，跳过——避免重复 embed 同一章
 
-        if existing:
-            # 覆盖：保留 id，更新内容 + 标题 + 摘要
-            existing.title = derived_title
-            existing.content = content
-            existing.summary = derived_summary
-            db.commit()
-            imported.append({
-                "chapter_id": existing.id,
-                "chapter_no": n,
-                "title": derived_title,
-                "novel_ai_score": meta.get("score"),
-                "novel_ai_rewrite_count": meta.get("rewrite_count"),
-                "mode": "overwrite",
-            })
+            # 派生一个像样的标题，避免显示"【修改后正文】"
+            derived_title = _derive_title(n, meta, content)
+            derived_summary = _build_summary(meta, content)
+
+            if existing:
+                # 覆盖：保留 id，更新内容 + 标题 + 摘要
+                existing.title = derived_title
+                existing.content = content
+                existing.summary = derived_summary
+                db.commit()
+                imported.append({
+                    "chapter_id": existing.id,
+                    "chapter_no": n,
+                    "title": derived_title,
+                    "novel_ai_score": meta.get("score"),
+                    "novel_ai_rewrite_count": meta.get("rewrite_count"),
+                    "mode": "overwrite",
+                })
+                continue
+
+            result = await add_chapter(project_id, n, derived_title, content, db)
+            result["novel_ai_score"] = meta.get("score")
+            result["novel_ai_rewrite_count"] = meta.get("rewrite_count")
+            imported.append(result)
+        except Exception as e:
+            # 兜底：单文件 import 失败不能阻断整批
+            log.exception("import-chapters: %s 处理失败（%s）", txt_path.name, e)
             continue
-
-        result = await add_chapter(project_id, n, derived_title, content, db)
-        result["novel_ai_score"] = meta.get("score")
-        result["novel_ai_rewrite_count"] = meta.get("rewrite_count")
-        imported.append(result)
 
     log.info("import-chapters project=%s, imported=%d, dir=%s",
              project_id, len(imported), chapters_dir)
@@ -130,25 +148,39 @@ async def _force_reimport(project_id: str, novel_ai_dir: str, db: Session) -> li
 
     updated = []
     for txt_path in sorted(chapters_dir.glob("ch_*.txt")):
-        n = int(txt_path.stem.split("_")[1])
-        content = txt_path.read_text(encoding="utf-8")
-        meta_path = txt_path.with_name(txt_path.stem + "_meta.json")
-        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        # 迭代 #31：同 import_chapters_from_novel_ai，单文件坏不能阻断整批
+        try:
+            try:
+                n = int(txt_path.stem.split("_")[1])
+            except (IndexError, ValueError):
+                log.warning("_force_reimport: 跳过畸形文件名 %s", txt_path.name)
+                continue
 
-        derived_title = _derive_title(n, meta, content)
-        derived_summary = _build_summary(meta, content)
-        existing = db.query(Chapter).filter_by(project_id=project_id, chapter_no=n).first()
-        if existing:
-            existing.title = derived_title
-            existing.content = content
-            existing.summary = derived_summary
-            if not existing.created_at:
-                existing.created_at = datetime.now(timezone.utc)
-            db.commit()
-            updated.append({"chapter_no": n, "title": derived_title, "mode": "updated"})
-        else:
-            from ..rag.retrieval import add_chapter
-            await add_chapter(project_id, n, derived_title, content, db)
-            updated.append({"chapter_no": n, "title": derived_title, "mode": "created"})
+            content = txt_path.read_text(encoding="utf-8")
+            meta_path = txt_path.with_name(txt_path.stem + "_meta.json")
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+            except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                log.warning("_force_reimport: %s meta.json 损坏（%s），跳过 meta", txt_path.name, e)
+                meta = {}
+
+            derived_title = _derive_title(n, meta, content)
+            derived_summary = _build_summary(meta, content)
+            existing = db.query(Chapter).filter_by(project_id=project_id, chapter_no=n).first()
+            if existing:
+                existing.title = derived_title
+                existing.content = content
+                existing.summary = derived_summary
+                if not existing.created_at:
+                    existing.created_at = datetime.now(timezone.utc)
+                db.commit()
+                updated.append({"chapter_no": n, "title": derived_title, "mode": "updated"})
+            else:
+                from ..rag.retrieval import add_chapter
+                await add_chapter(project_id, n, derived_title, content, db)
+                updated.append({"chapter_no": n, "title": derived_title, "mode": "created"})
+        except Exception as e:
+            log.exception("_force_reimport: %s 处理失败（%s）", txt_path.name, e)
+            continue
     log.info("_force_reimport project=%s, updated=%d", project_id, len(updated))
     return updated

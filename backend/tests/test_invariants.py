@@ -3601,6 +3601,171 @@ class TestRunBridgeConcurrencyGuard:
 
 
 # ───────────────────────────────────────────
+# JJJ: chapter_import 单文件坏不能阻断整批（迭代 #31）
+# ───────────────────────────────────────────
+class TestImportChaptersResilient:
+    """迭代 #31: import_chapters_from_novel_ai 之前一个坏文件就让整批 import 失败。
+
+    历史 bug：chapters_dir.glob("ch_*.txt") 拿到所有 .txt，但每个文件都做：
+      - n = int(txt_path.stem.split("_")[1])   → ValueError on malformed
+      - txt_path.read_text(encoding="utf-8")   → UnicodeDecodeError on 编码错
+      - json.loads(meta.read_text(...))        → JSONDecodeError on meta 坏
+    任何一个抛异常 → 整个 import 失败 → 用户看到 0 章导入，没法定位是哪个文件坏。
+
+    修法：每文件 try/except，log warning + 跳过该文件继续下一个。
+    同样修 _force_reimport。
+
+    本测试锁死：3 个文件（1 正常 / 1 坏 filename / 1 meta 损坏）→ 正常文件
+    仍被导入，整个 import 不抛异常。
+    """
+    @pytest.fixture(autouse=True)
+    def setup_chapters_dir(self, tmp_path):
+        """准备一个含 3 个章节文件的目录：1 正常 / 1 坏 filename / 1 坏 meta"""
+        import os
+        import secrets
+        chapters_dir = tmp_path / "output" / "chapters"
+        chapters_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1) 正常文件
+        (chapters_dir / "ch_0001.txt").write_text(
+            "厅堂不大。\n\n商恪坐在案后，\n翻看案上账册。\n", encoding="utf-8"
+        )
+        (chapters_dir / "ch_0001_meta.json").write_text(
+            json.dumps({
+                "chapter_number": 1,
+                "chapter_role": "铺垫",
+                "chapter_goal": "展现商恪困境",
+                "score": 7.0,
+                "rewrite_count": 0,
+            }, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        # 2) 正常文件 + 坏 meta
+        (chapters_dir / "ch_0002.txt").write_text(
+            "雅间内。\n\n林尘盘膝坐下。\n", encoding="utf-8"
+        )
+        (chapters_dir / "ch_0002_meta.json").write_text(
+            "{not valid json", encoding="utf-8"
+        )
+        # 3) 畸形文件名（不匹配 ch_<N> 格式）
+        (chapters_dir / "ch_xyz.txt").write_text("garbage", encoding="utf-8")
+
+        self.tmp_path = tmp_path
+        # 用 secrets 保证 project_id 唯一（避免 DB 残留冲突）
+        self.project_id = f"test-resilient-{secrets.token_hex(8)}"
+        yield tmp_path
+        # teardown：清理测试数据
+        from app.database import SessionLocal
+        from app.models import Project, Chapter
+        db = SessionLocal()
+        try:
+            db.query(Chapter).filter_by(project_id=self.project_id).delete()
+            db.query(Project).filter_by(id=self.project_id).delete()
+            db.commit()
+        except Exception:
+            pass
+        finally:
+            db.close()
+
+    def test_import_chapters_continues_past_bad_files(self, setup_chapters_dir):
+        """3 个文件（1 正常 + 1 meta 坏 + 1 坏 filename）→ 正常文件被导入，整个 import 不抛。"""
+        import asyncio
+        from app.bridge.chapter_import import import_chapters_from_novel_ai
+        from app.database import SessionLocal
+        from app.models import Project, Chapter
+
+        # 准备 project
+        db = SessionLocal()
+        try:
+            project = Project(
+                id=self.project_id,
+                title="test",
+                genre="玄幻",
+                status="ready",
+                config_json={},
+            )
+            db.add(project)
+            db.commit()
+        finally:
+            db.close()
+
+        db = SessionLocal()
+        try:
+            # 之前会因 ch_0002_meta.json 损坏而抛 JSONDecodeError → 0 章导入
+            # 修后：2 章导入（ch_0001 + ch_0002 with empty meta），ch_xyz 跳过
+            result = asyncio.run(
+                import_chapters_from_novel_ai(self.project_id, str(self.tmp_path), db)
+            )
+            # 关键断言 1：import 没抛
+            assert result is not None
+            assert len(result) == 2, (
+                f"应导入 2 个 chapter（ch_0001 + ch_0002 with bad meta），"
+                f"实际 {len(result)} 个：{result}"
+            )
+            # 关键断言 2：DB 里至少有 ch_0001（最稳的）
+            chapter_nos = {
+                c.chapter_no for c in
+                db.query(Chapter).filter_by(project_id=self.project_id).all()
+            }
+            assert 1 in chapter_nos, (
+                f"ch_0001 应被导入，DB chapter_nos={chapter_nos}"
+            )
+            assert 2 in chapter_nos, (
+                f"ch_0002 应被导入（meta 坏但 txt 仍可用），DB chapter_nos={chapter_nos}"
+            )
+        finally:
+            # 清理
+            try:
+                db.query(Chapter).filter_by(project_id=self.project_id).delete()
+                db.query(Project).filter_by(id=self.project_id).delete()
+                db.commit()
+            except Exception:
+                pass
+            db.close()
+
+    def test_force_reimport_continues_past_bad_files(self, setup_chapters_dir):
+        """_force_reimport 也必须单文件坏不阻断。"""
+        import asyncio
+        from app.bridge.chapter_import import _force_reimport
+        from app.database import SessionLocal
+        from app.models import Project, Chapter
+
+        # 准备 project
+        db = SessionLocal()
+        try:
+            project = Project(
+                id=self.project_id,
+                title="test",
+                genre="玄幻",
+                status="ready",
+                config_json={},
+            )
+            db.add(project)
+            db.commit()
+        finally:
+            db.close()
+
+        db = SessionLocal()
+        try:
+            result = asyncio.run(
+                _force_reimport(self.project_id, str(self.tmp_path), db)
+            )
+            # 至少 ch_0001 应被 created（不存在）+ ch_0002 meta 坏但仍 create
+            chapter_nos = {item["chapter_no"] for item in result}
+            assert 1 in chapter_nos, (
+                f"_force_reimport 应至少处理 ch_0001，实际 chapter_nos={chapter_nos}"
+            )
+        finally:
+            try:
+                db.query(Chapter).filter_by(project_id=self.project_id).delete()
+                db.query(Project).filter_by(id=self.project_id).delete()
+                db.commit()
+            except Exception:
+                pass
+            db.close()
+
+
+# ───────────────────────────────────────────
 # WW: rate_limit X-RateLimit-Remaining 准确性（最后 #18 迭代）
 # ───────────────────────────────────────────
 class TestRateLimitHeaderAccuracy:

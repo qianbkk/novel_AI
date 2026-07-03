@@ -6,6 +6,19 @@
 
 ## [Unreleased] — 2026-07-03
 
+### Bug Fix（迭代 #31 — 内部审计）
+- **`fix(bridge): import_chapters 单文件坏不能阻断整批**
+  - `app/bridge/chapter_import.py` 之前一个坏文件就让整批 import 失败：
+    - 文件名畸形（ch_xyz.txt 而不是 ch_0001.txt）→ IndexError
+    - 编码错（Latin-1 而非 UTF-8）→ UnicodeDecodeError
+    - meta.json 损坏 → JSONDecodeError
+  - 后果：50 章里只要有 1 章坏 → import 抛异常 → 0 章导入，
+    用户没法定位是哪个文件坏。
+  - 修法：每文件独立 try/except，log warning + 跳过该文件继续下一个；
+    同样修 `_force_reimport`。
+  - 加 2 个 invariant test 锁死：3 个文件（1 正常 + 1 meta 坏 + 1 坏 filename）→
+    正常文件被导入，整个 import 不抛异常。
+
 ### Bug Fix（迭代 #30 — 内部审计）
 - **`fix(api): run_bridge 删除死锁代码（false sense of security）**
   - `app/api/bridge.py` 之前用 `_get_project_lock(project_id).locked()` 做
@@ -74,7 +87,7 @@
   TestLoadStateRobustness / TestDocCodeConsistency /
   TestSecurityConstants / TestProviderTableSchema /
   TestHumanEscalationNotEndRun / 等
-- 总 invariant suite：**203 passed / 0 warnings**
+- 总 invariant suite：**205 passed / 0 warnings**
 
 ## [Unreleased] — 2026-07-02
 
