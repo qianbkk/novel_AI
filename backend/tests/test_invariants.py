@@ -3523,3 +3523,34 @@ class TestDocCodeConsistency:
         from pathlib import Path
         gi = (Path(__file__).resolve().parents[2] / "frontend" / ".gitignore").read_text(encoding="utf-8")
         assert "openapi.json" in gi, "frontend/.gitignore 必须含 openapi.json"
+
+
+# ───────────────────────────────────────────
+# DDD: app/security.py 安全常量 invariants（最后 #25）
+# ───────────────────────────────────────────
+class TestSecurityConstants:
+    """最后 #25：锁死 security.py 的安全相关常量。"""
+    def test_key_suffix_length_is_4(self):
+        from app.security import _KEY_SUFFIX_LEN
+        assert _KEY_SUFFIX_LEN == 4, (
+            f"_KEY_SUFFIX_LEN 应为 4，实际 {_KEY_SUFFIX_LEN}"
+        )
+
+    def test_generate_fernet_key_returns_32_bytes(self):
+        from app.security import _generate_fernet_key
+        import base64
+        key = _generate_fernet_key()
+        decoded = base64.urlsafe_b64decode(key)
+        assert len(decoded) == 32, f"Fernet key 解码后 {len(decoded)} 字节，应为 32"
+
+    def test_decrypt_empty_ciphertext_raises(self):
+        from app.security import decrypt_api_key
+        import pytest
+        with pytest.raises(ValueError, match="api_key ciphertext 不能为空"):
+            decrypt_api_key("")
+
+    def test_encrypt_empty_plaintext_raises(self):
+        from app.security import encrypt_api_key
+        import pytest
+        with pytest.raises(ValueError, match="api_key 明文不能为空"):
+            encrypt_api_key("")
