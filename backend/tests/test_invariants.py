@@ -3597,3 +3597,37 @@ class TestChangelogCoversAllCommits:
         )
         count = int(result.stdout.strip())
         assert count >= 10, f"repo 应至少 10 个 commit，实际 {count}"
+
+
+# ───────────────────────────────────────────
+# FFF: Provider 表结构 invariants（最后 #27）
+# ───────────────────────────────────────────
+class TestProviderTableSchema:
+    """最后 #27：锁死 Provider 表的关键字段（防止 schema drift）。"""
+    def test_provider_has_no_plaintext_api_key_column(self):
+        from app.models import Provider
+        columns = {c.name for c in Provider.__table__.columns}
+        assert "api_key" not in columns, (
+            "Provider 表还有明文 api_key 列 — 高危！"
+        )
+
+    def test_provider_has_encrypted_and_suffix_columns(self):
+        from app.models import Provider
+        columns = {c.name for c in Provider.__table__.columns}
+        assert "api_key_encrypted" in columns
+        assert "api_key_suffix" in columns
+
+    def test_provider_encrypted_column_type_is_text(self):
+        from app.models import Provider
+        from sqlalchemy import Text
+        col = Provider.__table__.columns["api_key_encrypted"]
+        assert isinstance(col.type, Text), (
+            f"api_key_encrypted 应为 Text 类型，实际 {type(col.type).__name__}"
+        )
+
+    def test_provider_name_not_nullable(self):
+        from app.models import Provider
+        col = Provider.__table__.columns["name"]
+        assert col.nullable is False, (
+            f"Provider.name 应 NOT NULL，实际 nullable={col.nullable}"
+        )
