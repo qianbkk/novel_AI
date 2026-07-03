@@ -3895,6 +3895,97 @@ class TestLlmRouterMiniMaxReasoningContent:
 
 
 # ───────────────────────────────────────────
+# LLL: SSE queue 内存泄漏（迭代 #33）
+# ───────────────────────────────────────────
+class TestSSEQueueCleanup:
+    """迭代 #33: _run_queues (bridge.py) 和 _job_queues (worldbuild/orchestrator.py)
+    之前只创建不清理 → 生产长期跑 N 个 run 后 dict 里堆 N 个 Queue，
+    每个 Queue 有内部 buffer，内存持续涨。
+
+    修法：SSE consumer 读完 done 事件后（或异常退出时）调用 cleanup_*_queue。
+    本测试锁死：consumer 退出后 dict 里 queue 必须被移除。
+    """
+    def test_worldbuild_queue_cleanup_on_done(self):
+        """stream_worldbuild consumer 读完 done → _job_queues 必须被清理。"""
+        import asyncio
+        from app.worldbuild import orchestrator as wb_orch
+        from app.api.worldbuild import cleanup_job_queue
+
+        # 先放一些事件 + done
+        async def _scenario():
+            q = wb_orch.get_job_queue("test-job-1")
+            await q.put({"event": "stage_done", "stage": "x"})
+            await q.put({"event": "done"})
+            # 模拟 consumer：取完 done 后调 cleanup
+            while True:
+                payload = await q.get()
+                if payload.get("event") == "done":
+                    break
+            cleanup_job_queue("test-job-1")
+            # 验证 dict 已清
+            assert "test-job-1" not in wb_orch._job_queues, (
+                f"cleanup_job_queue 后 _job_queues 仍含 test-job-1，"
+                f"keys={list(wb_orch._job_queues.keys())}"
+            )
+        asyncio.run(_scenario())
+
+    def test_worldbuild_queue_cleanup_safe_when_already_removed(self):
+        """重复 cleanup 是 no-op（不能抛）。"""
+        from app.worldbuild.orchestrator import cleanup_job_queue
+        cleanup_job_queue("nonexistent-job-xyz")  # 不抛
+        cleanup_job_queue("nonexistent-job-xyz")  # 重复也不抛
+
+    def test_bridge_run_queue_cleanup_safe_when_already_removed(self):
+        """bridge.py cleanup_run_queue 同样幂等。"""
+        from app.api.bridge import cleanup_run_queue
+        cleanup_run_queue("nonexistent-run-xyz")
+        cleanup_run_queue("nonexistent-run-xyz")
+
+    def test_worldbuild_queue_event_generator_uses_finally_cleanup(self):
+        """stream_worldbuild event_generator 必须用 try/finally 包裹清理（防止异常泄漏）。"""
+        from pathlib import Path
+        import re
+        worldbuild_py = Path(__file__).resolve().parents[1] / "app" / "api" / "worldbuild.py"
+        content = worldbuild_py.read_text(encoding="utf-8")
+        # 找 event_generator 函数体
+        m = re.search(
+            r"async def event_generator\(\):(.*?)(?=\nasync def |\ndef |\nclass |\Z)",
+            content, re.DOTALL
+        )
+        assert m, "找不到 event_generator"
+        body = m.group(1)
+        # 必须有 try / finally 包裹 cleanup_job_queue
+        assert "try:" in body, (
+            "event_generator 必须 try/finally 包裹（防止异常时 queue 泄漏）"
+        )
+        assert "finally:" in body, "event_generator 必须有 finally 分支"
+        assert "cleanup_job_queue" in body, (
+            "event_generator finally 必须调 cleanup_job_queue"
+        )
+
+    def test_bridge_event_generator_uses_finally_cleanup(self):
+        """stream_bridge event_generator 同理。"""
+        from pathlib import Path
+        import re
+        bridge_py = Path(__file__).resolve().parents[1] / "app" / "api" / "bridge.py"
+        content = bridge_py.read_text(encoding="utf-8")
+        # 找 stream_bridge 的 event_generator
+        m = re.search(
+            r"async def stream_bridge\([\s\S]*?async def event_generator\(\):(.*?)(?=\nasync def |\ndef |\nclass |\Z)",
+            content, re.DOTALL
+        )
+        assert m, "找不到 stream_bridge.event_generator"
+        body = m.group(1)
+        assert "try:" in body, (
+            "stream_bridge.event_generator 必须 try/finally 包裹"
+        )
+        assert "finally:" in body, "必须有 finally 分支"
+        assert "cleanup_run_queue" in body, (
+            "event_generator finally 必须调 cleanup_run_queue"
+        )
+
+
+# ───────────────────────────────────────────
 # WW: rate_limit X-RateLimit-Remaining 准确性（最后 #18 迭代）
 # ───────────────────────────────────────────
 class TestRateLimitHeaderAccuracy:

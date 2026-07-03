@@ -24,6 +24,16 @@ def get_job_queue(job_id: str) -> asyncio.Queue:
     return _job_queues[job_id]
 
 
+def cleanup_job_queue(job_id: str) -> None:
+    """SSE consumer 读完 done 事件后必须调用，否则 dict 无限增长（迭代 #33）。
+
+    之前 get_job_queue 只创建不清理 → 生产长期跑 100 个 worldbuild job 后
+    dict 里堆 100 个 asyncio.Queue，每个队列有内部 buffer，内存持续涨。
+    同样模式存在于 bridge.py 的 _run_queues。
+    """
+    _job_queues.pop(job_id, None)
+
+
 async def run_worldbuild_job(job_id: str, project_id: str, db: Session):
     job = db.get(GenerationJob, job_id)
     project = db.get(Project, project_id)

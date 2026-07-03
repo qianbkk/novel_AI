@@ -6,6 +6,18 @@
 
 ## [Unreleased] — 2026-07-03
 
+### Bug Fix（迭代 #33 — 内部审计）
+- **`fix(api): SSE queue 内存泄漏**
+  - `_run_queues` (bridge.py) 和 `_job_queues` (worldbuild/orchestrator.py)
+    之前只创建 queue 从不清理。SSE consumer 读完 done 事件后 dict 里的
+    queue 永远不被移除。
+  - 后果：生产长期跑 N 个 run 后 dict 里堆 N 个 Queue + 内部 buffer，
+    内存持续涨。重启后释放，但长跑进程会逐渐 OOM。
+  - 修法：SSE consumer 退出（break / 异常 / 客户端断开）时通过
+    `try/finally` 调 `cleanup_*_queue`，从 dict 移除 queue。
+  - 加 5 个 invariant test 锁死：consumer 读 done 后 dict 被清理、
+    重复清理幂等、event_generator 必须 try/finally 包裹。
+
 ### Bug Fix（迭代 #32 — 内部审计）
 - **`fix(engine): MiniMax M3 reasoning_content 检测（避免静默空文本）**
   - `engine/llm/router.py:_minimax` 之前 line 456-458 对 reasoning_content
@@ -102,7 +114,7 @@
   TestLoadStateRobustness / TestDocCodeConsistency /
   TestSecurityConstants / TestProviderTableSchema /
   TestHumanEscalationNotEndRun / 等
-- 总 invariant suite：**208 passed / 0 warnings**
+- 总 invariant suite：**213 passed / 0 warnings**
 
 ## [Unreleased] — 2026-07-02
 

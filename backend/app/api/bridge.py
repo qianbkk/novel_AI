@@ -40,6 +40,15 @@ def get_run_queue(run_id: str) -> Queue:
     return _run_queues[run_id]
 
 
+def cleanup_run_queue(run_id: str) -> None:
+    """SSE consumer 读完 done 事件后必须调用，否则 dict 无限增长（迭代 #33）。
+
+    同 worldbuild._job_queues 的修复——之前 get_run_queue 只创建不清理，
+    生产长期跑 100 个 bridge run 后 dict 里堆 100 个 Queue，内存持续涨。
+    """
+    _run_queues.pop(run_id, None)
+
+
 @router.get("/binding", response_model=NovelAIBindingOut)
 def get_binding(project_id: str, db: Session = Depends(get_db)):
     project = db.get(Project, project_id)
@@ -223,15 +232,20 @@ async def stream_bridge(project_id: str, run_id: str, db: Session = Depends(get_
     queue = get_run_queue(run_id)
 
     async def event_generator():
-        while True:
-            payload = await asyncio.to_thread(queue.get)
-            if payload.get("event") == "done":
-                yield {"event": "done", "data": json.dumps(payload, ensure_ascii=False, default=str)}
-                break
-            yield {
-                "event": payload.get("event", "log"),
-                "data": json.dumps(payload, ensure_ascii=False, default=str),
-            }
+        try:
+            while True:
+                payload = await asyncio.to_thread(queue.get)
+                if payload.get("event") == "done":
+                    yield {"event": "done", "data": json.dumps(payload, ensure_ascii=False, default=str)}
+                    break
+                yield {
+                    "event": payload.get("event", "log"),
+                    "data": json.dumps(payload, ensure_ascii=False, default=str),
+                }
+        finally:
+            # 迭代 #33：consumer 退出（break / 异常 / 客户端断开）时清理 queue，
+            # 否则 _run_queues 无限增长导致内存泄漏。
+            cleanup_run_queue(run_id)
 
     return EventSourceResponse(event_generator())
 

@@ -10,7 +10,7 @@ from ..models import (
     PowerSystem, MapNode, Foreshadowing, Currency, EntityRelation,
 )
 from ..schemas import JobOut
-from ..worldbuild.orchestrator import run_worldbuild_job, get_job_queue
+from ..worldbuild.orchestrator import run_worldbuild_job, get_job_queue, cleanup_job_queue
 
 router = APIRouter(prefix="/projects/{project_id}/worldbuild", tags=["worldbuild"])
 
@@ -47,14 +47,19 @@ async def stream_worldbuild(project_id: str, job_id: str):
     queue = get_job_queue(job_id)
 
     async def event_generator():
-        while True:
-            payload = await queue.get()
-            if payload.get("event") == "done":
-                break
-            # 显式 json.dumps——sse-starlette 拿到非字符串的 data 会用 Python repr
-            # （单引号字典）输出，浏览器端 JSON.parse 碰到单引号会直接报错，
-            # 这是接真实前端之前才会暴露的坑，提前在这里堵掉。
-            yield {"event": payload["event"], "data": json.dumps(payload, default=str)}
+        try:
+            while True:
+                payload = await queue.get()
+                if payload.get("event") == "done":
+                    break
+                # 显式 json.dumps——sse-starlette 拿到非字符串的 data 会用 Python repr
+                # （单引号字典）输出，浏览器端 JSON.parse 碰到单引号会直接报错，
+                # 这是接真实前端之前才会暴露的坑，提前在这里堵掉。
+                yield {"event": payload["event"], "data": json.dumps(payload, default=str)}
+        finally:
+            # 迭代 #33：consumer 退出（break / 异常 / 客户端断开）时清理 queue，
+            # 否则 _job_queues 无限增长导致内存泄漏。
+            cleanup_job_queue(job_id)
 
     return EventSourceResponse(event_generator())
 
