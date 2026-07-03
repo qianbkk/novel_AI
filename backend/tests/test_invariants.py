@@ -3097,3 +3097,87 @@ class TestSaveStateTrueConcurrency:
         assert not json_errors, (
             f"reader 读到 JSONDecodeError（半写文件！）：{json_errors}"
         )
+
+
+# ───────────────────────────────────────────
+# UU: engine/tools/budget_manager.py 测试覆盖（迭代 #16）
+# ───────────────────────────────────────────
+class TestBudgetManager:
+    """迭代 #16：budget_manager.py 是 176 行的核心费用追踪模块，零测试覆盖。
+
+    之前 audit/生产 bug 报告"费用不准"时无法快速定位 — 因为没测试。
+    本轮先锁死核心 4 个函数：log_cost / load_all_records /
+    generate_report / total_cost 累加。
+    """
+
+    def test_log_cost_writes_jsonl(self, monkeypatch, tmp_path):
+        """log_cost 必须 append JSONL（一行一 JSON）到 BUDGET_LOG。"""
+        # 重定向 BUDGET_LOG 到 tmp_path
+        from engine.tools import budget_manager as bm
+        log_path = tmp_path / "budget.jsonl"
+        monkeypatch.setattr(bm, "BUDGET_LOG", str(log_path))
+
+        bm.log_cost(chapter=1, agent="writer", model="test",
+                    input_tokens=100, output_tokens=500, cost_usd=0.05)
+        bm.log_cost(chapter=2, agent="checker", model="test",
+                    input_tokens=80, output_tokens=20, cost_usd=0.01)
+
+        # 文件存在 + 2 行
+        content = log_path.read_text(encoding="utf-8").strip()
+        lines = content.splitlines()
+        assert len(lines) == 2, f"应有 2 行记录，实际 {len(lines)}"
+        # 每行是合法 JSON
+        import json
+        recs = [json.loads(l) for l in lines]
+        assert recs[0]["chapter"] == 1
+        assert recs[0]["cost_usd"] == 0.05
+        assert recs[1]["chapter"] == 2
+        assert recs[1]["cost_usd"] == 0.01
+
+    def test_load_all_records_skips_corrupt_lines(self, monkeypatch, tmp_path):
+        """load_all_records 跳过损坏行（不是全文件失败）。"""
+        from engine.tools import budget_manager as bm
+        log_path = tmp_path / "budget.jsonl"
+        log_path.write_text(
+            '{"chapter": 1, "cost_usd": 0.05}\n'
+            'THIS IS NOT JSON\n'
+            '{"chapter": 2, "cost_usd": 0.02}\n'
+            '\n'  # 空行
+            , encoding="utf-8"
+        )
+        monkeypatch.setattr(bm, "BUDGET_LOG", str(log_path))
+        records = bm.load_all_records()
+        # 3 个有效行（损坏 + 空行被跳过）
+        assert len(records) == 2, f"应只读 2 个有效记录，实际 {len(records)}"
+        assert records[0]["chapter"] == 1
+        assert records[1]["chapter"] == 2
+
+    def test_load_all_records_returns_empty_when_file_missing(self, monkeypatch, tmp_path):
+        """BUDGET_LOG 不存在 → load_all_records 返回 []（不抛 FileNotFoundError）。"""
+        from engine.tools import budget_manager as bm
+        monkeypatch.setattr(bm, "BUDGET_LOG", str(tmp_path / "nonexistent.jsonl"))
+        assert bm.load_all_records() == []
+
+    def test_generate_report_sums_costs_correctly(self, monkeypatch, tmp_path):
+        """generate_report 必须正确累加所有 cost_usd。"""
+        from engine.tools import budget_manager as bm
+        log_path = tmp_path / "budget.jsonl"
+        log_path.write_text(
+            '{"chapter":1,"cost_usd":0.05,"agent":"writer","model":"x"}\n'
+            '{"chapter":1,"cost_usd":0.02,"agent":"checker","model":"x"}\n'
+            '{"chapter":2,"cost_usd":0.08,"agent":"writer","model":"x"}\n'
+            , encoding="utf-8"
+        )
+        monkeypatch.setattr(bm, "BUDGET_LOG", str(log_path))
+        report = bm.generate_report()
+        # total = 0.05 + 0.02 + 0.08 = 0.15
+        assert abs(report["total_cost_usd"] - 0.15) < 1e-3, (
+            f"total_cost 累加错误：{report['total_cost_usd']}"
+        )
+        # chapters_done = unique chapter = {1, 2} = 2
+        assert report["chapters_done"] == 2
+        # by_agent 正确分组
+        assert report["by_agent"]["writer"]["calls"] == 2
+        assert report["by_agent"]["checker"]["calls"] == 1
+        assert abs(report["by_agent"]["writer"]["cost"] - 0.13) < 1e-3
+        assert abs(report["by_agent"]["checker"]["cost"] - 0.02) < 1e-3
