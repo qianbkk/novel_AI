@@ -4,6 +4,29 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased] — 2026-07-03
+
+### Bug Fix（独立 AI 审查发现）
+- **`aa969a5` fix(engine): orchestrator human_escalation 边 → load_arc_tasks**
+  - 独立 AI 深度审查（2026-07-03）发现：`orchestrator.py:573` 之前是
+    `human_escalation → END`，与 `engine/graph.py:290` 不一致。
+  - 后果：run/resume 章节触发人工介入 → stream() 立即终止 →
+    chapters_done < max_chapters 但 exit_code=0（静默提前结束）。
+  - 修法：把 orchestrator 边改成 load_arc_tasks，加 3 个 invariant test
+    锁死两个文件的图拓扑必须一致。
+
+### Tests（持续加固）
+- 本轮新增 invariant test 类：TestMockProviderEndToEnd /
+  TestOpenApiExport / TestMasterKeyRotation / TestOpenApiExportEndToEnd /
+  TestMasterKeyScriptsEndToEnd / TestRotateMasterKeyEndToEnd /
+  TestGraphCommandFailurePaths / TestSaveStateTrueConcurrency /
+  TestBudgetManager / TestAuditProjectItself / TestMigrationsIdempotent /
+  TestGetDbDependency / TestApplyReviewInputValidation /
+  TestLoadStateRobustness / TestDocCodeConsistency /
+  TestSecurityConstants / TestProviderTableSchema /
+  TestHumanEscalationNotEndRun / 等
+- 总 invariant suite：**190 passed / 0 warnings**
+
 ## [Unreleased] — 2026-07-02
 
 ### Security（高危）
