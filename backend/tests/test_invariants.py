@@ -3766,6 +3766,135 @@ class TestImportChaptersResilient:
 
 
 # ───────────────────────────────────────────
+# KKK: MiniMax M3 reasoning_content 检测（迭代 #32）
+# ───────────────────────────────────────────
+class TestLlmRouterMiniMaxReasoningContent:
+    """迭代 #32: _minimax 之前对 reasoning_content 存在但 content 为空的响应
+    有死代码 fallback（line 456-458 重新赋 msg.get("content", "") 还是空），
+    导致 M3 思考模式被意外开启时静默返回空文本，caller 把空文本当成正常
+    生成继续 pipeline。
+
+    修法：检测到 reasoning_content 非空 + content 空时直接 raise ValueError
+    让配置 bug 暴露（MINIMAX_BASE_URL 可能被覆盖到旧版 endpoint）。
+
+    本测试锁死：mock httpx 返回 {"content": "", "reasoning_content": "..."}，
+    验证 _minimax raise ValueError 而不是返回空字符串。
+    """
+    def test_minimax_raises_on_reasoning_content_with_empty_content(self, monkeypatch):
+        """MiniMax M3 思考模式被意外开启 → 必须 raise ValueError。"""
+        import httpx
+        from engine.llm import router as router_mod
+        from engine.llm.router import LLMRouter
+
+        # 准备一个 fake response：content 空 + reasoning_content 非空
+        class FakeResp:
+            status_code = 200
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return {
+                    "choices": [{
+                        "message": {
+                            "content": "",
+                            "reasoning_content": "用户问的是测试，让我先思考一下...",
+                        }
+                    }],
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 50},
+                }
+        # 设置 MINIMAX_API_KEY
+        monkeypatch.setenv("MINIMAX_API_KEY", "test-key")
+
+        r = LLMRouter("test")
+        r.routes["writer"] = ("minimax", "MiniMax-M3")
+
+        # mock httpx.Client.post 返回 fake response
+        class FakeClient:
+            def __init__(self, *a, **kw): pass
+            def post(self, *a, **kw):
+                return FakeResp()
+        monkeypatch.setattr(router_mod, "_get_client", lambda timeout=120: FakeClient())
+        monkeypatch.setattr(router_mod, "_get_proxied_client", lambda *a, **kw: FakeClient())
+
+        # 必须 raise ValueError（之前的 bug 是返回空 text）
+        with pytest.raises(ValueError, match="reasoning_content"):
+            r.call("writer", "sys", "user", max_tokens=2000, temperature=0.7)
+
+    def test_minimax_returns_content_normally(self, monkeypatch):
+        """正常 content 响应（非空）→ 正常返回。"""
+        import httpx
+        from engine.llm import router as router_mod
+        from engine.llm.router import LLMRouter
+
+        class FakeResp:
+            status_code = 200
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return {
+                    "choices": [{
+                        "message": {
+                            "content": "正常回答的章节内容",
+                            # 没 reasoning_content
+                        }
+                    }],
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 50},
+                }
+        monkeypatch.setenv("MINIMAX_API_KEY", "test-key")
+
+        r = LLMRouter("test")
+        r.routes["writer"] = ("minimax", "MiniMax-M3")
+
+        class FakeClient:
+            def __init__(self, *a, **kw): pass
+            def post(self, *a, **kw):
+                return FakeResp()
+        monkeypatch.setattr(router_mod, "_get_client", lambda timeout=120: FakeClient())
+        monkeypatch.setattr(router_mod, "_get_proxied_client", lambda *a, **kw: FakeClient())
+
+        # 正常返回（不 raise）
+        text, cost = r.call("writer", "sys", "user", max_tokens=2000, temperature=0.7)
+        assert text == "正常回答的章节内容"
+        assert cost > 0
+
+    def test_minimax_empty_content_no_reasoning_falls_back(self, monkeypatch):
+        """content 空 + 无 reasoning_content → 走最底部兜底（text 字段 / reply 字段），
+        不 raise。"""
+        from engine.llm import router as router_mod
+        from engine.llm.router import LLMRouter
+
+        class FakeResp:
+            status_code = 200
+            def raise_for_status(self):
+                pass
+            def json(self):
+                return {
+                    "choices": [{
+                        "message": {
+                            "content": "",
+                            # 没 reasoning_content
+                        },
+                        "text": "M2 系列 fallback text 字段",
+                    }],
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 50},
+                }
+        monkeypatch.setenv("MINIMAX_API_KEY", "test-key")
+
+        r = LLMRouter("test")
+        r.routes["writer"] = ("minimax", "MiniMax-M3")
+
+        class FakeClient:
+            def __init__(self, *a, **kw): pass
+            def post(self, *a, **kw):
+                return FakeResp()
+        monkeypatch.setattr(router_mod, "_get_client", lambda timeout=120: FakeClient())
+        monkeypatch.setattr(router_mod, "_get_proxied_client", lambda *a, **kw: FakeClient())
+
+        # 不 raise，走兜底拿 text 字段
+        text, cost = r.call("writer", "sys", "user", max_tokens=2000, temperature=0.7)
+        assert text == "M2 系列 fallback text 字段"
+
+
+# ───────────────────────────────────────────
 # WW: rate_limit X-RateLimit-Remaining 准确性（最后 #18 迭代）
 # ───────────────────────────────────────────
 class TestRateLimitHeaderAccuracy:

@@ -6,6 +6,21 @@
 
 ## [Unreleased] — 2026-07-03
 
+### Bug Fix（迭代 #32 — 内部审计）
+- **`fix(engine): MiniMax M3 reasoning_content 检测（避免静默空文本）**
+  - `engine/llm/router.py:_minimax` 之前 line 456-458 对 reasoning_content
+    存在但 content 为空的响应有死代码 fallback（重新赋 msg.get("content", "")
+    还是空），导致 M3 思考模式被意外开启时静默返回空文本。
+  - 后果：caller 拿到 "" 当成"正常生成" → 后续 checker 给空文本打 0 分
+    PASS，save_and_track 落盘 0 字章节。
+  - 触发场景：服务端配置变了 / 用户覆盖了 MINIMAX_BASE_URL 到旧版
+    endpoint / 代理把 thinking 字段剥掉。
+  - 修法：检测到 reasoning_content 非空 + content 空时显式 raise ValueError，
+    让配置 bug 暴露而不是静默空文本污染下游。
+  - 加 3 个 invariant test 锁死：reasoning_content + empty content → raise；
+    正常 content → 正常返回；content 空 + 无 reasoning_content → 走兜底
+    text 字段。
+
 ### Bug Fix（迭代 #31 — 内部审计）
 - **`fix(bridge): import_chapters 单文件坏不能阻断整批**
   - `app/bridge/chapter_import.py` 之前一个坏文件就让整批 import 失败：
@@ -87,7 +102,7 @@
   TestLoadStateRobustness / TestDocCodeConsistency /
   TestSecurityConstants / TestProviderTableSchema /
   TestHumanEscalationNotEndRun / 等
-- 总 invariant suite：**205 passed / 0 warnings**
+- 总 invariant suite：**208 passed / 0 warnings**
 
 ## [Unreleased] — 2026-07-02
 

@@ -453,9 +453,21 @@ class LLMRouter:
             raise ValueError(f"MiniMax 返回无 choices: {data}")
         msg = choices[0].get("message", {}) or {}
         text = msg.get("content", "") or ""
-        if not text and "reasoning_content" in msg:
-            # M3 思考模型：reasoning_content 不算正文，找 content
-            text = msg.get("content", "") or ""
+        if not text and msg.get("reasoning_content"):
+            # 迭代 #32: 检测到 M3 思考模式被意外开启。
+            # 之前 (line 456-458) 是死代码 —— content 已空，重新赋 msg.get("content", "")
+            # 还是空，text 仍是 ""，caller 把空文本当正常生成继续 pipeline。
+            # 我们的 payload 显式设了 "thinking": {"type": "disabled"}，如果还触发说明：
+            #   - 服务端配置变了
+            #   - 用户覆盖了 MINIMAX_BASE_URL 指向旧版 endpoint
+            #   - 别的代理把 thinking 字段剥掉
+            # 此时显式 raise 让配置 bug 暴露，避免静默空文本污染下游章节。
+            raise ValueError(
+                f"MiniMax M3 返回了 reasoning_content 但 content 为空——"
+                f"思考模式被意外开启（payload 已显式 disabled）。"
+                f"请检查 MINIMAX_BASE_URL 是否覆盖到旧版 endpoint。"
+                f"raw choices[0].message: {msg}"
+            )
         if not text:
             # 兜底：有些 M 系列字段在 delta 或 text 字段
             text = choices[0].get("text", "") or data.get("reply", "")
