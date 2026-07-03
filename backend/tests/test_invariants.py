@@ -3405,3 +3405,35 @@ class TestGetDbDependency:
             )
         finally:
             sess.close()
+
+
+# ───────────────────────────────────────────
+# AAA: app/bridge/reports.py apply_review 输入校验（最后 #22）
+# ───────────────────────────────────────────
+class TestApplyReviewInputValidation:
+    """最后 #22：apply_review 是用户审核端点，零测试覆盖。"""
+    def test_invalid_action_raises_value_error(self):
+        from app.bridge.reports import apply_review, VALID_REVIEW_ACTIONS
+        import pytest
+        with pytest.raises(ValueError, match="unsupported review action"):
+            apply_review(novel_ai_dir="/tmp/nonexistent", action="invalid_action_xyz")
+        assert VALID_REVIEW_ACTIONS == {"accept", "reject", "edit"}
+
+    def test_nonexistent_state_returns_not_available(self):
+        from app.bridge.reports import apply_review
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            result = apply_review(
+                novel_ai_dir=tmpdir,
+                action="accept",
+                task_id="any_task",
+            )
+            assert result["available"] is False, f"应 available=False，实际 {result}"
+
+    def test_valid_actions_do_not_raise(self):
+        from app.bridge.reports import apply_review
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for action in ["accept", "reject", "edit"]:
+                result = apply_review(novel_ai_dir=tmpdir, action=action)
+                assert result["available"] is False
