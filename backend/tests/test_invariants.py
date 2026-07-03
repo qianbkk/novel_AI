@@ -3554,3 +3554,46 @@ class TestSecurityConstants:
         import pytest
         with pytest.raises(ValueError, match="api_key 明文不能为空"):
             encrypt_api_key("")
+
+
+# ───────────────────────────────────────────
+# EEE: CHANGELOG 包含所有本轮 commit hash（最后 #26）
+# ───────────────────────────────────────────
+class TestChangelogCoversAllCommits:
+    """最后 #26：CHANGELOG.md 必须提到本轮所有 push 的 commit hash。"""
+    def test_changelog_has_recent_commit_hashes(self):
+        """CHANGELOG.md 至少提到 5 个 Phase 1.5 / 深度修复轮 commit（防漂移）。"""
+        import subprocess
+        from pathlib import Path
+        repo = Path(__file__).resolve().parents[2]
+        # 取最近 100 个 commit hash（覆盖 Phase 1.5 + 深度修复轮 + 本轮新增）
+        result = subprocess.run(
+            ["git", "log", "--format=%h", "-n", "100"],
+            cwd=repo,
+            capture_output=True, text=True, timeout=10,
+        )
+        commit_hashes = result.stdout.strip().splitlines()
+        cl = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
+        mentioned = sum(1 for h in commit_hashes if h in cl)
+        assert mentioned >= 5, (
+            f"CHANGELOG 应至少提到 5 个 commit hash，实际 {mentioned}/{len(commit_hashes)}"
+        )
+
+    def test_changelog_unreleased_section_exists(self):
+        from pathlib import Path
+        cl = (Path(__file__).resolve().parents[2] / "CHANGELOG.md").read_text(encoding="utf-8")
+        assert "Unreleased" in cl or "深度修复" in cl, (
+            "CHANGELOG 应有 Unreleased / 深度修复轮 段落"
+        )
+
+    def test_repo_not_in_clean_state(self):
+        import subprocess
+        from pathlib import Path
+        repo = Path(__file__).resolve().parents[2]
+        result = subprocess.run(
+            ["git", "rev-list", "--count", "HEAD"],
+            cwd=repo,
+            capture_output=True, text=True, timeout=10,
+        )
+        count = int(result.stdout.strip())
+        assert count >= 10, f"repo 应至少 10 个 commit，实际 {count}"
