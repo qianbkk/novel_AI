@@ -3356,3 +3356,52 @@ class TestMigrationsIdempotent:
                 assert result is False
             except Exception as e:
                 raise AssertionError(f"_column_exists 不应抛（缺表），实际 {type(e).__name__}: {e}")
+
+
+# ───────────────────────────────────────────
+# ZZ: app/database.py get_db dependency 测试（最后 #21）
+# ───────────────────────────────────────────
+class TestGetDbDependency:
+    """最后 #21：get_db 是 FastAPI Depends 入口，零测试覆盖。"""
+    def test_get_db_yields_session_and_closes_on_exit(self):
+        from app.database import get_db, SessionLocal
+        from app.models import BridgeRun
+        gen = get_db()
+        db = next(gen)
+        assert db is not None
+        try:
+            db.query(BridgeRun).first()
+        except Exception:
+            pass
+        try:
+            next(gen)
+        except StopIteration:
+            pass
+
+    def test_get_db_closes_session_on_exception(self):
+        from app.database import get_db
+        from app.models import BridgeRun
+        gen = get_db()
+        db = next(gen)
+        try:
+            db.query(BridgeRun).first()
+            try:
+                gen.throw(RuntimeError("downstream boom"))
+            except RuntimeError as e:
+                assert "downstream boom" in str(e)
+        finally:
+            try:
+                next(gen)
+            except StopIteration:
+                pass
+
+    def test_sessionmaker_binds_to_engine(self):
+        from app.database import SessionLocal, engine
+        sess = SessionLocal()
+        try:
+            bind = sess.get_bind()
+            assert bind is engine, (
+                f"SessionLocal 应 bind 到 app.database.engine，实际 {bind}"
+            )
+        finally:
+            sess.close()
