@@ -2731,7 +2731,33 @@ class TestRotateMasterKeyEndToEnd:
       - 旧 key encrypt 的数据 → 新 key re-encrypt
       - round-trip：拿新 key 解密应能恢复明文
       - 多个 provider 同时轮换
+
+    注意：autouse fixture 在每个测试前清空 DB 里所有 test- 前缀的 provider，
+    防止 invariant test 历史遗留的 provider（用不同 MASTER_KEY 加密）
+    干扰 rotation 流程。
     """
+
+    @pytest.fixture(autouse=True)
+    def cleanup_test_providers(self):
+        """每个 rotation 测试前清空 test- 前缀的 provider。"""
+        from app.database import SessionLocal
+        from app.models import Provider
+        db = SessionLocal()
+        try:
+            for p in db.query(Provider).filter(Provider.id.like("test-%")).all():
+                db.delete(p)
+            db.commit()
+        finally:
+            db.close()
+        yield  # 测试运行
+        # teardown：测试结束也清理（避免污染后续测试）
+        db = SessionLocal()
+        try:
+            for p in db.query(Provider).filter(Provider.id.like("test-%")).all():
+                db.delete(p)
+            db.commit()
+        finally:
+            db.close()
 
     def _make_provider(self, plain_key: str) -> str:
         """helper：插一个带 api_key_encrypted 的 provider，返回 id。"""
@@ -3437,3 +3463,34 @@ class TestApplyReviewInputValidation:
             for action in ["accept", "reject", "edit"]:
                 result = apply_review(novel_ai_dir=tmpdir, action=action)
                 assert result["available"] is False
+
+
+# ───────────────────────────────────────────
+# BBB: engine/state.py load_state 损坏文件处理（最后 #23）
+# ───────────────────────────────────────────
+class TestLoadStateRobustness:
+    """最后 #23：load_state 之前零测试覆盖。"""
+    def test_load_state_corrupt_json_raises(self, tmp_path):
+        from engine.state import load_state
+        path = tmp_path / "state.json"
+        path.write_text("THIS IS NOT VALID JSON{", encoding="utf-8")
+        import pytest
+        with pytest.raises(__import__("json").JSONDecodeError):
+            load_state(str(path))
+
+    def test_load_state_empty_file_raises(self, tmp_path):
+        from engine.state import load_state
+        path = tmp_path / "state.json"
+        path.write_text("", encoding="utf-8")
+        import pytest
+        with pytest.raises(__import__("json").JSONDecodeError):
+            load_state(str(path))
+
+    def test_load_state_valid_json_returns_dict(self, tmp_path):
+        from engine.state import save_state, create_initial_state, load_state
+        path = str(tmp_path / "state.json")
+        state = create_initial_state("test", "title", "fanqie", "都市", "")
+        save_state(state, path)
+        loaded = load_state(path)
+        assert loaded["novel_id"] == "test"
+        assert loaded["title"] == "title"
