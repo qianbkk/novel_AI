@@ -3744,6 +3744,156 @@ class TestApplyReviewInputValidation:
                 result = apply_review(novel_ai_dir=tmpdir, action=action)
                 assert result["available"] is False
 
+    def test_unmatched_task_id_does_not_pop_wrong_task(self, tmp_path):
+        """迭代 #29：task_id 不存在时不能 pop 错的 pending 任务。
+
+        历史 bug：_find_task_index 之前"没找到"时 fallback 到 0，
+        silently pop 第一条 pending 任务。用户提交 review with task_id="X"
+        但 X 不存在 → 第一条 pending 被静默移除，review_history 记的
+        是 "X" 但实际 pop 的是另一条 → 数据完整性破坏。
+
+        修法：_find_task_index 在没找到时显式返回 None，apply_review 不 pop。
+        """
+        from app.bridge.reports import apply_review
+        import json
+        import os
+
+        # 准备 state：3 个 pending 任务
+        # _state_path 走 NOVEL_AI_DIR/output/orchestrator_state.json
+        state = {
+            "current_phase": "writing",
+            "human_pending": [
+                {"task_id": "real-task-A", "task_type": "fix_chapter",
+                 "description": "task A", "payload": {"chapter_number": 1},
+                 "created_at": "2025-01-01T00:00:00", "priority": "must"},
+                {"task_id": "real-task-B", "task_type": "fix_chapter",
+                 "description": "task B", "payload": {"chapter_number": 2},
+                 "created_at": "2025-01-01T00:00:00", "priority": "must"},
+                {"task_id": "real-task-C", "task_type": "fix_chapter",
+                 "description": "task C", "payload": {"chapter_number": 3},
+                 "created_at": "2025-01-01T00:00:00", "priority": "must"},
+            ],
+        }
+        output_dir = tmp_path / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        state_file = output_dir / "orchestrator_state.json"
+        state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        old_env = os.environ.get("NOVEL_AI_DIR")
+        os.environ["NOVEL_AI_DIR"] = str(tmp_path)
+        try:
+            result = apply_review(
+                novel_ai_dir=str(tmp_path),
+                action="accept",
+                task_id="nonexistent-task-X",  # 不存在
+            )
+            # 关键断言 1：响应里 matched=False
+            assert result["matched"] is False, (
+                f"task_id 不存在时 matched 必须 False，实际 {result.get('matched')}"
+            )
+            # 关键断言 2：3 个 pending 任务一个都没被 pop
+            on_disk = json.loads(state_file.read_text(encoding="utf-8"))
+            assert len(on_disk["human_pending"]) == 3, (
+                f"task_id 不存在时不应 pop 任何 pending，"
+                f"实际剩余 {len(on_disk['human_pending'])} 条（之前 bug: pop 了 0 号任务）"
+            )
+            assert [t["task_id"] for t in on_disk["human_pending"]] == [
+                "real-task-A", "real-task-B", "real-task-C",
+            ], (
+                f"pending 顺序应保持不变，"
+                f"实际 {[t['task_id'] for t in on_disk['human_pending']]}"
+            )
+            # 关键断言 3：review_history 记录了"尝试过 X 但未匹配"
+            history = on_disk.get("review_history", [])
+            assert len(history) == 1
+            assert history[0]["task_id"] == "nonexistent-task-X"
+            assert history[0]["matched"] is False
+        finally:
+            if old_env is not None:
+                os.environ["NOVEL_AI_DIR"] = old_env
+            else:
+                os.environ.pop("NOVEL_AI_DIR", None)
+
+    def test_unmatched_chapter_number_does_not_pop_wrong_task(self, tmp_path):
+        """chapter_number 不存在时也不能 pop 错的 pending。"""
+        from app.bridge.reports import apply_review
+        import json
+        import os
+
+        state = {
+            "current_phase": "writing",
+            "human_pending": [
+                {"task_id": "task-A", "task_type": "fix_chapter",
+                 "description": "task A", "payload": {"chapter_number": 5},
+                 "created_at": "2025-01-01T00:00:00", "priority": "must"},
+            ],
+        }
+        output_dir = tmp_path / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        state_file = output_dir / "orchestrator_state.json"
+        state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        old_env = os.environ.get("NOVEL_AI_DIR")
+        os.environ["NOVEL_AI_DIR"] = str(tmp_path)
+        try:
+            result = apply_review(
+                novel_ai_dir=str(tmp_path),
+                action="reject",
+                chapter_number=999,  # 不存在
+            )
+            assert result["matched"] is False
+            on_disk = json.loads(state_file.read_text(encoding="utf-8"))
+            assert len(on_disk["human_pending"]) == 1, (
+                "chapter_number 不存在时不应 pop 任何 pending"
+            )
+        finally:
+            if old_env is not None:
+                os.environ["NOVEL_AI_DIR"] = old_env
+            else:
+                os.environ.pop("NOVEL_AI_DIR", None)
+
+    def test_matched_task_id_pops_correct_task(self, tmp_path):
+        """task_id 匹配时必须 pop 对的任务。"""
+        from app.bridge.reports import apply_review
+        import json
+        import os
+
+        state = {
+            "current_phase": "writing",
+            "human_pending": [
+                {"task_id": "task-A", "task_type": "fix_chapter",
+                 "description": "A", "payload": {"chapter_number": 1},
+                 "created_at": "2025-01-01T00:00:00", "priority": "must"},
+                {"task_id": "task-B", "task_type": "fix_chapter",
+                 "description": "B", "payload": {"chapter_number": 2},
+                 "created_at": "2025-01-01T00:00:00", "priority": "must"},
+            ],
+        }
+        output_dir = tmp_path / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        state_file = output_dir / "orchestrator_state.json"
+        state_file.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+        old_env = os.environ.get("NOVEL_AI_DIR")
+        os.environ["NOVEL_AI_DIR"] = str(tmp_path)
+        try:
+            result = apply_review(
+                novel_ai_dir=str(tmp_path),
+                action="accept",
+                task_id="task-B",
+            )
+            assert result["matched"] is True
+            assert result["task"]["task_id"] == "task-B"
+            on_disk = json.loads(state_file.read_text(encoding="utf-8"))
+            assert [t["task_id"] for t in on_disk["human_pending"]] == ["task-A"], (
+                f"应只 pop task-B，剩余 task-A，实际 {[t['task_id'] for t in on_disk['human_pending']]}"
+            )
+        finally:
+            if old_env is not None:
+                os.environ["NOVEL_AI_DIR"] = old_env
+            else:
+                os.environ.pop("NOVEL_AI_DIR", None)
+
 
 # ───────────────────────────────────────────
 # BBB: engine/state.py load_state 损坏文件处理（最后 #23）

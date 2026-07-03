@@ -6,6 +6,18 @@
 
 ## [Unreleased] — 2026-07-03
 
+### Bug Fix（迭代 #29 — 内部审计）
+- **`fix(bridge): apply_review 静默 pop 错任务**
+  - `app/bridge/reports.py:152-169` 之前 `_find_task_index` 在没匹配时
+    fallback 到 0 — 用户提交 review with task_id="X" 但 X 不存在时，
+    第一条 pending 被静默移除（数据完整性破坏）。
+  - 后果：review_history 记的是 "X" 但实际 pop 的是另一条 task；
+    用户以为"处理了 X"但 pending 列表里 task-A（不是 X）消失了。
+  - 修法：_find_task_index 在没找到时显式返回 None（不 fallback）；
+    apply_review 加 `matched` 字段告诉前端"是否匹配"，方便 UI 显示"未匹配"。
+  - 加 3 个 invariant test 锁死：unmatched task_id/chapter_number 不 pop，
+    matched task_id pop 对的任务。
+
 ### Bug Fix（迭代 #28 — 内部审计）
 - **`fix(engine): node_rewrite post-rewrite compliance fake-pass**
   - `orchestrator.py:391-394` 之前当 `run_compliance`（post-rewrite）抛异常
@@ -45,7 +57,7 @@
   TestLoadStateRobustness / TestDocCodeConsistency /
   TestSecurityConstants / TestProviderTableSchema /
   TestHumanEscalationNotEndRun / 等
-- 总 invariant suite：**198 passed / 0 warnings**
+- 总 invariant suite：**201 passed / 0 warnings**
 
 ## [Unreleased] — 2026-07-02
 

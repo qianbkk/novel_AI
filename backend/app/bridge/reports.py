@@ -138,11 +138,18 @@ def apply_review(
         "chapter_number": chapter_number,
         "note": note,
         "task": task,
+        "matched": idx is not None,  # 显式标记是否匹配（前端可显示 "未匹配"）
         "reviewed_at": datetime.now(timezone.utc).isoformat(),
     })
     state["last_updated"] = datetime.now(timezone.utc).isoformat()
     state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {"available": True, "action": action, "task": task, "remaining": len(pending)}
+    return {
+        "available": True,
+        "action": action,
+        "task": task,
+        "matched": idx is not None,  # 重复一份在顶层方便前端判断
+        "remaining": len(pending),
+    }
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -155,15 +162,29 @@ def _find_task_index(
     task_index: int | None,
     chapter_number: int | None,
 ) -> int | None:
+    """在 pending 列表里找匹配 task 的 index。
+
+    返回：
+      - 找到：返回 0..len(pending)-1
+      - 没找到：返回 None（不 pop 任何任务，避免静默 pop 错任务）
+
+    历史 bug（迭代 #29）：
+      之前"没找到"时 fallback 到 0，silently pop 第一条 pending 任务。
+      用户提交 review with task_id="X" 但 X 不存在 → 第一条 pending 被静默
+      移除，review_history 记的是 "X" 但实际 pop 的是另一条 → 数据完整性破坏。
+    """
     if task_index is not None and 0 <= task_index < len(pending):
         return task_index
     if task_id:
         for idx, item in enumerate(pending):
             if str(item.get("id") or item.get("task_id") or "") == task_id:
                 return idx
+        return None  # 显式 None（不 fallback 到 0）
     if chapter_number is not None:
         for idx, item in enumerate(pending):
             payload = item.get("payload", {}) or {}
             if item.get("chapter_number") == chapter_number or payload.get("chapter_number") == chapter_number:
                 return idx
-    return 0 if pending else None
+        return None  # 显式 None（不 fallback 到 0）
+    # 三个 identifier 都没传：没线索，不 pop
+    return None
