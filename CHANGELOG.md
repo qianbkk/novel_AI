@@ -6,6 +6,23 @@
 
 ## [Unreleased] — 2026-07-03
 
+### Bug Fix（迭代 #30 — 内部审计）
+- **`fix(api): run_bridge 删除死锁代码（false sense of security）**
+  - `app/api/bridge.py` 之前用 `_get_project_lock(project_id).locked()` 做
+    "同 project 重复 run"并发保护，但该 `asyncio.Lock` 永不被 acquire
+    （grep 证实无 `async with _get_project_lock`），检查永远 False
+    → 给 false sense of security（代码看起来"有锁"但实际没有）。
+  - 真实保护只有两层：
+    1) DB 层 `BridgeRun.status='running'` 检查
+    2) lifespan 启动时 `_recover_orphan_bridge_runs`（清理崩溃遗留）
+  - 修法：删 `_project_locks` 字典 + `_get_project_lock()` 函数 + 调用点，
+    注释说明 DB 层 + orphan recovery 是真实保护。
+  - 副作用：tests/test_phase1_5_smoke.py 也 import 了已删的 `_get_project_lock`
+    导致 collection error，顺手修：删 import + 删 asyncio.Lock 单测段（保留
+    SQL 409 兜底测试）。
+  - 加 2 个 invariant test 锁死：bridge.py 不应再定义/调用 _project_locks；
+    run_bridge 真代码行不该有 .locked() 假并发检查。
+
 ### Bug Fix（迭代 #29 — 内部审计）
 - **`fix(bridge): apply_review 静默 pop 错任务**
   - `app/bridge/reports.py:152-169` 之前 `_find_task_index` 在没匹配时
@@ -57,7 +74,7 @@
   TestLoadStateRobustness / TestDocCodeConsistency /
   TestSecurityConstants / TestProviderTableSchema /
   TestHumanEscalationNotEndRun / 等
-- 总 invariant suite：**201 passed / 0 warnings**
+- 总 invariant suite：**203 passed / 0 warnings**
 
 ## [Unreleased] — 2026-07-02
 

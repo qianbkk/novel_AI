@@ -3537,6 +3537,70 @@ class TestAuditProjectItself:
 
 
 # ───────────────────────────────────────────
+# III: run_bridge 不能用永远 False 的 lock 检查（迭代 #30）
+# ───────────────────────────────────────────
+class TestRunBridgeConcurrencyGuard:
+    """迭代 #30: 之前 run_bridge 用 _get_project_lock(project_id).locked() 做
+    并发保护，但该 asyncio.Lock 永不被 acquire（grep 证实）→ 检查永远
+    False → 给 false sense of security（代码看起来"有锁"但实际没有）。
+
+    修法：删掉死代码，依赖 DB 层 BridgeRun.status='running' 检查 +
+    lifespan 启动时 _recover_orphan_bridge_runs。
+    本测试锁死：源码里不应再出现 _project_locks / _get_project_lock 引用。
+    """
+    def test_no_dead_project_lock_in_bridge_py(self):
+        """bridge.py 不应再定义 / 调用 _project_locks / _get_project_lock。"""
+        from pathlib import Path
+        bridge_py = Path(__file__).resolve().parents[1] / "app" / "api" / "bridge.py"
+        content = bridge_py.read_text(encoding="utf-8")
+        # 关键符号：定义 + 调用都不能有（注释里的解释 OK）
+        offenders: list[str] = []
+        for i, line in enumerate(content.splitlines(), start=1):
+            stripped = line.strip()
+            # 排除纯注释行
+            if stripped.startswith("#"):
+                continue
+            if "_project_locks" in line and "_project_locks" != "_project_locks:":  # 类型注解也排除
+                offenders.append(f"line {i}: {line.rstrip()}")
+            if "_get_project_lock" in line and "(" in line:  # 实际调用（带括号）
+                offenders.append(f"line {i}: {line.rstrip()}")
+        assert not offenders, (
+            "bridge.py 还有死锁引用（应删除）：\n  " + "\n  ".join(offenders)
+        )
+
+    def test_run_bridge_only_checks_db_for_concurrent_runs(self):
+        """run_bridge 源码必须只有 DB 层 BridgeRun.status='running' 检查。"""
+        from pathlib import Path
+        import re
+        bridge_py = Path(__file__).resolve().parents[1] / "app" / "api" / "bridge.py"
+        content = bridge_py.read_text(encoding="utf-8")
+        # 找 run_bridge 函数体（多行 args 模式：args 跨行 \n）
+        m = re.search(
+            r"async def run_bridge\([\s\S]*?\):(.*?)(?=\nasync def |\ndef |\nclass |\Z)",
+            content, re.DOTALL
+        )
+        assert m, "找不到 run_bridge"
+        body = m.group(1)
+        # 排除注释行（解释历史为什么删 lock 的注释里会出现 .locked() / _get_project_lock）
+        code_lines = [
+            line for line in body.splitlines()
+            if not line.strip().startswith("#")
+        ]
+        code_body = "\n".join(code_lines)
+        # 关键检查：真代码行不该有 _get_project_lock / .locked() 这种无效检查
+        assert ".locked()" not in code_body, (
+            "run_bridge 真代码行不应再用 .locked() 假并发检查（之前 dead code）"
+        )
+        assert "_get_project_lock" not in code_body, (
+            "run_bridge 真代码行不应再调 _get_project_lock（死代码）"
+        )
+        # DB 检查必须有
+        assert 'status="running"' in body, (
+            "run_bridge 必须保留 DB 层 status='running' 检查（真实并发保护）"
+        )
+
+
+# ───────────────────────────────────────────
 # WW: rate_limit X-RateLimit-Remaining 准确性（最后 #18 迭代）
 # ───────────────────────────────────────────
 class TestRateLimitHeaderAccuracy:

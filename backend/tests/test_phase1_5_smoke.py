@@ -14,7 +14,6 @@ from fastapi.testclient import TestClient
 from app.main import app
 from app.database import SessionLocal
 from app.models import RoleAssignment, BridgeRun, Project, NovelAIBinding, WorldSetting
-from app.api.bridge import _get_project_lock
 
 
 def _seed_project_and_binding(db, project_id: str) -> None:
@@ -91,25 +90,17 @@ def smoke_2_sse_end_to_end(project_id: str) -> None:
 
 
 def smoke_3_concurrency_mutex(project_id: str) -> None:
-    """3/5: 并发互斥 — 两层防线
-    1) asyncio.Lock 单测：同一 project_id 锁互斥
-    2) SQL 兜底：直接插一行 BridgeRun(status='running')，POST 应返 409
+    """3/5: 并发互斥 — DB 层 BridgeRun.status='running' 兜底
+    之前有 asyncio.Lock 但从未被 acquire（dead code，迭代 #30 删除），
+    真实保护只有 DB 兜底 + lifespan 启动时 _recover_orphan_bridge_runs。
+
+    直接插一行 BridgeRun(status='running')，POST 应返 409。
 
     注: 不测端到端 "POST → 等 running → 再 POST" 因为 TestClient + BackgroundTasks
     在响应返回前任务就跑完了，BridgeRun 永远不出现 running 状态。uvicorn 模式下
     这个场景会真的发生（任务异步执行），但用 TestClient 模拟不出来。
     """
-    # 1) asyncio.Lock 单测
-    lock = _get_project_lock(project_id)
-    assert lock.locked() is False, "新 lock 应未锁"
-    async def hold_lock():
-        async with lock:
-            assert lock.locked() is True
-    import asyncio
-    asyncio.run(hold_lock())
-    assert lock.locked() is False, "async with 退出后锁应释放"
-
-    # 2) SQL 兜底：插一行 running 的 BridgeRun，POST 应返 409
+    # SQL 兜底：插一行 running 的 BridgeRun，POST 应返 409
     db = SessionLocal()
     try:
         _seed_project_and_binding(db, project_id)
@@ -139,7 +130,7 @@ def smoke_3_concurrency_mutex(project_id: str) -> None:
     finally:
         db.close()
 
-    print("[3/5] concurrency OK (asyncio.Lock mutual exclusion + SQL 409 fallback)")
+    print("[3/5] concurrency OK (DB status='running' 409 fallback — 真实并发保护)")
 
 
 def smoke_4_checkpoints_path() -> None:

@@ -25,7 +25,12 @@ router = APIRouter(prefix="/projects/{project_id}/bridge", tags=["bridge"])
 BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 
 _run_queues: dict[str, Queue] = {}
-_project_locks: dict[str, asyncio.Lock] = {}
+# _project_locks 已删除（迭代 #30）：
+#   之前用 asyncio.Lock 做"同 project 重复 run"并发保护，但锁从未被 acquire
+#   （grep 证实无 `async with _get_project_lock`），检查永远 False
+#   → 给 false sense of security。
+#   真实保护是 DB 层 BridgeRun.status='running' 检查 + lifespan 启动时
+#   _recover_orphan_bridge_runs（清理崩溃遗留的 running 行）。
 WRITE_COMMANDS = {"planner", "bootstrap", "run", "resume", "init_arc"}
 
 
@@ -33,12 +38,6 @@ def get_run_queue(run_id: str) -> Queue:
     if run_id not in _run_queues:
         _run_queues[run_id] = Queue()
     return _run_queues[run_id]
-
-
-def _get_project_lock(project_id: str) -> asyncio.Lock:
-    if project_id not in _project_locks:
-        _project_locks[project_id] = asyncio.Lock()
-    return _project_locks[project_id]
 
 
 @router.get("/binding", response_model=NovelAIBindingOut)
@@ -88,8 +87,13 @@ async def run_bridge(
     command = payload.command.lower().strip()
     if command in WRITE_COMMANDS and not _worldbuild_done(project_id, project, db):
         raise HTTPException(400, "worldbuild must be completed before running write commands")
-    if _get_project_lock(project_id).locked():
-        raise HTTPException(409, "该项目正在生成中，请勿重复触发")
+    # 并发保护是双重的：
+    #   1) DB 层：下面的 BridgeRun.status='running' 检查 — 同 project 不能有两个 running 行
+    #   2) lifespan 启动时 _recover_orphan_bridge_runs — 进程崩溃遗留的 running 行
+    #      启动时被标 failed，避免永久卡住
+    # 之前 _get_project_lock(project_id).locked() 是 dead code：
+    #   asyncio.Lock 永不被 acquire（grep 证实无 `async with _get_project_lock`），
+    #   检查永远 False，给 false sense of security。已删。
     running = db.query(BridgeRun).filter_by(project_id=project_id, status="running").first()
     if running:
         raise HTTPException(409, "bridge run already running for this project")
