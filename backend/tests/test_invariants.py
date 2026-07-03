@@ -2057,6 +2057,97 @@ class TestOrchestratorNoFakePass:
             "正常高分任务必须能 save（不能锁死到 escalate）"
         )
 
+    def test_post_rewrite_compliance_failure_marks_task(self, orch, monkeypatch):
+        """迭代 #28: post-rewrite compliance 抛异常 → _compliance_check_failed=True
+
+        跟 node_write_pipeline 里的 compliance fake-pass 同型问题。
+        之前 line 391-394 兜底为 {"passed": True} → 重写后即便合规检查完全
+        失败（异常被吞），章节也走"通过"路径落盘。
+        """
+        def fake_rewriter(text, lvl, feedback, task, cr, memory, setting):
+            return "重写后文本 " * 200, 0.0
+        def fake_normalizer(text, task):
+            return text, [], 0.0
+        def fake_compliance(text, platform):
+            # post-rewrite compliance 抛异常（模拟 MiniMax 接口 503）
+            raise ConnectionError("post-rewrite compliance down")
+        monkeypatch.setattr(orch, "run_rewriter", fake_rewriter)
+        monkeypatch.setattr(orch, "run_normalizer", fake_normalizer)
+        monkeypatch.setattr(orch, "run_compliance", fake_compliance)
+
+        state = {
+            "current_task": {
+                "chapter_number": 99,
+                "_checker_result": {"score": 5.0, "rewrite_level": "P1", "feedback": "x"},
+                "_draft_text": "原始文本",
+                "_compliance_failed": False,
+            },
+            "current_chapter": 99,
+            "rewrite_count_current": 0,
+            "error_log": [],
+            "chapter_task_queue": [],
+            "novel_id": "default",
+            "platform": "fanqie",
+        }
+        result = orch.node_rewrite(state)
+        # 关键断言：post-rewrite compliance 抛异常时必须标记 _compliance_check_failed
+        assert result["current_task"].get("_compliance_check_failed") is True, (
+            "post-rewrite compliance 抛异常时 _compliance_check_failed 必须置 True"
+            "（之前 fake-pass 兜底为 {'passed': True}，重写后合规检查被静默擦掉）"
+        )
+        # 不应有新 _checker_result（避免后续 route 误判"重写成功"）
+        # 现有 _checker_result 是 pre-rewrite 的旧值，保留 OK（route 会 escalate）
+
+    def test_route_after_rewrite_escalates_on_compliance_check_failed(self):
+        """_compliance_check_failed=True → route_after_rewrite 必须 escalate。
+
+        修复：route_after_rewrite 加了防御性检查（之前只查 _checker_result 分数），
+        防止 _compliance_check_failed 标记被旧 cr 分数遮蔽（误判 save）。
+        """
+        from engine.orchestrator import route_after_rewrite
+        state = {
+            "current_task": {
+                "_compliance_check_failed": True,
+                "_checker_result": {"score": 7.0},  # 旧 cr 分数高于 PASS_SCORE
+            },
+            "rewrite_count_current": 0,
+        }
+        assert route_after_rewrite(state) == "escalate", (
+            "_compliance_check_failed=True 时 route_after_rewrite 必须 escalate，"
+            "不能因为旧 cr 分数 >= PASS_SCORE 就 save"
+        )
+
+    def test_route_after_rewrite_escalates_on_checker_failed(self):
+        """_checker_failed=True → route_after_rewrite 必须 escalate（防止旧 cr 兜底）。"""
+        from engine.orchestrator import route_after_rewrite
+        state = {
+            "current_task": {
+                "_checker_failed": True,
+                "_checker_result": {"score": 7.0},  # 旧 cr 分数高
+            },
+            "rewrite_count_current": 0,
+        }
+        assert route_after_rewrite(state) == "escalate", (
+            "_checker_failed=True 时 route_after_rewrite 必须 escalate"
+        )
+
+    def test_route_after_rewrite_normal_high_score_saves(self):
+        """正常高分重写任务必须能 save（防止锁死逻辑破坏 happy path）。"""
+        from engine.orchestrator import route_after_rewrite
+        state = {
+            "current_task": {
+                "_checker_result": {"score": 8.0, "verdict": "PASS"},
+                "_compliance_failed": False,
+                "_compliance_check_failed": False,
+                "_checker_failed": False,
+                "_rewriter_failed": False,
+            },
+            "rewrite_count_current": 0,
+        }
+        assert route_after_rewrite(state) == "save", (
+            "正常高分重写任务必须能 save（不能锁死到 escalate）"
+        )
+
 
 # ───────────────────────────────────────────
 # P: writer / rewriter 网络异常必须重试一次再 escalate
@@ -3207,6 +3298,195 @@ class TestBudgetManager:
         assert report["by_agent"]["checker"]["calls"] == 1
         assert abs(report["by_agent"]["writer"]["cost"] - 0.13) < 1e-3
         assert abs(report["by_agent"]["checker"]["cost"] - 0.02) < 1e-3
+
+
+# ───────────────────────────────────────────
+# HHH: orchestrator outline cost 不能双重计费（迭代 #28）
+# ───────────────────────────────────────────
+class TestOutlineCostNotDoubleCharged:
+    """迭代 #28: node_load_arc_tasks 之前每次 outline 都计费 2 次。
+
+    历史 bug：
+      orchestrator.py 之前 line 209 在 try/except 之外多调一次
+      `_add_cost(state, cost)`，而每个分支（card / talk / batch）
+      内部已经调过 → 实际计费 = 2 × 真实花费。
+      50 章跑下来 budget_used_usd 虚高 100%，超预算提前 escalate。
+
+    修法：删掉 line 209 的重复调用，保留分支内部调用。
+    本测试锁死：跑一次 outline → state.budget_used_usd 只增加真实花费。
+    """
+    @pytest.fixture(autouse=True)
+    def import_orch(self):
+        from engine import orchestrator as orch_mod
+        self.orch = orch_mod
+        return orch_mod
+
+    def test_batch_outline_cost_added_once(self, monkeypatch):
+        """batch 模式：run_outline 返回 cost=0.1 → budget_used 增 0.1（不是 0.2）。"""
+        FAKE_COST = 0.1
+        def fake_run_outline(arc, start, setting, memory):
+            return [{"chapter_number": 1, "chapter_goal": "x",
+                     "chapter_role": "r", "main_characters": [],
+                     "shuang_type": None, "shuang_description": "",
+                     "ending_hook_type": "信息钩", "ending_hook_description": "",
+                     "setting_constraints": [], "forbidden_actions": [],
+                     "target_length": "2000-2200", "audit_mode": "full",
+                     "is_arc_climax": False}], FAKE_COST
+        monkeypatch.setattr(self.orch, "run_outline", fake_run_outline)
+        # batch 模式（默认）
+        monkeypatch.setenv("NOVEL_OUTLINE_MODE", "batch")
+        monkeypatch.delenv("NOVEL_AI_DIR", raising=False)
+        import json, tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            setting_dir = self.orch.OUTPUT_DIR  # 用真实 OUTPUT_DIR
+            setting_dir.mkdir(parents=True, exist_ok=True)
+            (setting_dir / "setting_package.json").write_text("{}", encoding="utf-8")
+
+            state = {
+                "novel_id": "default",
+                "current_chapter": 0,
+                "current_arc": 0,
+                "budget_used_usd": 0.0,
+                "budget_limit_usd": 500.0,
+                "arc_plans": [{"arc_id": 1, "arc_name": "test", "arc_goal": "x",
+                               "estimated_chapters": 10,
+                               "arc_climax_description": "",
+                               "arc_climax_chapter_offset": 0,
+                               "emotion_curve": "low",
+                               "new_characters_introduced": [],
+                               "arc_ending_state": "",
+                               "is_final_arc": False}],
+                "error_log": [],
+            }
+            result = self.orch.node_load_arc_tasks(state)
+            # 关键断言：cost 只增 1 次
+            used = result.get("budget_used_usd", 0.0)
+            assert abs(used - FAKE_COST) < 1e-6, (
+                f"batch outline cost 应为 {FAKE_COST}（1 次计费），"
+                f"实际 {used}（双重计费 bug）"
+            )
+
+    def test_card_outline_cost_added_once(self, monkeypatch):
+        """card 模式：run_outline_card 返回 cost=0.15 → budget_used 增 0.15。"""
+        FAKE_COST = 0.15
+        def fake_run_outline_card(arc, start, setting, memory):
+            return [{"tasks": [{"chapter_number": 1, "chapter_goal": "x",
+                               "chapter_role": "r", "main_characters": [],
+                               "shuang_type": None, "shuang_description": "",
+                               "ending_hook_type": "信息钩",
+                               "ending_hook_description": "",
+                               "setting_constraints": [], "forbidden_actions": [],
+                               "target_length": "2000-2200", "audit_mode": "full",
+                               "is_arc_climax": False}]}], FAKE_COST
+        monkeypatch.setattr(self.orch, "run_outline_card", fake_run_outline_card)
+        monkeypatch.setenv("NOVEL_OUTLINE_MODE", "card")
+        import tempfile
+        with tempfile.TemporaryDirectory():
+            setting_dir = self.orch.OUTPUT_DIR
+            setting_dir.mkdir(parents=True, exist_ok=True)
+            (setting_dir / "setting_package.json").write_text("{}", encoding="utf-8")
+
+            state = {
+                "novel_id": "default",
+                "current_chapter": 0,
+                "current_arc": 0,
+                "budget_used_usd": 0.0,
+                "budget_limit_usd": 500.0,
+                "arc_plans": [{"arc_id": 1, "arc_name": "test", "arc_goal": "x",
+                               "estimated_chapters": 10,
+                               "arc_climax_description": "",
+                               "arc_climax_chapter_offset": 0,
+                               "emotion_curve": "low",
+                               "new_characters_introduced": [],
+                               "arc_ending_state": "",
+                               "is_final_arc": False}],
+                "error_log": [],
+            }
+            result = self.orch.node_load_arc_tasks(state)
+            used = result.get("budget_used_usd", 0.0)
+            assert abs(used - FAKE_COST) < 1e-6, (
+                f"card outline cost 应为 {FAKE_COST}，实际 {used}（双重计费）"
+            )
+
+    def test_talk_outline_cost_added_once(self, monkeypatch):
+        """talk 模式：run_outline_talk 返回 cost=0.08 → budget_used 增 0.08。"""
+        FAKE_COST = 0.08
+        def fake_run_outline_talk(arc, start, setting, memory):
+            return ({"tasks": [{"chapter_number": 1, "chapter_goal": "x",
+                               "chapter_role": "r", "main_characters": [],
+                               "shuang_type": None, "shuang_description": "",
+                               "ending_hook_type": "信息钩",
+                               "ending_hook_description": "",
+                               "setting_constraints": [], "forbidden_actions": [],
+                               "target_length": "2000-2200", "audit_mode": "full",
+                               "is_arc_climax": False}],
+                    "questions": []}, FAKE_COST)
+        monkeypatch.setattr(self.orch, "run_outline_talk", fake_run_outline_talk)
+        monkeypatch.setenv("NOVEL_OUTLINE_MODE", "talk")
+        import tempfile
+        with tempfile.TemporaryDirectory():
+            setting_dir = self.orch.OUTPUT_DIR
+            setting_dir.mkdir(parents=True, exist_ok=True)
+            (setting_dir / "setting_package.json").write_text("{}", encoding="utf-8")
+
+            state = {
+                "novel_id": "default",
+                "current_chapter": 0,
+                "current_arc": 0,
+                "budget_used_usd": 0.0,
+                "budget_limit_usd": 500.0,
+                "arc_plans": [{"arc_id": 1, "arc_name": "test", "arc_goal": "x",
+                               "estimated_chapters": 10,
+                               "arc_climax_description": "",
+                               "arc_climax_chapter_offset": 0,
+                               "emotion_curve": "low",
+                               "new_characters_introduced": [],
+                               "arc_ending_state": "",
+                               "is_final_arc": False}],
+                "error_log": [],
+            }
+            result = self.orch.node_load_arc_tasks(state)
+            used = result.get("budget_used_usd", 0.0)
+            assert abs(used - FAKE_COST) < 1e-6, (
+                f"talk outline cost 应为 {FAKE_COST}，实际 {used}（双重计费）"
+            )
+
+    def test_outline_exception_no_cost_charged(self, monkeypatch):
+        """outline 抛异常时不应计费（避免"失败还扣钱"误判）。"""
+        def fake_run_outline_raises(arc, start, setting, memory):
+            raise ConnectionError("outline service down")
+        monkeypatch.setattr(self.orch, "run_outline", fake_run_outline_raises)
+        monkeypatch.setenv("NOVEL_OUTLINE_MODE", "batch")
+        import tempfile
+        with tempfile.TemporaryDirectory():
+            setting_dir = self.orch.OUTPUT_DIR
+            setting_dir.mkdir(parents=True, exist_ok=True)
+            (setting_dir / "setting_package.json").write_text("{}", encoding="utf-8")
+
+            state = {
+                "novel_id": "default",
+                "current_chapter": 0,
+                "current_arc": 0,
+                "budget_used_usd": 0.0,
+                "budget_limit_usd": 500.0,
+                "arc_plans": [{"arc_id": 1, "arc_name": "test", "arc_goal": "x",
+                               "estimated_chapters": 10,
+                               "arc_climax_description": "",
+                               "arc_climax_chapter_offset": 0,
+                               "emotion_curve": "low",
+                               "new_characters_introduced": [],
+                               "arc_ending_state": "",
+                               "is_final_arc": False}],
+                "error_log": [],
+            }
+            result = self.orch.node_load_arc_tasks(state)
+            used = result.get("budget_used_usd", 0.0)
+            assert used == 0.0, (
+                f"outline 抛异常时不应计费，实际 budget_used={used}"
+            )
+            assert result.get("_outline_failed") is True, (
+                "outline 失败必须 _outline_failed=True（之前 bug: 兜底 10 placeholder）"
+            )
 
 
 # ───────────────────────────────────────────

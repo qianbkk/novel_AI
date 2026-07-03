@@ -206,7 +206,9 @@ def node_load_arc_tasks(state: OrchestratorState) -> OrchestratorState:
                               [f"outline failed arc{arc_idx}: {e}"])
         state["_outline_failed"] = True
         return state
-    _add_cost(state, cost)
+    # 注意：每个分支内部已调 _add_cost(state, cost)，
+    # 之前这里多调一次导致 outline 费用被计 2 倍（多弧叠加后 budget_used 虚高）。
+    # P5 fix：删掉这行重复。
 
     state["chapter_task_queue"]      = tasks
     state["total_chapters_planned"]  = state.get("total_chapters_planned", 0) + len(tasks)
@@ -390,8 +392,17 @@ def node_rewrite(state: OrchestratorState) -> OrchestratorState:
     try:
         comp_result, cost = run_compliance(clean_text, state.get("platform", "fanqie"))
     except Exception as e:
+        # 之前：兜底 {"passed": True}，post-rewrite 合规检查抛异常被静默擦掉——
+        # 跟 node_write_pipeline 里的 compliance fake-pass 同型问题。
+        # 改为：标记 _compliance_check_failed=True，route_after_rewrite 检测到
+        # 没新 _checker_result 时走 escalate（不让未合规检查的章节落盘）。
         log(f"ERR compliance (post-rewrite) failed: {e}", state)
-        comp_result, cost = {"passed": True}, 0.0
+        state["error_log"] = (state.get("error_log", []) +
+                              [f"compliance (post-rewrite) failed ch{task['chapter_number']}: {e}"])
+        task["_compliance_check_failed"] = True
+        task["_draft_text"]              = clean_text
+        state["current_task"]            = task
+        return state
     _add_cost(state, cost)
     if not comp_result.get("passed", True):
         log(f"  🛡️  重写后仍违规", state)
@@ -533,6 +544,16 @@ def route_after_pipeline(state) -> Literal["save", "rewrite", "escalate", "budge
 
 def route_after_rewrite(state) -> Literal["save", "rewrite", "escalate"]:
     task  = state.get("current_task", {})
+    # 任一阶段异常 → 直接 escalate（不进入 save）
+    # 跟 route_after_pipeline 同型防御：compliance check (post-rewrite) 失败时
+    # _compliance_check_failed=True，_checker_result 是 pre-rewrite 旧值，保留它
+    # 可能误判"重写成功"→ 显式 escalate。
+    if task.get("_writer_failed"):
+        return "escalate"
+    if task.get("_compliance_check_failed"):
+        return "escalate"
+    if task.get("_checker_failed"):
+        return "escalate"
     score = task.get("_checker_result", {}).get("score", 0) if task.get("_checker_result") else 0
     rw    = state.get("rewrite_count_current", 0)
     if score >= PASS_SCORE:

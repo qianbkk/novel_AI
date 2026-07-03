@@ -6,6 +6,26 @@
 
 ## [Unreleased] — 2026-07-03
 
+### Bug Fix（迭代 #28 — 内部审计）
+- **`fix(engine): node_rewrite post-rewrite compliance fake-pass**
+  - `orchestrator.py:391-394` 之前当 `run_compliance`（post-rewrite）抛异常
+    时兜底 `comp_result = {"passed": True}`，跟之前修过的 `node_write_pipeline`
+    里的 compliance fake-pass 同型问题。
+  - 后果：重写后即便合规检查完全失败（异常被吞），章节也走"通过"路径
+    → 违规内容落盘 + checker 用 stale cr 可能误判 save。
+  - 修法：跟 node_write_pipeline 对称 — 标记 `_compliance_check_failed=True`
+    并提前 return；同时给 `route_after_rewrite` 加防御性检查（防止旧 cr
+    分数遮蔽新失败标记）。
+  - 加 4 个 invariant test 锁死：post-rewrite compliance 抛异常 → escalate。
+
+- **`fix(engine): node_load_arc_tasks outline cost 双重计费**
+  - `orchestrator.py:209` 之前在 try/except 之外多调一次 `_add_cost(state, cost)`，
+    而每个分支（card / talk / batch）内部已经调过 → 实际计费 2 倍。
+  - 后果：50 章跑下来 `budget_used_usd` 虚高 100%，超预算提前 escalate。
+  - 修法：删掉 line 209 的重复调用，保留分支内部调用。
+  - 加 4 个 invariant test 锁死：batch/card/talk 三种模式各只增一次，
+    异常时不应计费。
+
 ### Bug Fix（独立 AI 审查发现）
 - **`aa969a5` fix(engine): orchestrator human_escalation 边 → load_arc_tasks**
   - 独立 AI 深度审查（2026-07-03）发现：`orchestrator.py:573` 之前是
@@ -25,7 +45,7 @@
   TestLoadStateRobustness / TestDocCodeConsistency /
   TestSecurityConstants / TestProviderTableSchema /
   TestHumanEscalationNotEndRun / 等
-- 总 invariant suite：**190 passed / 0 warnings**
+- 总 invariant suite：**198 passed / 0 warnings**
 
 ## [Unreleased] — 2026-07-02
 
