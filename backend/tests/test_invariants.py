@@ -3326,3 +3326,33 @@ class TestAuditProjectRunEndToEnd:
         assert "INFO" in result.stdout, (
             "audit 输出应有 INFO 段（前置条件未满足的跳过）"
         )
+
+
+# ───────────────────────────────────────────
+# YY: migrations.py idempotency 测试（最后 #20）
+# ───────────────────────────────────────────
+class TestMigrationsIdempotent:
+    """最后 #20：migrations.py 是启动时 ALTER TABLE 的关键路径，零测试。
+
+    idempotent 是关键：启动跑两次不应报错（已经 add 过的列不能再 add）。
+    """
+    def test_run_migrations_is_idempotent(self):
+        """连续调 run_migrations 两次不报错（第二次 applied=0）。"""
+        from app.migrations import run_migrations
+        applied_first = run_migrations()
+        applied_second = run_migrations()
+        assert applied_second == 0, (
+            f"第二次 run_migrations 应 applied=0（idempotent），实际 {applied_second}"
+        )
+
+    def test_run_migrations_handles_missing_table_gracefully(self):
+        """_column_exists 对不存在的表应返回 False（不抛）。"""
+        from app.migrations import _column_exists
+        from sqlalchemy import create_engine
+        eng = create_engine("sqlite:///:memory:")
+        with eng.connect() as conn:
+            try:
+                result = _column_exists(conn, "nonexistent_table_xyz", "any_col")
+                assert result is False
+            except Exception as e:
+                raise AssertionError(f"_column_exists 不应抛（缺表），实际 {type(e).__name__}: {e}")
