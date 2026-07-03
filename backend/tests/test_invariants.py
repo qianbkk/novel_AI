@@ -4088,6 +4088,129 @@ class TestExportChaptersResilient:
 
 
 # ───────────────────────────────────────────
+# NNN: pull_setting_package JSON 错误处理（迭代 #35）
+# ───────────────────────────────────────────
+class TestPullSettingJsonErrorHandling:
+    """迭代 #35: pull_setting_package 之前损坏的 setting_package.json 让
+    原始 JSONDecodeError 暴露给前端（500 + 几百行 Python traceback）。
+
+    修法：catch (json.JSONDecodeError, UnicodeDecodeError) 抛清晰 ValueError
+    提示用户"文件损坏请重新跑 planner"。
+
+    本测试锁死：损坏的 setting_package.json 必须 raise ValueError（带用户可读信息），
+    不是让原始 JSONDecodeError 透出。
+    """
+    def test_pull_setting_raises_value_error_on_corrupt_json(self, tmp_path):
+        """损坏的 setting_package.json → 抛 ValueError 不是 JSONDecodeError。"""
+        import asyncio
+        from app.bridge.setting_sync import pull_setting_package
+        from app.database import SessionLocal
+        from app.models import Project
+        import secrets
+
+        # 准备损坏文件
+        (tmp_path / "output").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "output" / "setting_package.json").write_text(
+            "{ this is not valid json",
+            encoding="utf-8",
+        )
+
+        # 准备 project
+        project_id = f"test-pull-{secrets.token_hex(8)}"
+        db = SessionLocal()
+        try:
+            project = Project(
+                id=project_id, title="test", genre="玄幻", status="ready",
+                config_json={},
+            )
+            db.add(project)
+            db.commit()
+        finally:
+            db.close()
+
+        db = SessionLocal()
+        try:
+            with pytest.raises(ValueError, match="setting_package.json 损坏"):
+                asyncio.run(pull_setting_package(project_id, str(tmp_path), db))
+        finally:
+            try:
+                db.query(Project).filter_by(id=project_id).delete()
+                db.commit()
+            except Exception:
+                pass
+            db.close()
+
+    def test_pull_setting_raises_value_error_on_encoding_error(self, tmp_path):
+        """非 UTF-8 编码的 setting_package.json → 抛 ValueError。"""
+        import asyncio
+        from app.bridge.setting_sync import pull_setting_package
+        from app.database import SessionLocal
+        from app.models import Project
+        import secrets
+
+        (tmp_path / "output").mkdir(parents=True, exist_ok=True)
+        # 写非法 UTF-8 字节
+        (tmp_path / "output" / "setting_package.json").write_bytes(
+            b'{"valid_key": "\xff\xfe\x00\x41"}'
+        )
+
+        project_id = f"test-pull-{secrets.token_hex(8)}"
+        db = SessionLocal()
+        try:
+            project = Project(
+                id=project_id, title="test", genre="玄幻", status="ready",
+                config_json={},
+            )
+            db.add(project)
+            db.commit()
+        finally:
+            db.close()
+
+        db = SessionLocal()
+        try:
+            with pytest.raises(ValueError, match="setting_package.json 损坏"):
+                asyncio.run(pull_setting_package(project_id, str(tmp_path), db))
+        finally:
+            try:
+                db.query(Project).filter_by(id=project_id).delete()
+                db.commit()
+            except Exception:
+                pass
+            db.close()
+
+    def test_pull_setting_source_has_json_error_handling(self):
+        """源码级锁死：pull_setting_package 必须 catch JSONDecodeError + UnicodeDecodeError。"""
+        from pathlib import Path
+        sync_py = Path(__file__).resolve().parents[1] / "app" / "bridge" / "setting_sync.py"
+        content = sync_py.read_text(encoding="utf-8")
+        # 找 pull_setting_package 函数
+        import re
+        m = re.search(
+            r"async def pull_setting_package\([\s\S]*?\):",
+            content, re.DOTALL
+        )
+        assert m, "找不到 pull_setting_package"
+        # 取函数后到下一个 def 之前的内容
+        start = m.end()
+        lines = content[start:].splitlines()
+        body_lines = []
+        for line in lines:
+            if line.startswith("async def ") or line.startswith("def ") or line.startswith("class "):
+                break
+            body_lines.append(line)
+        body = "\n".join(body_lines)
+        assert "JSONDecodeError" in body, (
+            "pull_setting_package 必须 catch JSONDecodeError"
+        )
+        assert "UnicodeDecodeError" in body, (
+            "pull_setting_package 必须 catch UnicodeDecodeError"
+        )
+        assert "ValueError" in body, (
+            "必须转抛 ValueError（带用户可读信息，不是原始 traceback）"
+        )
+
+
+# ───────────────────────────────────────────
 # WW: rate_limit X-RateLimit-Remaining 准确性（最后 #18 迭代）
 # ───────────────────────────────────────────
 class TestRateLimitHeaderAccuracy:

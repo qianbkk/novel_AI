@@ -96,7 +96,16 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
             f"setting_package.json 不存在：{setting_path}。"
             "请先 POST /bridge/run command=planner。"
         )
-    raw = json.loads(setting_path.read_text(encoding="utf-8"))
+    # 迭代 #35: catch JSON 解析错误 + 编码错误，throw 清晰 ValueError
+    # 而不是让原始 traceback 暴露给前端（之前损坏文件 → 500 + 几百行 Python traceback）
+    try:
+        raw = json.loads(setting_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        log.error("pull-setting: %s 解析失败：%s", setting_path, e)
+        raise ValueError(
+            f"setting_package.json 损坏（{type(e).__name__}）：{e}。"
+            f"请重新跑 POST /bridge/run command=planner 重新生成。"
+        ) from e
     log.info("pull-setting project=%s, top_keys=%s", project_id, list(raw.keys()))
 
     # v3: 校验 setting_package.json 是否符合 schema。fail-fast，

@@ -6,6 +6,16 @@
 
 ## [Unreleased] — 2026-07-04
 
+### Bug Fix（迭代 #35 — 内部审计）
+- **`fix(bridge): pull_setting_package JSON 错误返回清晰信息**
+  - `app/bridge/setting_sync.py` 之前损坏的 setting_package.json
+    让原始 `JSONDecodeError` / `UnicodeDecodeError` 透出到 API 层 → 500 +
+    几百行 Python traceback 暴露给前端。
+  - 修法：catch (json.JSONDecodeError, UnicodeDecodeError) 转抛
+    ValueError 带用户可读信息（"文件损坏请重新跑 planner"）。
+  - 加 3 个 invariant test 锁死：损坏 JSON → ValueError；非 UTF-8 编码
+    → ValueError；源码必须 catch 两个异常。
+
 ### Bug Fix（迭代 #34 — 内部审计）
 - **`fix(engine): export_chapters 单章坏不能阻断整批导出**
   - `engine/tools/exporter.py` 之前单章坏让整个 export 失败：
@@ -125,7 +135,7 @@
   TestLoadStateRobustness / TestDocCodeConsistency /
   TestSecurityConstants / TestProviderTableSchema /
   TestHumanEscalationNotEndRun / 等
-- 总 invariant suite：**216 passed / 0 warnings**
+- 总 invariant suite：**219 passed / 0 warnings**
 
 ## [Unreleased] — 2026-07-02
 
