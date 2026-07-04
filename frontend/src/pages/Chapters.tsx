@@ -50,13 +50,21 @@ export default function Chapters() {
 
   async function refreshChapters() {
     if (!projectId) return;
-    setChapters(await api.listChapters(projectId));
+    try {
+      setChapters(await api.listChapters(projectId));
+    } catch (e) {
+      toast.error("刷新章节列表失败", String(e));
+    }
   }
 
   useEffect(() => {
     if (!projectId) return;
     refreshChapters();
-    api.getWorldbuildResult(projectId).then((r) => setCharacters(r.characters));
+    // getWorldbuildResult 失败 → characters 留空不影响主功能（章节写入不需要），
+    // 但仍然 toast.warn 让用户知道「角色图谱没拿到」
+    api.getWorldbuildResult(projectId)
+      .then((r) => setCharacters(r.characters))
+      .catch((e) => toast.warn("角色图谱加载失败", String(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
@@ -68,7 +76,8 @@ export default function Chapters() {
       .then((chars) => {
         setCharactersByChapter((prev) => ({ ...prev, [expandedLock]: chars }));
       })
-      .catch(() => {
+      .catch((e) => {
+        toast.warn("出场人物加载失败", String(e));
         setCharactersByChapter((prev) => ({ ...prev, [expandedLock]: [] }));
       });
   }, [expandedLock, projectId, charactersByChapter]);
@@ -80,6 +89,8 @@ export default function Chapters() {
     try {
       const full = await api.getChapter(projectId, chapterId);
       setChapterDetail(full);
+    } catch (e) {
+      toast.error("章节详情加载失败", String(e));
     } finally {
       setChapterDetailLoading(false);
     }
@@ -110,6 +121,9 @@ export default function Chapters() {
     setSearching(true);
     try {
       setSearchResults(await api.searchChapters(projectId, query, characterId || undefined));
+    } catch (e) {
+      toast.error("搜索失败", String(e));
+      setSearchResults([]);  // 让 UI 显式显示「无结果」而不是停留在旧结果
     } finally {
       setSearching(false);
     }
