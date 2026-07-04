@@ -44,9 +44,13 @@ class Settings(BaseSettings):
     kimi_api_key: str = ""
     kimi_model: str = "kimi-k2"
 
-    minimax_api_base: str = "https://api.minimax.chat/v1"
+    # 迭代 #52: 之前默认 "https://api.minimax.chat/v1" 是旧版 endpoint，
+    # 现在 MiniMax M3 用 api.minimaxi.com（per iter #32 router.py 注释）。
+    # 修法：默认改为新版 endpoint（保留旧 URL 作为 NOVEL_MINIMAX_API_BASE
+    # env var 覆盖入口，给还没升级的部署留逃生门）。
+    minimax_api_base: str = "https://api.minimaxi.com/v1"
     minimax_api_key: str = ""
-    minimax_model: str = "minimax-text-01"
+    minimax_model: str = "MiniMax-M3"
 
     # Embedding provider，用于向量检索层。国内可选 Qwen3-Embedding（阿里云百炼）
     # 或本地部署 BGE-M3；都不需要代理。mock 模式下用字符 bigram 哈希代替真实

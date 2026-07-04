@@ -6133,3 +6133,32 @@ class TestAnthropicProxyApplied:
                          max_tokens=100, temperature=0.5)
         assert "http_client" not in captured, \
             f"没配 proxy 时不应传 http_client，实际 kwargs: {captured}"
+
+
+# ───────────────────────────────────────────
+# SSS: fix #52 — app/config.py minimax_api_base 旧 endpoint
+# ───────────────────────────────────────────
+class TestMinimaxEndpointUpdated:
+    """迭代 #52: app/config.py 的 minimax_api_base 默认是旧版 endpoint
+    api.minimax.chat（router.py iter #32 已切到 api.minimaxi.com）。
+
+    后果：用户没设 NOVEL_MINIMAX_API_BASE env 时，app/llm_router.py
+    通过 settings.minimax_api_base 拿旧 endpoint → 调用 404 / 401。
+
+    锁死：config.py 的 minimax_api_base 默认必须跟 router.py 的
+    MINIMAX_BASE_URL fallback 一致（api.minimaxi.com）。
+    """
+    def test_config_minimax_default_uses_new_endpoint(self):
+        from app.config import settings
+        assert "minimaxi.com" in settings.minimax_api_base, \
+            f"config.minimax_api_base 默认必须用新 endpoint api.minimaxi.com，实际 {settings.minimax_api_base}"
+
+    def test_config_minimax_no_old_endpoint_default(self):
+        from app.config import settings
+        assert "minimax.chat" not in settings.minimax_api_base, \
+            f"config.minimax_api_base 不能默认旧 endpoint api.minimax.chat（404），实际 {settings.minimax_api_base}"
+
+    def test_config_minimax_default_model_is_m3(self):
+        from app.config import settings
+        assert "M3" in settings.minimax_model or "minimax" in settings.minimax_model.lower(), \
+            f"config.minimax_model 默认应指向当前在用的 model，实际 {settings.minimax_model}"
