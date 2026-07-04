@@ -1,5 +1,6 @@
 import asyncio
 import json
+import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Queue
@@ -195,25 +196,42 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                 db.commit()
                 queue.put({"event": "start", "run_id": run_id, "command": command,
                            "outline_mode": outline_mode})
-                for line in iter(proc.stdout.readline, ""):
-                    stdout_chunks.append(line)
-                    # 把 stdout 当作 log 事件转发给 SSE
-                    queue.put({"event": "log", "line": line.rstrip()})
-                    # 每 50 行 flush 到 DB（避免频繁 commit）
-                    if len(stdout_chunks) >= 50:
+                try:
+                    for line in iter(proc.stdout.readline, ""):
+                        stdout_chunks.append(line)
+                        # 把 stdout 当作 log 事件转发给 SSE
+                        queue.put({"event": "log", "line": line.rstrip()})
+                        # 每 50 行 flush 到 DB（避免频繁 commit）
+                        if len(stdout_chunks) >= 50:
+                            bridge_run.stdout_text = (bridge_run.stdout_text or "") + "".join(stdout_chunks)
+                            db.commit()
+                            stdout_chunks = []
+                    # 进程结束
+                    exit_code = proc.wait()
+                    if stdout_chunks:
                         bridge_run.stdout_text = (bridge_run.stdout_text or "") + "".join(stdout_chunks)
+                    bridge_run.exit_code = exit_code
+                    bridge_run.finished_at = datetime.now(timezone.utc)
+                    bridge_run.status = "done" if exit_code == 0 else "failed"
+                    db.commit()
+                    queue.put({"event": "complete", "status": bridge_run.status,
+                               "exit_code": exit_code})
+                except Exception as loop_exc:
+                    # 迭代 #54: 之前 try/finally 但没有 except — 循环里 DB 错误
+                    # / KeyError 会让 daemon 线程静默死掉，bridge_run.status
+                    # 卡在 "running"，下次 /bridge/run 触发 409 Conflict。
+                    # 修法：把 bridge_run 标 failed + 记录异常 + 通过 queue
+                    # 推送 error 事件，让 SSE consumer 看到真实原因。
+                    log.exception("_drain_stdout loop failed")
+                    try:
+                        bridge_run.exit_code = -1
+                        bridge_run.finished_at = datetime.now(timezone.utc)
+                        bridge_run.status = "failed"
                         db.commit()
-                        stdout_chunks = []
-                # 进程结束
-                exit_code = proc.wait()
-                if stdout_chunks:
-                    bridge_run.stdout_text = (bridge_run.stdout_text or "") + "".join(stdout_chunks)
-                bridge_run.exit_code = exit_code
-                bridge_run.finished_at = datetime.now(timezone.utc)
-                bridge_run.status = "done" if exit_code == 0 else "failed"
-                db.commit()
-                queue.put({"event": "complete", "status": bridge_run.status,
-                           "exit_code": exit_code})
+                    except Exception:
+                        pass
+                    queue.put({"event": "error", "message": str(loop_exc),
+                               "traceback": traceback.format_exc()})
             finally:
                 queue.put({"event": "done", "exit_code": proc.returncode})
                 db.close()

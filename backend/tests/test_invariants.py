@@ -6221,3 +6221,52 @@ class TestLoadStateNoSilentFallback:
         # 不能再有 silent pass
         assert "except Exception:\n        pass" not in code_src, \
             "_load_state_for_project 不能有 except Exception: pass（损坏文件必须 raise）"
+
+
+# ───────────────────────────────────────────
+# UUU: fix #54 — _drain_stdout 异常不再让 daemon 线程静默死掉
+# ───────────────────────────────────────────
+class TestDrainStdoutExceptionHandling:
+    """迭代 #54: _drain_stdout 是 daemon 线程，之前 try/finally 但没有 except
+    — 循环里 DB 错误 / KeyError 会让线程静默死掉，bridge_run.status 卡在
+    "running"，下次 /bridge/run 触发 409 Conflict。
+
+    修法：循环 body 包内层 try/except，异常时把 bridge_run 标 failed +
+    记录异常 + push error 事件到 queue。
+    """
+    def test_drain_stdout_inner_try_except_present(self):
+        """_drain_stdout 的循环体必须有 try/except（不只外层 finally）。"""
+        import inspect, re
+        from app.api import bridge as bridge_mod
+        src = inspect.getsource(bridge_mod._spawn_engine_subprocess)
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        # 必须有内层 try（带 except Exception）
+        # 检查 `for line in iter(proc.stdout.readline, ""):` 后是否有内层 try
+        # 简化检查：源码里 must 有两次 "try:" 出现（外层 + 内层）
+        try_count = code_src.count("try:")
+        assert try_count >= 2, \
+            f"_drain_stdout 必须有内层 try/except（循环里异常时设 bridge_run failed），" \
+            f"实际 try: 出现 {try_count} 次"
+        # 必须有 except Exception 处理循环错误
+        assert "except Exception as loop_exc" in code_src, \
+            "_drain_stdout 循环里必须有 except Exception as loop_exc → 设 bridge_run failed"
+
+    def test_drain_stdout_pushes_error_event_on_loop_exception(self):
+        """循环异常时必须 push {\"event\": \"error\", \"message\": ..., \"traceback\": ...} 到 queue。"""
+        import inspect
+        from app.api import bridge as bridge_mod
+        src = inspect.getsource(bridge_mod._spawn_engine_subprocess)
+        assert '"event": "error"' in src or "'event': 'error'" in src, \
+            "_drain_stdout 异常时必须 push error 事件到 queue"
+        assert "traceback.format_exc" in src, \
+            "_drain_stdout 异常时必须带 traceback 信息"
+
+    def test_bridge_module_imports_traceback(self):
+        import app.api.bridge as bridge_mod
+        # bridge.py 必须 import traceback 用于 #54 异常 traceback
+        import inspect
+        src = inspect.getsource(bridge_mod)
+        assert "import traceback" in src, \
+            "app/api/bridge.py 必须 import traceback（#54 用 traceback.format_exc）"
