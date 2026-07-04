@@ -100,12 +100,19 @@ def _get_proxied_client(provider: str, base_url: str, timeout: int = 120) -> htt
     proxy mounts that intercept calls to that provider's host.
 
     Falls back to the regular pool client if no proxy is configured.
+
+    迭代 #46: 之前 `_proxy_mounts.get(provider)` 期望拿到 URL 字符串，但
+    `_proxy_mounts` 实际是 `dict[str, httpx.Client]`（用作 client 缓存）。
+    真 URL 在 `_PROVIDER_PROXY`（由 set_proxy_map 写入）。
+    后果：proxy URL 配置了但 httpx.Client 永远不挂代理——用户以为是网络问题
+    实际是代码 bug。
+    修法：从 `_PROVIDER_PROXY` 读 URL。
     """
-    proxy_url = _proxy_mounts.get(provider)
+    proxy_url = _PROVIDER_PROXY.get(provider)
     if not proxy_url:
         return _get_client(timeout)
 
-    # Key proxied client by (proxy_url, timeout) to avoid re-init
+    # Key proxied client by (provider, proxy_url, timeout) to avoid re-init
     key = (provider, proxy_url, timeout)
     with _proxy_lock:
         if key not in _proxy_mounts:

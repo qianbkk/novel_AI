@@ -5744,3 +5744,98 @@ class TestWriterNoPrivateRouterState:
             router = writer_mod._get_router()
         assert isinstance(router, LLMRouter), \
             "active router 为 None 时 _get_router 必须 fallback 到 fresh LLMRouter"
+
+
+# ───────────────────────────────────────────
+# MMM: fix #46 — proxy URL 配置了但永远不生效
+# ───────────────────────────────────────────
+class TestProxyApplied:
+    """迭代 #46: 之前 _get_proxied_client 读 `_proxy_mounts.get(provider)`
+    期望拿到 URL 字符串，但 `_proxy_mounts` 实际是 dict[str, httpx.Client]
+    （缓存 httpx.Client）。真 URL 在 `_PROVIDER_PROXY`（set_proxy_map 写入）。
+
+    后果：用户在 Provider 表里勾选 needs_proxy + 设 DEEPSEEK_PROXY env
+    → 期望 deepseek 流量走代理；实际 _get_proxied_client 拿到 None
+    → 返回 _get_client(120)（无代理）→ GFW 区域用户无法调用 deepseek。
+
+    修法：从 _PROVIDER_PROXY 读 URL。
+
+    锁死：set_proxy_map 后 _get_proxied_client 必须返回 proxy-mounted client
+    （_proxy_mounts 缓存里有以 (provider, proxy_url, timeout) 为 key 的 Client）。
+    """
+    def test_proxy_applied_after_set_proxy_map(self):
+        from engine.llm import router as router_mod
+
+        # 重置模块级缓存 + proxy map（避免其他测试污染）
+        router_mod._proxy_mounts.clear()
+        router_mod._PROVIDER_PROXY.clear()
+
+        # 配置 deepseek 走代理
+        router_mod.LLMRouter().set_proxy_map({"deepseek": "http://127.0.0.1:7890"})
+
+        # 调 _get_proxied_client — 必须返回挂代理的 Client
+        client = router_mod._get_proxied_client(
+            "deepseek", "https://api.deepseek.com/v1/chat/completions", 120,
+        )
+        assert client is not None, "set_proxy_map 后 _get_proxied_client 必须返回 client"
+
+        # _proxy_mounts 缓存里必须有该 client
+        cached_keys = [k for k in router_mod._proxy_mounts.keys() if isinstance(k, tuple)]
+        assert any(
+            k[0] == "deepseek" and k[1] == "http://127.0.0.1:7890" and k[2] == 120
+            for k in cached_keys
+        ), f"proxy 缓存里必须有 (deepseek, http://127.0.0.1:7890, 120)，实际 {list(router_mod._proxy_mounts.keys())}"
+
+    def test_no_proxy_returns_regular_client(self):
+        from engine.llm import router as router_mod
+
+        router_mod._proxy_mounts.clear()
+        router_mod._PROVIDER_PROXY.clear()
+
+        # 不调 set_proxy_map — _PROVIDER_PROXY 空
+        client = router_mod._get_proxied_client(
+            "anthropic", "https://api.anthropic.com/v1/messages", 120,
+        )
+        assert client is not None, "无 proxy 时必须返回 client"
+        cached_tuples = [k for k in router_mod._proxy_mounts.keys() if isinstance(k, tuple)]
+        assert len(cached_tuples) == 0, \
+            f"无 proxy 时不应有 cached tuple key，实际 {cached_tuples}"
+
+    def test_proxy_cached_across_calls(self):
+        from engine.llm import router as router_mod
+
+        router_mod._proxy_mounts.clear()
+        router_mod._PROVIDER_PROXY.clear()
+        router_mod.LLMRouter().set_proxy_map({"kimi": "http://127.0.0.1:7890"})
+
+        c1 = router_mod._get_proxied_client("kimi", "https://api.moonshot.cn/v1/chat", 120)
+        c2 = router_mod._get_proxied_client("kimi", "https://api.moonshot.cn/v1/chat", 120)
+        assert c1 is c2, "第二次调必须返回同一个 cached Client（避免每次新建）"
+
+    def test_proxy_url_source_is_provider_proxy(self):
+        import inspect
+        from engine.llm import router as router_mod
+        src = inspect.getsource(router_mod._get_proxied_client)
+        # 去掉 docstring（避免「之前 _proxy_mounts.get(provider)」这种历史说明误匹配）
+        code_lines = []
+        in_docstring = False
+        for line in src.split("\n"):
+            stripped = line.strip()
+            if '"""' in stripped or "'''" in stripped:
+                count = stripped.count('"""') + stripped.count("'''")
+                if count == 1:
+                    in_docstring = not in_docstring
+                    continue
+                elif count == 2:
+                    continue
+                else:
+                    in_docstring = not in_docstring
+                    continue
+            if in_docstring or stripped.startswith("#"):
+                continue
+            code_lines.append(line)
+        code_src = "\n".join(code_lines)
+        assert "_PROVIDER_PROXY.get(provider)" in code_src, \
+            "_get_proxied_client 必须从 _PROVIDER_PROXY.get(provider) 读 URL（fix #46）"
+        assert "_proxy_mounts.get(provider)" not in code_src, \
+            "_get_proxied_client 不能从 _proxy_mounts.get(provider) 读 URL（fix #46 之前 bug）"
