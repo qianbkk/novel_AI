@@ -169,3 +169,53 @@ def atomic_write_json(path: str, data: Any) -> None:
             last_exc = e
             time.sleep(0.05 * (attempt + 1))
     raise last_exc  # type: ignore[misc]
+
+
+# ════════════════════════════════════════════════════════════════════
+# call_with_budget_with_retry — 写入路径字数控制的统一重试包装
+# ════════════════════════════════════════════════════════════════════
+def call_with_budget_with_retry(
+    router,                          # backend.engine.llm.router.LLMRouter
+    agent_name: str,
+    system: str,
+    user: str,
+    target_chars: int,
+    *,
+    temperature: float = 0.82,
+    tolerance: int = 200,
+    max_continues: int = 2,
+    sleep_seconds: float = 30.0,
+    max_attempts: int = 2,          # 1 try + 1 retry
+) -> tuple[str, float]:
+    """统一的 length-budget 调用 + 网络抖动重试包装。
+
+    之前 writer.py / rewriter.py 各自有一份几乎相同的 `_call_with_budget`
+    （~30 行重复代码）。抽到这里共享。
+
+    重试策略：
+    - router._post_with_retry 已有 tenacity 3 次 retry，指数 1-10s（最多 30s）
+    - 这里加 agent-level 兜底：max_attempts=2（1 try + 1 retry），间隔 sleep_seconds
+    - 默认 30s sleep 是经验值（MiniMax 偶尔出现 30-60s 短暂不可用，再长用户等不及）
+    - 全部失败 → 抛最后一次异常，让 orchestrator 走 escalate
+
+    注：之前 writer.py 的 comment 说「3 次（每次 60s 内）」是错的——代码实际只跑 2 次。
+    这次重写时修正：max_attempts 默认 2（与历史行为一致），如需 3 次可外部传参。
+    """
+    import httpx as _httpx
+    last_exc: Exception | None = None
+    for attempt in range(max_attempts):
+        try:
+            return router.call_with_length_budget(
+                agent_name=agent_name,
+                system_prompt=system,
+                user_prompt=user,
+                target_chars=target_chars,
+                tolerance=tolerance,
+                temperature=temperature,
+                max_continues=max_continues,
+            )
+        except (_httpx.TransportError, _httpx.HTTPStatusError, ConnectionError) as e:
+            last_exc = e
+            if attempt < max_attempts - 1:
+                time.sleep(sleep_seconds)
+    raise last_exc  # type: ignore[misc]

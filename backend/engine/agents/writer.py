@@ -19,32 +19,34 @@ import sys
 from typing import Tuple
 
 from ..llm.router import LLMRouter
+from ..llm_router import get_active_router
 from ..memory.manager import get_writer_context, maybe_update_style_samples
 from ..config.prompt_templates import (
     get_genre_instruction, get_hook_guidance,
     get_character_voice_reminder, UNIVERSAL_WRITING_RULES,
 )
+# 简化（#45）：writer.py 之前自己实现 _call_with_budget（约 30 行重试逻辑），
+# 跟 rewriter.py 几乎一样。统一抽到 engine.utils.call_with_budget_with_retry。
+# 顺便去掉 writer.py 自己的 _ACTIVE_ROUTER 模块状态（跟 rewriter 对齐用
+# engine.llm_router.get_active_router()）——之前 llm_router.install 已经调过
+# writer.set_active_router，删了之后所有 agent 都从同一处读 active router。
+from ..utils import call_with_budget_with_retry
 
 
 log = logging.getLogger("novel_ai.engine.writer")
 
-# Active router is set by backend.engine.graph.build_project_graph()
-_ACTIVE_ROUTER: LLMRouter | None = None
 
-
-def set_active_router(router: LLMRouter) -> None:
-    """Wire a router into this module so call_llm goes through it."""
-    global _ACTIVE_ROUTER
-    _ACTIVE_ROUTER = router
-
-
+# #45 简化：去掉 writer.py 自己的 _ACTIVE_ROUTER + set_active_router + _get_router。
+# 现在跟 rewriter.py / 其他 agent 一样用 engine.llm_router.get_active_router()，
+# 单一来源（之前 llm_router.install 会调 writer.set_active_router，但每个 agent
+# 各存一份 _ACTIVE_ROUTER 容易漂移）。
 def _get_router() -> LLMRouter:
-    """Bridge: backend has no global api_client; the active router does the call."""
-    if _ACTIVE_ROUTER is None:
-        # P1 fallback: a fresh, env-only router. Works for the smoke test path
-        # where there is no DB-driven config.
+    """Bridge: 从 engine.llm_router 拿 active router；fallback 到 env-only 新实例
+    （smoke test 路径，没有 DB-driven 配置）。"""
+    router = get_active_router()
+    if router is None:
         return LLMRouter()
-    return _ACTIVE_ROUTER
+    return router
 
 
 def _call_with_budget(agent_name: str, system: str, user: str,
@@ -53,34 +55,19 @@ def _call_with_budget(agent_name: str, system: str, user: str,
                       max_continues: int = 2) -> Tuple[str, float]:
     """Length-budget call (写入路径字数控制). 写作 agent 专用.
 
-    网络抖动重试：router._post_with_retry 已经有 tenacity 3 次 retry，
-    但其退避是指数 1-10s（最多 30s 总耗时），如果服务端挂掉超过 30s
-    仍然失败。这里加一层 agent-level retry：3 次（每次 60s 内）失败后
-    再 sleep 30s 重试一轮。避免一次瞬时网络抖动就让整章 escalate。
+    #45 简化：实际逻辑已抽到 engine.utils.call_with_budget_with_retry，
+    这里只是薄包装 + writer 专属 default temperature。
     """
-    import time as _time
-    import httpx as _httpx
-    last_exc: Exception | None = None
-    for attempt in range(2):  # 1st try + 1 retry
-        try:
-            return _get_router().call_with_length_budget(
-                agent_name=agent_name,
-                system_prompt=system,
-                user_prompt=user,
-                target_chars=target_chars,
-                tolerance=tolerance,
-                temperature=temperature,
-                max_continues=max_continues,
-            )
-        except (_httpx.TransportError, _httpx.HTTPStatusError, ConnectionError) as e:
-            last_exc = e
-            if attempt < 1:
-                # 第一轮失败 → sleep 30s 再试
-                # 理由：MiniMax 偶尔出现 30-60s 短暂不可用，
-                # 30s sleep 是经验值（再长用户等不及）
-                _time.sleep(30)
-    # 两次都失败 → 抛最后一次异常，让 orchestrator 走 escalate
-    raise last_exc  # type: ignore[misc]
+    return call_with_budget_with_retry(
+        router=_get_router(),
+        agent_name=agent_name,
+        system=system,
+        user=user,
+        target_chars=target_chars,
+        temperature=temperature,
+        tolerance=tolerance,
+        max_continues=max_continues,
+    )
 
 
 # ── Prompt templates (P2: import from config.prompt_templates) ──

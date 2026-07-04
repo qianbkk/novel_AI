@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
-from ..utils import parse_llm_json_response
+from ..utils import parse_llm_json_response, call_with_budget_with_retry
 
 
 # ── P0 自检清单系统提示（V3 方案 8.2 节）──
@@ -63,27 +63,18 @@ def _call_with_budget(agent_name: str, system: str, user: str,
                       tolerance: int = 200, max_continues: int = 2):
     """长度预算调用（写入路径字数控制）。rewriter 三条路径共用。
 
-    网络抖动重试：见 writer.py 注释。两轮 30s 间隔。
+    #45 简化：实际逻辑已抽到 engine.utils.call_with_budget_with_retry。
     """
-    import time as _time
-    import httpx as _httpx
-    last_exc: Exception | None = None
-    for attempt in range(2):
-        try:
-            return _get_active_router_or_fallback().call_with_length_budget(
-                agent_name=agent_name,
-                system_prompt=system,
-                user_prompt=user,
-                target_chars=target_chars,
-                tolerance=tolerance,
-                temperature=temperature,
-                max_continues=max_continues,
-            )
-        except (_httpx.TransportError, _httpx.HTTPStatusError, ConnectionError) as e:
-            last_exc = e
-            if attempt < 1:
-                _time.sleep(30)
-    raise last_exc  # type: ignore[misc]
+    return call_with_budget_with_retry(
+        router=_get_active_router_or_fallback(),
+        agent_name=agent_name,
+        system=system,
+        user=user,
+        target_chars=target_chars,
+        temperature=temperature,
+        tolerance=tolerance,
+        max_continues=max_continues,
+    )
 
 
 def run_p0_checklist(text: str, task: dict, memory: dict) -> tuple[dict, float]:

@@ -5599,3 +5599,148 @@ class TestNovelProductionEnforcement:
                 import pytest
                 pytest.fail(f"dev 模式不应抛 RuntimeError：{e}")
             raise
+
+# ───────────────────────────────────────────
+# KKK: simplify #45 — _call_with_budget 去重
+# ───────────────────────────────────────────
+class TestCallWithBudgetDedupe:
+    """迭代 #45: writer.py + rewriter.py 之前各有一份几乎相同的 _call_with_budget
+    （~30 行重试逻辑：网络抖动 sleep + retry）。抽到 engine.utils.call_with_budget_with_retry。
+
+    锁死：
+    1. utils 必须导出 call_with_budget_with_retry
+    2. writer.py / rewriter.py 必须 import 它，不再自己实现重试循环
+    3. 实际行为：retry 一次（max_attempts=2），全失败抛异常
+    """
+    def test_utils_exposes_call_with_budget_with_retry(self):
+        from engine.utils import call_with_budget_with_retry
+        import inspect
+        sig = inspect.signature(call_with_budget_with_retry)
+        params = sig.parameters
+        for name in ("router", "agent_name", "system", "user", "target_chars"):
+            assert name in params, \
+                f"call_with_budget_with_retry 必须有参数 {name}，实际 {list(params.keys())}"
+        assert params["max_attempts"].default == 2, \
+            f"max_attempts 默认 2（保持历史行为），实际 {params['max_attempts'].default}"
+
+    def test_writer_uses_shared_helper(self):
+        import inspect
+        from engine.agents import writer as writer_mod
+        src = inspect.getsource(writer_mod)
+        assert "call_with_budget_with_retry" in src, \
+            "writer.py 必须 import + 调 call_with_budget_with_retry（不能自己实现重试）"
+        assert "import time as _time" not in src, \
+            "writer.py 不应再有 inline `import time as _time`（重试已迁到 utils）"
+
+    def test_rewriter_uses_shared_helper(self):
+        import inspect
+        from engine.agents import rewriter as rewriter_mod
+        src = inspect.getsource(rewriter_mod)
+        assert "call_with_budget_with_retry" in src, \
+            "rewriter.py 必须 import + 调 call_with_budget_with_retry（不能自己实现重试）"
+        assert "import time as _time" not in src, \
+            "rewriter.py 不应再有 inline `import time as _time`（重试已迁到 utils）"
+
+    def test_call_with_budget_with_retry_returns_on_first_success(self):
+        from unittest.mock import MagicMock
+        from engine.utils import call_with_budget_with_retry
+
+        router = MagicMock()
+        router.call_with_length_budget.return_value = ("text", 0.01)
+        text, cost = call_with_budget_with_retry(
+            router, "writer", "sys", "user", 2000,
+            sleep_seconds=0.001,
+        )
+        assert text == "text" and cost == 0.01
+        assert router.call_with_length_budget.call_count == 1
+
+    def test_call_with_budget_with_retry_retries_then_succeeds(self):
+        from unittest.mock import MagicMock
+        import httpx
+        from engine.utils import call_with_budget_with_retry
+
+        router = MagicMock()
+        router.call_with_length_budget.side_effect = [
+            httpx.ConnectError("connection refused"),
+            ("text", 0.02),
+        ]
+        text, cost = call_with_budget_with_retry(
+            router, "writer", "sys", "user", 2000,
+            sleep_seconds=0.001,
+        )
+        assert text == "text" and cost == 0.02
+        assert router.call_with_length_budget.call_count == 2, \
+            f"必须 retry 一次，实际调了 {router.call_with_length_budget.call_count} 次"
+
+    def test_call_with_budget_with_retry_raises_after_exhausting_attempts(self):
+        from unittest.mock import MagicMock
+        import httpx
+        import pytest
+        from engine.utils import call_with_budget_with_retry
+
+        router = MagicMock()
+        router.call_with_length_budget.side_effect = httpx.ConnectError("net down")
+        with pytest.raises(httpx.ConnectError, match="net down"):
+            call_with_budget_with_retry(
+                router, "writer", "sys", "user", 2000,
+                sleep_seconds=0.001, max_attempts=2,
+            )
+        assert router.call_with_length_budget.call_count == 2
+
+
+# ───────────────────────────────────────────
+# LLL: simplify #45-followup — writer.py 去掉私有 _ACTIVE_ROUTER
+# ───────────────────────────────────────────
+class TestWriterNoPrivateRouterState:
+    """#45-followup: writer.py 之前自己定义 _ACTIVE_ROUTER + set_active_router
+    + _get_router，跟 rewriter.py / 其他 agent 用的 engine.llm_router.get_active_router()
+    重复。删掉 writer.py 的私有状态，统一从 engine.llm_router 读。
+
+    锁死：writer.py 不能有私有 _ACTIVE_ROUTER / set_active_router（必须用
+    engine.llm_router.get_active_router()，避免多份 state 漂移）。
+    """
+    def test_writer_no_module_level_active_router(self):
+        import inspect
+        from engine.agents import writer as writer_mod
+        src = inspect.getsource(writer_mod)
+        # 去掉注释 + docstring（避免「_ACTIVE_ROUTER 删掉了」这种历史说明误匹配）
+        code_lines = []
+        in_docstring = False
+        for line in src.split("\n"):
+            stripped = line.strip()
+            if '"""' in stripped or "'''" in stripped:
+                count = stripped.count('"""') + stripped.count("'''")
+                if count == 1:
+                    in_docstring = not in_docstring
+                    continue
+                elif count == 2:
+                    continue
+                else:
+                    in_docstring = not in_docstring
+                    continue
+            if in_docstring or stripped.startswith("#"):
+                continue
+            code_lines.append(line)
+        code_src = "\n".join(code_lines)
+        assert "_ACTIVE_ROUTER" not in code_src, \
+            "writer.py 不应再有私有 _ACTIVE_ROUTER（统一用 engine.llm_router.get_active_router）"
+        assert "def set_active_router" not in code_src, \
+            "writer.py 不应再有 set_active_router 函数（同上）"
+
+    def test_writer_uses_engine_llm_router(self):
+        import inspect
+        from engine.agents import writer as writer_mod
+        src = inspect.getsource(writer_mod)
+        # 必须 import engine.llm_router.get_active_router
+        assert "from ..llm_router import get_active_router" in src, \
+            "writer.py 必须 import engine.llm_router.get_active_router"
+
+    def test_writer_get_router_fallback(self):
+        """_get_router() 在没 active router 时 fallback 到 env-only 实例。"""
+        from unittest.mock import patch
+        from engine.agents import writer as writer_mod
+        from engine.llm.router import LLMRouter
+        with patch.object(writer_mod, "get_active_router", return_value=None):
+            router = writer_mod._get_router()
+        assert isinstance(router, LLMRouter), \
+            "active router 为 None 时 _get_router 必须 fallback 到 fresh LLMRouter"
