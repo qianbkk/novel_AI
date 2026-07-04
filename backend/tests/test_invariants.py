@@ -6055,3 +6055,81 @@ class TestBudgetReportEmptyLogNoKeyError:
             f"必须从 STATE_PATH 读 total_chapters_planned=200，实际 {report['total_chapters_planned']}"
         assert report["budget_limit_usd"] == 800
         assert report["chapters_done"] == 50
+
+
+# ───────────────────────────────────────────
+# RRR: fix #51 — anthropic SDK proxy 之前不生效
+# ───────────────────────────────────────────
+class TestAnthropicProxyApplied:
+    """迭代 #51: _anthropic 之前用 Anthropic() 直接调用，没传 http_client。
+    即使 _PROVIDER_PROXY["anthropic"] 配了，proxy 永远不生效。
+    后果：GFW 区域用户勾选 anthropic.needs_proxy + 设 ANTHROPIC_PROXY
+    → anthropic API 直连 → 超时 / 失败。
+
+    修法：检测 _PROVIDER_PROXY.get("anthropic")，有就构造 httpx.Client(proxy=...)
+    作为 http_client 参数传给 Anthropic SDK。
+    """
+    def test_anthropic_passes_http_client_when_proxy_configured(self):
+        import inspect
+        from engine.llm import router as router_mod
+        # _anthropic 是 LLMRouter 类方法，不是模块级函数
+        src = inspect.getsource(router_mod.LLMRouter._anthropic)
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        assert '"http_client"' in code_src or "'http_client'" in code_src, \
+            "_anthropic 必须用 'http_client' 参数把 httpx.Client 传给 Anthropic SDK（fix #51）"
+        assert '_PROVIDER_PROXY.get("anthropic")' in code_src, \
+            "_anthropic 必须从 _PROVIDER_PROXY.get('anthropic') 读 proxy URL"
+
+    def test_anthropic_proxy_actually_constructed(self, monkeypatch):
+        from unittest.mock import patch, MagicMock
+        import httpx
+        from engine.llm import router as router_mod
+
+        router_mod._PROVIDER_PROXY.clear()
+        router_mod.LLMRouter().set_proxy_map({"anthropic": "http://127.0.0.1:7890"})
+
+        captured = {}
+        def fake_anthropic_ctor(**kwargs):
+            captured.update(kwargs)
+            m = MagicMock()
+            m.messages.create.return_value = MagicMock(
+                content=[MagicMock(text="hi")],
+                usage=MagicMock(input_tokens=10, output_tokens=5,
+                                cache_read_input_tokens=0,
+                                cache_creation_input_tokens=0),
+            )
+            return m
+        with patch.object(router_mod, "Anthropic", side_effect=fake_anthropic_ctor):
+            r = router_mod.LLMRouter()
+            r._anthropic("checker_main", "sys", "user", "claude-sonnet-4-5",
+                         max_tokens=100, temperature=0.5)
+        assert "http_client" in captured, \
+            f"_anthropic 必须传 http_client 参数，实际 kwargs: {list(captured.keys())}"
+        assert isinstance(captured["http_client"], httpx.Client), \
+            f"http_client 必须是 httpx.Client 实例，实际 {type(captured['http_client'])}"
+
+    def test_anthropic_no_proxy_no_http_client(self, monkeypatch):
+        from unittest.mock import patch, MagicMock
+        from engine.llm import router as router_mod
+
+        router_mod._PROVIDER_PROXY.clear()
+
+        captured = {}
+        def fake_anthropic_ctor(**kwargs):
+            captured.update(kwargs)
+            m = MagicMock()
+            m.messages.create.return_value = MagicMock(
+                content=[MagicMock(text="hi")],
+                usage=MagicMock(input_tokens=10, output_tokens=5,
+                                cache_read_input_tokens=0,
+                                cache_creation_input_tokens=0),
+            )
+            return m
+        with patch.object(router_mod, "Anthropic", side_effect=fake_anthropic_ctor):
+            r = router_mod.LLMRouter()
+            r._anthropic("checker_main", "sys", "user", "claude-sonnet-4-5",
+                         max_tokens=100, temperature=0.5)
+        assert "http_client" not in captured, \
+            f"没配 proxy 时不应传 http_client，实际 kwargs: {captured}"

@@ -328,11 +328,21 @@ class LLMRouter:
         if Anthropic is None:
             raise RuntimeError("anthropic package not installed; pip install anthropic")
         api_key = self.api_keys.get("anthropic", "")
-        # P3: 通过 ANTHROPIC_BASE_URL 反代（如 anthropic provider.needs_proxy=True + ANTHROPIC_PROXY 设置）
-        client = Anthropic(
-            api_key=api_key,
-            base_url=os.environ.get("ANTHROPIC_BASE_URL") or None,
-        )
+        # P3: 通过 ANTHROPIC_BASE_URL 反代
+        base_url = os.environ.get("ANTHROPIC_BASE_URL") or None
+        # 迭代 #51: 之前 Anthropic() 直接调用，没传 http_client —— 即使
+        # _PROVIDER_PROXY["anthropic"] 配了，proxy 永远不生效（GFW 区域
+        # 用户没法用 anthropic）。现在 if needs_proxy → 构造 proxied httpx.Client。
+        proxy_url = _PROVIDER_PROXY.get("anthropic")
+        http_client = None
+        if proxy_url:
+            http_client = httpx.Client(proxy=proxy_url, timeout=120)
+        client_kwargs = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        if http_client is not None:
+            client_kwargs["http_client"] = http_client
+        client = Anthropic(**client_kwargs)
         if use_cache and cached_system:
             system = [
                 {"type": "text", "text": cached_system, "cache_control": {"type": "ephemeral"}},
