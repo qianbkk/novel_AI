@@ -6337,3 +6337,23 @@ class TestExportOpenapiAtomicWrite:
             "export_openapi.py 不能再 raw write_text(json.dumps(...))"
         assert "from engine.utils import atomic_write_json" in code_src, \
             "export_openapi.py 必须 from engine.utils import atomic_write_json"
+
+
+# ───────────────────────────────────────────
+# XXX: fix #57 — rewrite_length.py meta.json 改用 atomic_write_json
+# ───────────────────────────────────────────
+class TestRewriteLengthAtomicMeta:
+    """迭代 #57: scripts/rewrite_length.persist_chapter 写 meta.json 之前用
+    raw write_text(json.dumps(...))——跟 iter #43/#49/#55/#56 同型。
+    """
+    def test_rewrite_length_persist_uses_atomic_meta_write(self):
+        import inspect
+        from scripts import rewrite_length as rl_mod
+        src = inspect.getsource(rl_mod.persist_chapter)
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        assert "atomic_write_json" in code_src, \
+            "rewrite_length.persist_chapter 必须用 atomic_write_json（iter #57）"
+        assert "f_meta.write_text(json.dumps" not in code_src, \
+            "rewrite_length.persist_chapter 不能再 raw write_text(json.dumps(...))"

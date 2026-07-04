@@ -202,7 +202,9 @@ def persist_chapter(n: int, content: str, db):
     if f_meta.exists():
         meta = json.loads(f_meta.read_text(encoding="utf-8"))
         meta["word_count"] = len(content)
-        f_meta.write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
+        # 迭代 #57: 改用 atomic_write_json（跟 iter #43/#49/#55/#56 同型）
+        from engine.utils import atomic_write_json
+        atomic_write_json(str(f_meta), meta)
 
     # 写 novel_AI 目录
     f_novelai = NOVELAI_CH_DIR / f"ch_{n:04d}.txt"
