@@ -28,6 +28,7 @@ from ..config.paths import (
     L2_DIR_STR, L5_DIR_STR, STYLE_SAMPLES_DIR_STR, CHAPTERS_DIR_STR,
 )
 from ..config.power_levels import DEFAULT_POWER_LEVEL
+from ..utils import atomic_write_json as _atomic_write_json
 
 
 # ── Thresholds ──
@@ -101,33 +102,6 @@ def save_l5(novel_id: str, data: dict) -> None:
     os.makedirs(L5_DIR_STR, exist_ok=True)
     path = os.path.join(L5_DIR_STR, f"{novel_id}_l5.json")
     _atomic_write_json(path, data)
-
-
-def _atomic_write_json(path: str, data: dict) -> None:
-    """原子写 JSON：先 .tmp + os.replace，避免半写文件被读到。
-
-    进程被杀 / 写一半断电 → 老的完整 .json 保留，.tmp 可能是损坏的。
-    """
-    import os as _os
-    import time
-    tmp_path = path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-        f.flush()
-        try:
-            _os.fsync(f.fileno())
-        except OSError:
-            pass  # Windows 上 fsync 有时不支持，best-effort
-    # atomic rename（Windows 上并发 rename 可能 WinError 32 — 重试 3 次）
-    last_exc = None
-    for attempt in range(3):
-        try:
-            _os.replace(tmp_path, path)
-            return
-        except OSError as e:
-            last_exc = e
-            time.sleep(0.05 * (attempt + 1))
-    raise last_exc  # type: ignore
 
 
 # ══════════════════════════════════════════════

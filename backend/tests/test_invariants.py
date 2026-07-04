@@ -4256,19 +4256,26 @@ class TestMemorySaveAtomic:
         )
 
     def test_save_l5_atomic_write_uses_helper(self):
-        """save_l5 调用 _atomic_write_json helper（包含 .tmp + os.replace）。"""
+        """save_l5 调用 atomic_write_json helper（包含 .tmp + os.replace）。
+
+        迭代 #39 后 helper 已从 memory/manager.py 私有 _atomic_write_json
+        提升到 engine/utils.atomic_write_json。save_l5 通过 `as _atomic_write_json`
+        别名 import，但 helper 本体必须在 utils.py。
+        """
         from pathlib import Path
         manager_py = Path(__file__).resolve().parents[1] / "engine" / "memory" / "manager.py"
-        content = manager_py.read_text(encoding="utf-8")
-        lines = content.splitlines()
+        utils_py = Path(__file__).resolve().parents[1] / "engine" / "utils.py"
+        manager_content = manager_py.read_text(encoding="utf-8")
+        utils_content = utils_py.read_text(encoding="utf-8")
+        manager_lines = manager_content.splitlines()
         body_start = None
-        for i, line in enumerate(lines):
+        for i, line in enumerate(manager_lines):
             if line.startswith("def save_l5("):
                 body_start = i + 1
                 break
         assert body_start is not None, "找不到 save_l5"
         body_lines = []
-        for line in lines[body_start:]:
+        for line in manager_lines[body_start:]:
             if line.startswith("def ") or line.startswith("class "):
                 break
             body_lines.append(line)
@@ -4278,29 +4285,29 @@ class TestMemorySaveAtomic:
             if not line.strip().startswith("#")
         ]
         code_body = "\n".join(code_lines)
-        # save_l5 自己不一定有 .tmp（可以走 helper），但必须调 _atomic_write_json
-        # 且整个文件里 _atomic_write_json 函数体必须有 .tmp + os.replace
+        # save_l5 必须调 _atomic_write_json（通过别名）
         assert "_atomic_write_json" in code_body, (
             "save_l5 必须调 _atomic_write_json helper（atomic write）"
         )
-        # 检查 helper 函数本身包含 .tmp + os.replace
+        # helper 本体必须在 utils.py：def atomic_write_json(...) 必须存在 + 有 .tmp + os.replace
+        utils_lines = utils_content.splitlines()
         helper_start = None
-        for i, line in enumerate(lines):
-            if line.startswith("def _atomic_write_json"):
+        for i, line in enumerate(utils_lines):
+            if line.startswith("def atomic_write_json"):
                 helper_start = i + 1
                 break
-        assert helper_start is not None, "找不到 _atomic_write_json helper"
+        assert helper_start is not None, "engine/utils.py 找不到 atomic_write_json helper（iter #39 后应在 utils）"
         helper_lines = []
-        for line in lines[helper_start:]:
+        for line in utils_lines[helper_start:]:
             if line.startswith("def ") or line.startswith("class "):
                 break
             helper_lines.append(line)
         helper_body = "\n".join(helper_lines)
         assert ".tmp" in helper_body, (
-            "_atomic_write_json helper 必须用 .tmp 中间文件"
+            "atomic_write_json helper 必须用 .tmp 中间文件"
         )
         assert "os.replace" in helper_body, (
-            "_atomic_write_json helper 必须用 os.replace 原子重命名"
+            "atomic_write_json helper 必须用 os.replace 原子重命名"
         )
 
     def test_get_l2_corrupt_file_backed_up_not_silently_lost(self, tmp_path, monkeypatch):
@@ -5165,3 +5172,251 @@ class TestHumanEscalationNotEndRun:
         assert ("human_escalation", "load_arc_tasks") in graph_edges, (
             "graph 缺 human_escalation → load_arc_tasks 边"
         )
+# ───────────────────────────────────────────
+# HHH: planner.py / compliance.py / tracker.py / init_arc.py bug 修复锁死
+# ───────────────────────────────────────────
+class TestAtomicWriteJsonPromoted:
+    """engine/utils.py 提供公共 atomic_write_json（之前只在 memory/manager.py
+    私有）。planner.py / init_arc.py 等所有写 JSON 到磁盘的地方都应复用。
+    """
+    def test_utils_exposes_atomic_write_json(self):
+        from engine.utils import atomic_write_json
+        assert callable(atomic_write_json), "engine.utils.atomic_write_json 必须是函数"
+
+    def test_atomic_write_json_roundtrip(self, tmp_path):
+        """写一次 → 读回 → 数据一致；写时 .tmp 残留也被清理。"""
+        from engine.utils import atomic_write_json
+        import json
+        target = tmp_path / "data.json"
+        data = {"novel_id": "test", "arcs": [1, 2, 3]}
+        atomic_write_json(str(target), data)
+        assert target.exists(), "atomic_write_json 写完后文件必须存在"
+        with open(target, encoding="utf-8") as f:
+            loaded = json.load(f)
+        assert loaded == data
+        # .tmp 文件不应残留
+        assert not (tmp_path / "data.json.tmp").exists(), \
+            "atomic_write_json 完成后 .tmp 必须被 os.replace 走"
+
+    def test_memory_manager_uses_public_atomic_write(self):
+        """memory/manager.py 必须用 engine.utils.atomic_write_json，不再自己定义。
+        （通过 `as _atomic_write_json` 的别名 import 是允许的，只要不是 `def` 自己定义）
+        """
+        import inspect, re
+        from engine.memory import manager as mgr_mod
+        src = inspect.getsource(mgr_mod)
+        # 检查 1：必须 import 了公共版本（不管别名）
+        assert re.search(r"from\s+\.\.utils\s+import\s+atomic_write_json", src), \
+            "memory/manager.py 必须 `from ..utils import atomic_write_json`"
+        # 检查 2：不能有 `def _atomic_write_json(` 这种私有重定义
+        assert not re.search(r"^def\s+_atomic_write_json\s*\(", src, re.MULTILINE), \
+            "memory/manager.py 不应再 `def _atomic_write_json(...)` 自己实现"
+
+
+class TestPlannerAtomicWrite:
+    """迭代 #39: planner.py 写 setting_package.json 之前直接 open(w)，
+    写一半被杀 → 文件损坏 → 后续 5 张表全空。改用 atomic_write_json。
+    """
+    def test_planner_imports_atomic_write_json(self):
+        import inspect
+        from engine.agents import planner as planner_mod
+        src = inspect.getsource(planner_mod)
+        assert "atomic_write_json" in src, \
+            "planner.py 必须 import atomic_write_json（之前直接 open(w) 危险）"
+
+    def test_planner_does_not_use_raw_open_for_json(self):
+        """planner.py 不能再出现 `open(out_path, "w", encoding="utf-8")` 这种
+        raw write——必须走 atomic_write_json。"""
+        import inspect
+        from engine.agents import planner as planner_mod
+        src = inspect.getsource(planner_mod)
+        # 找 setting_package.json 写入附近的代码
+        assert 'open(out_path, "w", encoding="utf-8")' not in src, \
+            "planner.py 不能再用 raw open(w) 写 setting_package.json（半写损坏风险）"
+        assert 'open(out_path, "w"' not in src, \
+            "planner.py 不能再用 raw open(w) 写 out_path（半写损坏风险）"
+
+    def test_planner_setting_write_actually_atomic(self, tmp_path):
+        """实际跑 run_planner 的写入路径（mock 掉 LLM）验证 atomic_write_json 被调用。"""
+        from unittest.mock import patch, MagicMock
+        from engine.agents import planner as planner_mod
+
+        # mock LLM 返回 valid JSON
+        mock_router = MagicMock()
+        mock_router.call.return_value = ('{"novel_id":"x","arc_outline":[],"key_characters":[],"power_system":{"levels":[]}}', 0.001)
+        with patch.object(planner_mod, "get_active_router", return_value=mock_router), \
+             patch.object(planner_mod, "validate_setting_package"):
+            out_dir = tmp_path / "out"
+            out_dir.mkdir()
+            planner_mod.run_planner(args=[], output_dir=str(out_dir))
+            target = out_dir / "setting_package.json"
+            assert target.exists(), "setting_package.json 必须被写入"
+            # 不应残留 .tmp
+            assert not (out_dir / "setting_package.json.tmp").exists(), \
+                "atomic write 完成后 .tmp 必须被替换走"
+
+
+class TestTrackerParseFailureLogged:
+    """迭代 #40: tracker.py 之前 parse_llm_json_response(resp, {}) — parse
+    失败时 updates={} → chapter_summary / world_events / constraints 全部
+    静默丢失。修法：用 None 作为 default 检测失败，log warning +
+    meta.last_tracker_parse_failure_chapter + meta.tracker_parse_failure_count。
+    """
+    def test_tracker_uses_none_default(self):
+        """tracker.py 必须用 None（不是 {}）作为 parse default — 才能
+        检测 parse 失败并标记 meta。"""
+        import inspect
+        from engine.agents import tracker as tracker_mod
+        src = inspect.getsource(tracker_mod)
+        # 去掉注释行（避免 docstring / 注释里出现 `resp, {})` 误匹配）
+        code_lines = [
+            l for l in src.split("\n")
+            if l.strip() and not l.strip().startswith("#")
+        ]
+        code_src = "\n".join(code_lines)
+        # 真实调用行（不是注释）
+        assert "parse_llm_json_response(resp, None)" in code_src, \
+            "tracker.py 必须用 parse_llm_json_response(resp, None)，不能再传 {}"
+        assert "parse_llm_json_response(resp, {})" not in code_src, \
+            "tracker.py 不应再用 {} 作为 default（无法区分 parse 失败 vs 空 dict）"
+
+    def test_tracker_logs_warning_on_parse_failure(self, caplog):
+        """mock LLM 返回非 JSON → 必须 log warning + meta 标记。"""
+        from unittest.mock import patch, MagicMock
+        from engine.agents import tracker as tracker_mod
+
+        mock_router = MagicMock()
+        # LLM 返回完全无法 parse 的字符串
+        mock_router.call.return_value = ("this is not JSON at all" * 20, 0.001)
+        with patch.object(tracker_mod, "get_active_router", return_value=mock_router), \
+             patch.object(tracker_mod, "save_l2"):
+            current_memory = {
+                "hot": {"protagonist_level": "感债者", "recent_summaries": []},
+                "cold": {"world_events": [], "closed_threads": [], "resolved_foreshadowing": []},
+                "constraints": {"forbidden_constraints": [], "established_facts": [],
+                                "foreshadowing_planted": []},
+                "meta": {"novel_id": "test", "total_chapters_tracked": 5},
+            }
+            with caplog.at_level("WARNING"):
+                tracker_mod.run_tracker("章节正文", {"chapter_number": 6}, current_memory, "test")
+            # 至少有 warning 被记下
+            warning_msgs = [r.message for r in caplog.records if r.levelname == "WARNING"]
+            assert any("tracker" in m.lower() or "parse" in m.lower() for m in warning_msgs), \
+                f"parse 失败时 tracker 必须 log warning，实际: {warning_msgs}"
+            # meta 必须标记了
+            assert current_memory["meta"].get("last_tracker_parse_failure_chapter") == 6, \
+                f"meta 必须记 last_tracker_parse_failure_chapter=6，实际 {current_memory['meta']}"
+            assert current_memory["meta"].get("tracker_parse_failure_count", 0) >= 1, \
+                f"meta.tracker_parse_failure_count 必须 >=1，实际 {current_memory['meta']}"
+
+    def test_tracker_success_path_unaffected(self):
+        """正常 JSON 路径仍然更新 hot/cold/constraints，meta 标记不应出现。"""
+        from unittest.mock import patch, MagicMock
+        from engine.agents import tracker as tracker_mod
+
+        mock_router = MagicMock()
+        mock_router.call.return_value = (
+            '{"chapter_summary":"主角觉醒","active_threads":["主线"],"inventory_add":["玉佩"]}',
+            0.001,
+        )
+        with patch.object(tracker_mod, "get_active_router", return_value=mock_router), \
+             patch.object(tracker_mod, "save_l2"):
+            current_memory = {
+                "hot": {"protagonist_level": "感债者", "recent_summaries": []},
+                "cold": {"world_events": [], "closed_threads": [], "resolved_foreshadowing": []},
+                "constraints": {"forbidden_constraints": [], "established_facts": [],
+                                "foreshadowing_planted": []},
+                "meta": {"novel_id": "test", "total_chapters_tracked": 5},
+            }
+            updated, cost = tracker_mod.run_tracker("章节正文", {"chapter_number": 6},
+                                                     current_memory, "test")
+        # chapter_summary 应被加入 recent_summaries
+        summaries = updated["hot"]["recent_summaries"]
+        assert any(s.get("chapter") == 6 and "主角觉醒" in s.get("summary", "")
+                   for s in summaries), \
+            f"正常路径必须把 chapter_summary 加进 recent_summaries，实际 {summaries}"
+        # inventory 应有"玉佩"
+        assert "玉佩" in updated["hot"]["inventory"], \
+            f"inventory_add 必须被处理，实际 {updated['hot']['inventory']}"
+        # meta 不应有 parse 失败标记
+        assert "last_tracker_parse_failure_chapter" not in updated["meta"], \
+            "正常 JSON 路径不应记录 parse 失败标记"
+
+
+class TestComplianceParseFailNotFakePass:
+    """迭代 #41: compliance.py 之前 parse 失败 → passed=True + 空 hard_rejects。
+    修法：parse 失败 → passed=False + hard_rejects=[{PARSE_ERROR}]，让
+    orchestrator 看到真实失败信号（不再 fake-pass）。
+    """
+    def test_compliance_parse_fail_marks_passed_false(self):
+        from engine.agents.compliance import llm_semantic_check
+        from unittest.mock import patch, MagicMock
+
+        mock_router = MagicMock()
+        mock_router.call.return_value = ("完全不是 JSON，是乱码", 0.001)
+        with patch("engine.agents.compliance.get_active_router", return_value=mock_router):
+            result, cost = llm_semantic_check("一些章节文本", platform="fanqie")
+        assert result["passed"] is False, \
+            f"JSON parse 失败时必须 passed=False（保守策略），实际 {result['passed']}"
+        # hard_rejects 必须有 PARSE_ERROR 条目
+        assert any("PARSE_ERROR" in str(h.get("rule", "")) for h in result.get("hard_rejects", [])), \
+            f"parse 失败时必须给 hard_rejects 加 PARSE_ERROR 条目，实际 {result.get('hard_rejects')}"
+        # suggestion 必须有可读信息
+        assert "重跑" in result.get("suggestion", "") or "LLM" in result.get("suggestion", ""), \
+            f"parse 失败时 suggestion 必须给用户可读 hint，实际 {result.get('suggestion')}"
+
+    def test_compliance_source_no_fake_pass_on_exception(self):
+        """源码扫描：llm_semantic_check 不再有 raw except Exception → passed=True。"""
+        import inspect
+        from engine.agents import compliance as comp_mod
+        src = inspect.getsource(comp_mod)
+        # 老代码是 `except Exception: result = {"passed": True, ...}`
+        assert 'result = {"passed": True' not in src, \
+            "compliance.py 不能再有 `except Exception: result = {passed:True}` fake-pass"
+        # 新代码必须有 passed=False
+        assert '"passed": False' in src, \
+            "compliance.py parse 失败分支必须设 passed=False"
+
+    def test_run_compliance_propagates_parse_fail_to_passed(self):
+        """run_compliance（合并关键词 + LLM）必须把 parse 失败的 passed=False
+        透传给最终结果。"""
+        from engine.agents.compliance import run_compliance
+        from unittest.mock import patch, MagicMock
+
+        mock_router = MagicMock()
+        mock_router.call.return_value = ("乱码", 0.001)
+        with patch("engine.agents.compliance.get_active_router", return_value=mock_router):
+            result, cost = run_compliance("章节文本（无关键词触发）", platform="fanqie")
+        # 最终 passed 必须 False（即便 keyword scan 没发现 hard_kw）
+        assert result["passed"] is False, \
+            f"run_compliance 必须把 LLM parse 失败的 passed=False 透传，实际 {result['passed']}"
+
+
+class TestInitArcJsonDecodeHandling:
+    """迭代 #42: init_arc.py 之前 json.loads(raw read) — setting_package.json
+    损坏时原始 JSONDecodeError 透出。同 pull_setting_package (迭代 #35) 同型。
+    """
+    def test_init_arc_source_catches_json_errors(self):
+        """init_arc.py 必须 try/except (json.JSONDecodeError, UnicodeDecodeError)。"""
+        import inspect
+        from engine.agents import init_arc as init_mod
+        src = inspect.getsource(init_mod.build_state_from_setting)
+        assert "json.JSONDecodeError" in src, \
+            "init_arc.build_state_from_setting 必须 catch json.JSONDecodeError"
+        assert "UnicodeDecodeError" in src, \
+            "init_arc.build_state_from_setting 必须 catch UnicodeDecodeError"
+
+    def test_init_arc_corrupt_setting_raises_runtime_error(self, tmp_path):
+        """模拟 setting_package.json 损坏 → 应该抛 RuntimeError 带可读信息，
+        而不是透出原始 JSONDecodeError。"""
+        from unittest.mock import patch
+        from engine.agents import init_arc as init_mod
+        import pytest
+
+        # 写一个损坏的 JSON
+        corrupt = tmp_path / "setting_package.json"
+        corrupt.write_text("{ this is not valid JSON", encoding="utf-8")
+
+        with patch.object(init_mod, "SETTING_PATH_STR", str(corrupt)):
+            with pytest.raises(RuntimeError, match="setting_package.json 损坏"):
+                init_mod.build_state_from_setting("test_proj")

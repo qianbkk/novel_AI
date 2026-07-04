@@ -8,6 +8,7 @@ Migrated from novel_AI/agents/tracker_agent.py.
 """
 from __future__ import annotations
 import json
+import logging
 
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
@@ -15,6 +16,9 @@ from ..utils import parse_llm_json_response
 from ..memory.manager import (
     get_l2, save_l2, expire_constraints, maybe_compress_hot_to_cold,
 )
+
+
+log = logging.getLogger("novel_ai.engine.tracker")
 
 
 # 兼容旧接口
@@ -80,7 +84,29 @@ def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: s
         max_tokens=1200,
         temperature=0.1,
     )
-    updates = parse_llm_json_response(resp, {})
+    # 迭代 #40: 之前用 parse_llm_json_response(resp, {}) — parse 失败时
+    # 返回 {}，下游所有 `updates.get(...)` 都是默认值（空 list / 空 dict），
+    # chapter_summary / world_events / constraints / foreshadowing **全部
+    # 静默丢失**。后果：50 章跑下来 meta.tracked_chapters=50 但
+    # recent_summaries=[]、world_events=[]、character_states={}——writer
+    # 拿到的 memory 永远是"第 0 章状态"，文章脱节。
+    # 修法：用 None 作为 default 检测 parse 失败；失败时 log warning
+    # + 在 meta 里记 last_tracker_parse_failure_chapter，**不静默丢失
+    # 信号**。runs / UI 可以通过 meta 看到「哪一章 tracker 失败了」。
+    updates = parse_llm_json_response(resp, None)
+    if updates is None:
+        log.warning(
+            "tracker LLM JSON parse failed for chapter %s: resp[:200]=%r",
+            task.get("chapter_number"),
+            (resp or "")[:200],
+        )
+        # meta 标记一下，下次 save_l2 写入
+        meta_early = current_memory.get("meta", {})
+        meta_early["last_tracker_parse_failure_chapter"] = task["chapter_number"]
+        meta_early["tracker_parse_failure_count"] = meta_early.get("tracker_parse_failure_count", 0) + 1
+        current_memory["meta"] = meta_early
+        # 把 updates 当空 dict 处理——下面代码所有 `if "X" in updates` 走 False 分支
+        updates = {}
 
     # 过期约束
     current_memory, _ = expire_constraints(current_memory, task["chapter_number"])

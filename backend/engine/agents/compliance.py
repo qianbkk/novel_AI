@@ -95,7 +95,28 @@ def llm_semantic_check(text: str, platform: str = "fanqie") -> tuple[dict, float
     try:
         result = json.loads(resp)
     except Exception:
-        result = {"passed": True, "hard_rejects": [], "warnings": [], "suggestion": ""}
+        # 迭代 #41: 之前 fake-pass（passed=True + 空 hard_rejects）。
+        # 后果：LLM 检测到的 hard reject（如「未成年人性暗示」「详细血腥
+        # 描写」）在 JSON parse 失败时全部丢失 → passed=True → 违规内容
+        # 落盘 → 平台审查删书。
+        # 修法：保守策略 — 解析失败时视为 FAIL，要求人工 / 重试审核。
+        # 不再 silent pass；同时把 parse 错误塞到 hard_rejects 里让
+        # orchestrator / 上层能看到真实原因。
+        import logging
+        logging.getLogger("novel_ai.compliance").warning(
+            "compliance LLM JSON parse failed: %r",
+            (resp or "")[:200],
+        )
+        return {
+            "passed": False,
+            "hard_rejects": [{
+                "rule": "PARSE_ERROR",
+                "desc": "LLM 合规审核响应 JSON 解析失败（数据完整性优先，宁可误报不放过）",
+                "excerpt": (resp or "")[:80],
+            }],
+            "warnings": [],
+            "suggestion": "请重跑合规检查，或检查 LLM provider 是否正常返回 JSON",
+        }, cost
     return result, cost
 
 

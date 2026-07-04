@@ -19,7 +19,7 @@ if str(_BACKEND_ROOT) not in sys.path:
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
 from ..config.paths import NOVEL_CONFIG_PATH, SETTING_PATH_STR
-from ..utils import parse_llm_json_response
+from ..utils import parse_llm_json_response, atomic_write_json
 from app.schema_validator import validate_setting_package, SchemaError
 
 
@@ -195,8 +195,10 @@ def run_planner(args, output_dir: str) -> dict:
 
     out_path = Path(output_dir) / "setting_package.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(setting, f, ensure_ascii=False, indent=2)
+    # 迭代 #39: 之前直接 open(w) 写一半被杀 → setting_package.json 损坏
+    # → 下次 run pull_setting 失败 → 5 张表全空（Phase 1 真实事故源头）。
+    # 改用 atomic_write_json：先 .tmp + os.replace，老文件保留，损坏风险降到 0。
+    atomic_write_json(str(out_path), setting)
 
     print(f"   ✅ 设定包已写入: {out_path}")
     print(f"   弧数: {len(setting.get('arc_outline', []))}, "

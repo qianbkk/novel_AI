@@ -1,12 +1,15 @@
 """Generic utilities used by agents.
 
-Migrated from novel_AI/utils.py. Currently provides parse_llm_json_response
-which strips markdown fences and falls back to a default on parse failure.
+Migrated from novel_AI/utils.py. Provides:
+  - parse_llm_json_response: best-effort JSON parse with default fallback
+  - atomic_write_json: 原子写 JSON（先 .tmp + os.replace）
 """
 from __future__ import annotations
 import json
 import logging
+import os
 import re
+import time
 from typing import Any
 
 log = logging.getLogger("novel_ai.utils")
@@ -25,6 +28,10 @@ def _coerce_type(parsed: Any, default: Any) -> Any:
 
     严格场景下（schema 强校验），agent 应该传入 TypedDict 或 Pydantic
     模型；这里只做"软保护"避免下游整个崩。
+
+    default=None 是「哨兵值」语义：调用方想用 None 表示「parse 失败」
+    而非「空 dict」，因此 default=None 时不做类型检查，直接返回 parsed
+    （None 表示 parse 全部失败）。
     """
     if parsed is None:
         # 全部 parse 失败 → 根据 default 类型返回空值（fail-soft）
@@ -38,6 +45,10 @@ def _coerce_type(parsed: Any, default: Any) -> Any:
         if isinstance(default, str):
             return ""
         return default
+    # 哨兵：default=None → 不做类型检查，parsed 是什么就返回什么
+    # （让调用方用 None 检测 parse 失败，iter #40 tracker 用此机制）
+    if default is None:
+        return parsed
     # 类型匹配 → 直接返回（dict / list / str 分别检查，因为 isinstance(dict, object) 不会混淆）
     if isinstance(default, dict) and isinstance(parsed, dict):
         return parsed
@@ -123,3 +134,38 @@ def parse_llm_json_response(resp: str, default):
 
     # 类型保护
     return _coerce_type(parsed, default)
+
+
+# ════════════════════════════════════════════════════════════════════
+# Atomic JSON write — 防止写一半被杀导致文件损坏
+# ════════════════════════════════════════════════════════════════════
+def atomic_write_json(path: str, data: Any) -> None:
+    """原子写 JSON：先写 .tmp 再 os.replace，避免半写文件被下次读到。
+
+    模式来自 engine.state.save_state，被 save_l2 / save_l5 复用，
+    现在推广到所有需要写 JSON 到磁盘的地方（setting_package.json 等）。
+
+    - 写 .tmp + flush + best-effort fsync
+    - os.replace 重试 3 次（Windows 上并发 rename 可能 WinError 32）
+    - 全部失败才抛
+
+    进程被杀 / 写一半断电 → 老的完整 .json 保留，.tmp 可能是损坏的。
+    """
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            # Windows 上 fsync 不一定支持，best-effort
+            pass
+    last_exc: OSError | None = None
+    for attempt in range(3):
+        try:
+            os.replace(tmp_path, path)
+            return
+        except OSError as e:
+            last_exc = e
+            time.sleep(0.05 * (attempt + 1))
+    raise last_exc  # type: ignore[misc]

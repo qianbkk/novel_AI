@@ -18,7 +18,17 @@ def build_state_from_setting(project_id: str, chapters_per_arc: int | None = Non
     setting_path = Path(SETTING_PATH_STR)
     if not setting_path.exists():
         raise FileNotFoundError(f"setting_package.json 不存在：{setting_path}")
-    setting = json.loads(setting_path.read_text(encoding="utf-8"))
+    # 迭代 #42: 之前直接 json.loads — 如果 setting_package.json 损坏
+    # （半写、编码错），原始 JSONDecodeError / UnicodeDecodeError 透出
+    # 抛 RuntimeError → 前端看到几百行 traceback。同 pull_setting_package
+    # (迭代 #35) 同型问题，同修法。
+    try:
+        setting = json.loads(setting_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        raise RuntimeError(
+            f"setting_package.json 损坏（{type(e).__name__}）：{e}。"
+            f"请重新跑 POST /bridge/run command=planner 重新生成。"
+        ) from e
 
     state = create_initial_state(
         novel_id=project_id,

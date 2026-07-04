@@ -6,6 +6,68 @@
 
 ## [Unreleased] — 2026-07-04
 
+### Bug Fix（迭代 #42 — 内部审计）
+- **`fix(engine): init_arc setting_package.json 损坏返回清晰错误**
+  - `engine/agents/init_arc.py:21` 之前直接 `json.loads(raw read)`——
+    setting_package.json 损坏时原始 `JSONDecodeError` / `UnicodeDecodeError`
+    透出抛 RuntimeError + 几百行 traceback 给用户。
+  - 跟 pull_setting_package（迭代 #35）同型问题，同样的修法。
+  - 修法：catch 两个异常转抛 RuntimeError 带可读信息（"setting_package.json
+    损坏请重新跑 planner"）。
+  - 加 2 个 invariant test 锁死：源码必须 catch 两个异常；损坏文件
+    必须抛 RuntimeError。
+
+### Bug Fix（迭代 #41 — 内部审计）
+- **`fix(engine): compliance LLM JSON 解析失败不能再 fake-pass**
+  - `engine/agents/compliance.py:llm_semantic_check` 之前
+    `except Exception: result = {"passed": True, "hard_rejects": [], ...}`——
+    **fake-pass** 同型问题（iter #28 / #32 / #37）。
+  - 后果：LLM 检测到 hard reject（「未成年人性暗示」「详细血腥描写」等
+    关键词扫描抓不到的语义违规）→ JSON 解析失败 → 所有 hard_rejects
+    丢失 → passed=True → 违规内容落盘 → 平台审查删书。
+  - 修法：保守策略——parse 失败时设 passed=False + hard_rejects 里加
+    `PARSE_ERROR` 条目，suggestion 给用户可读 hint「请重跑合规检查」。
+    `run_compliance` 第 127 行会基于 hard_rejects 重算 passed，
+    parse 失败的 PARSE_ERROR 会让 passed 保持 False。
+  - 加 3 个 invariant test 锁死：parse 失败 → passed=False + PARSE_ERROR；
+    run_compliance 透传；源码不能再有 `except Exception → passed=True`。
+
+### Bug Fix（迭代 #40 — 内部审计）
+- **`fix(engine): tracker LLM JSON 解析失败不能再静默丢数据**
+  - `engine/agents/tracker.py:83` 之前 `parse_llm_json_response(resp, {})`——
+    parse 失败时返回 `{}`，下游所有 `updates.get(...)` 是空 list / 空 dict，
+    `chapter_summary` / `world_events` / `constraints` / `foreshadowing` **全部
+    静默丢失**。
+  - 后果：50 章跑完 `meta.total_chapters_tracked=50` 但
+    `recent_summaries=[]`、`world_events=[]`、`character_states={}`——
+    writer 拿到的 memory 永远是「第 0 章状态」，文章脱节但没有任何
+    错误信号。
+  - 修法：`parse_llm_json_response(resp, None)` + 检测 None；
+    parse 失败时 log warning + 在 meta 里写
+    `last_tracker_parse_failure_chapter` + `tracker_parse_failure_count`
+    （不静默丢失信号，UI 可以从 meta 看到哪几章 tracker 失败）。
+  - 配合：engine/utils.py `_coerce_type` 增加 `default=None` 哨兵分支——
+    让调用方能用 None 区分「parse 失败」vs「合法空 dict」。
+  - 加 3 个 invariant test 锁死：源码必须用 None（不是 {}）；
+    parse 失败 → log warning + meta 标记；正常路径 meta 不应出现
+    失败标记。
+
+### Bug Fix（迭代 #39 — 内部审计）
+- **`fix(engine): planner setting_package.json 改用 atomic_write**
+  - `engine/agents/planner.py:198-199` 之前直接 `open(out_path, "w")`
+    写 setting_package.json——写一半进程被杀 → 文件损坏 → 后续
+    `pull_setting` 失败 → 5 张表全空（**Phase 1 真实事故源头**）。
+  - 跟 save_l2（迭代 #36）同型问题，**比 save_l2 更危险**：setting_package.json
+    是全书唯一来源（力量体系 / 弧结构 / 角色口癖 / 伏笔种子），损坏后
+    没有 backup 路径重建，只能重新跑 planner。
+  - 修法：把 `engine/memory/manager.py` 的私有 `_atomic_write_json` 提到
+    `engine/utils.py` 当公共 `atomic_write_json`（复用 `engine.state.save_state`
+    的 .tmp + os.replace 模式），planner.py 改用公共版本。
+  - memory/manager.py 同时去掉自己的私有定义，统一从 utils 导入。
+  - 加 5 个 invariant test 锁死：utils 必须暴露 atomic_write_json；
+    planner 必须 import + 不能用 raw open(w)；实际写盘 round-trip；
+    memory/manager 必须 import 公共版本 + 不能自己 `def`。
+
 ### Bug Fix（迭代 #38 — 内部审计）
 - **`fix(engine): llm_router 静默吞 decrypt 错误要 log warning**
   - `engine/llm_router.py:load_routes` 之前 `except Exception` 静默吞
