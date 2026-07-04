@@ -6,6 +6,127 @@
 
 ## [Unreleased] — 2026-07-04
 
+### Bug Fix（迭代 #54 — 内部审计）
+- **`fix(api): _drain_stdout daemon 线程异常不再静默死**
+  - `_drain_stdout` 是 daemon 线程，之前 try/finally 但没有 except
+  - 循环里 DB 错误 / KeyError 会让线程静默死掉，bridge_run.status
+    卡在 "running"，下次 /bridge/run 触发 409 Conflict
+  - 修法：循环 body 包内层 try/except，异常时 bridge_run 标 failed +
+    push error 事件到 queue（SSE consumer 能看到真实原因）
+  - 加 3 个 invariant test：源码必须内层 try + 必须 push error 事件 +
+    bridge.py 必须 import traceback
+
+### Bug Fix（迭代 #53 — 内部审计）
+- **`fix(engine): state 文件损坏不再静默 fallback（progress 丢失）**
+  - `engine/graph.py:_load_state_for_project` 之前
+    `except Exception: pass` 静默兜底 — state 文件损坏 → load_state 抛异常
+    → except 吞掉 → 走 DB 路径 → create_initial_state 返回 fresh state
+    → 用户 50 章进度静默丢失
+  - 修法：损坏时 backup 文件到 `.corrupted.{ts}`（iter #36 同型），
+    然后 raise 让 caller fail-fast — **不允许 silent fallback**
+  - 加 3 个 invariant test 锁死：损坏必须 raise + 必须备份 .corrupted.* +
+    源码不能再有 except Exception: pass
+
+### Bug Fix（迭代 #52 — 内部审计）
+- **`fix(app): config.py MiniMax 默认 endpoint 切到新版**
+  - `app/config.py` 的 `minimax_api_base` 默认是旧版 endpoint
+    `api.minimax.chat`（router.py iter #32 已切到 `api.minimaxi.com`）
+  - 后果：用户没设 `NOVEL_MINIMAX_API_BASE` env 时，`app/llm_router.py`
+    通过 `settings.minimax_api_base` 拿旧 endpoint → 调用 404 / 401
+  - 修法：默认改为 `api.minimaxi.com`（新 endpoint）+ 默认 model
+    改为 `MiniMax-M3`（跟 router.py 一致）
+  - 加 3 个 invariant test 锁死
+
+### Bug Fix（迭代 #51 — 内部审计）
+- **`fix(engine): anthropic SDK proxy 之前不生效**
+  - `_anthropic` 之前用 `Anthropic()` 直接调用，没传 `http_client`
+  - 即使 `_PROVIDER_PROXY["anthropic"]` 配了，proxy 永远不生效
+  - 后果：GFW 区域用户勾选 anthropic.needs_proxy + 设 ANTHROPIC_PROXY
+    → anthropic API 直连 → 超时 / 失败
+  - 修法：检测 `_PROVIDER_PROXY.get("anthropic")`，有就构造
+    `httpx.Client(proxy=...)` 作为 `http_client` 参数传给 Anthropic SDK
+  - 加 3 个 invariant test
+
+### Bug Fix（迭代 #50 — 内部审计）
+- **`fix(engine): budget_manager print_report KeyError when log empty**
+  - generate_report 在 budget_log 为空时返回的 dict 缺少
+    `total_chapters_planned` / `cost_per_chapter_recent20` / 等 key
+  - print_report 直接 `report["total_chapters_planned"]` → KeyError
+  - 后果：第一次启动 / 删 budget_log 后 → status/budget 命令 → 后端 500
+    + traceback 给前端
+  - 修法：generate_report 空 records 路径补 `total_chapters_planned` 字段；
+    print_report 用 `.get()` 兜底
+
+### Bug Fix（迭代 #49 — 内部审计 + AI 审查 §3.3 同型扫描）
+- **`fix(engine): atomic_write_json 推广到剩余报告 JSON**
+  - 跟 #43 同型 — 把 atomic_write_json 一次性推广到所有剩余的
+    `with open(...w...); json.dump(...)` 写盘点：
+    - budget_manager.print_report → budget_report.json
+    - calibrate_checker → calibration_result.json
+    - chapter_checker.scan_all_chapters → consistency_report.json
+    - bootstrap.run_bootstrap → bootstrap_candidates.json
+  - 加 5 个 invariant test 锁死
+
+### Bug Fix（迭代 #48 — 内部审计）
+- **`fix(engine): chapter_checker LLM 一致性 JSON 解析失败不再 fake-pass**
+  - `chapter_checker.llm_consistency_check` 之前 parse 失败时
+    返回 `{"has_issues": False}` — silent pass
+    （同 compliance iter #41 / orchestrator iter #28 fake-pass 同型）
+  - 后果：LLM 检测到的跨章节矛盾（人物等级跳变 / 道具未获得 /
+    时间线错乱）JSON 解析失败 → 报告「无问题」 → 错误积累
+  - 修法：parse 失败时 has_issues=True + issues 加 "解析失败" + _parse_failed=True
+
+### Bug Fix（迭代 #47 — 内部审计）
+- **`fix(engine): summarizer JSON parse 失败 log warning + placeholder 标记**
+  - `summarizer.summarize_arc` 之前 parse 失败时静默写 placeholder 到
+    L5.arc_summaries，没有 log warning 让运维知道
+  - 修法：log.warning(resp[:200]) + placeholder dict 加 _parse_failed=True
+    标记，让 UI / 后续审计能识别哪些 arc 的 placeholder
+
+### Bug Fix（迭代 #46 — 内部审计）
+- **`fix(engine): _get_proxied_client 永远 fallback 到无代理 client**
+  - `_get_proxied_client(provider, ...)` 之前读
+    `_proxy_mounts.get(provider)` 期望拿到 URL 字符串，但
+    `_proxy_mounts` 实际是 `dict[str, httpx.Client]`（client 缓存）
+  - 真 URL 在 `_PROVIDER_PROXY`（由 set_proxy_map 写入）
+  - 后果：用户勾选 Provider.needs_proxy + 设 DEEPSEEK_PROXY env 后，
+    deepseek / kimi / anthropic 等流量**不**走代理 —— GFW 区域用户
+    无法调用海外 LLM，调试 1 小时以为是网络问题实际是代码 bug
+  - 修法：从 `_PROVIDER_PROXY.get(provider)` 读 URL
+  - 加 4 个 invariant test 锁死
+
+### Simplify（迭代 #45 — 内部审计）
+- **`refactor(engine): _call_with_budget 去重 + writer.py 单一 router 来源**
+  - writer.py + rewriter.py 之前各有一份几乎相同的 `_call_with_budget`
+    （~30 行：try/catch httpx 错误 + sleep(30) + retry 循环）。抽到
+    `engine.utils.call_with_budget_with_retry(router, ..., sleep_seconds=30,
+    max_attempts=2)` 共享。
+  - 副作用：writer.py 之前自己有 `_ACTIVE_ROUTER` 模块状态 + `set_active_router`
+    + `_get_router`（跟 rewriter.py 各自存一份），删掉，统一从
+    `engine.llm_router.get_active_router()` 读。engine/agents/__init__.py
+    里 `set_writer_router` 别名也跟着删。
+  - 收益：~30 行重复 → 1 个工具函数 + 2 个薄包装；多份 router state → 单一来源
+    （避免 drift：之前 8 个 agent 模块各存一份 _ACTIVE_ROUTER，谁先谁后更新
+    完全靠 import 顺序）。
+  - 加 9 个 invariant test 锁死：utils 导出 + 参数签名 + writer/rewriter 用共享
+    helper + writer 无私有 router 状态 + retry 行为（first success / retry /
+    exhaust attempts raise）。
+
+### Frontend（迭代 #44 — 内部审计）
+- **`fix(frontend): 4 处 silent-swallow + Provider 类型安全 + JSON 错误可读**
+  - **BridgeConsole.tsx**: 3 处 `.catch(() => setChapters([]))` / `.catch(() => {})`
+    改为 `toast.error` / `toast.warn`（listChapters 失败原因：project_id 不存在
+    / 权限 / DB 锁等）。
+  - **RuleCenter.tsx**: `getProject` 404 之前静默吞，改为 `toast.error`。
+  - **types.ts**: `Provider` 类型**移除** `api_key?: string | null` 字段
+    （API 绝不返回明文，类型允许会误导 spread 误清空）。新增 `ProviderForm`
+    （表单用）和 `ProviderCreate`（API 请求用）两个明确类型。
+  - **api/client.ts**: `request()` 的 `JSON.parse` 失败不再透出原始 SyntaxError，
+    改为「响应不是有效 JSON (path): <err> | body[:200]=...」让用户看到
+    HTML 错误页 / 半写文件 / proxy 拦截的真实原因。
+  - **Providers.tsx**: 同步类型重构（payload 用 `ProviderCreate`，不再依赖
+    `Omit<Provider, 'id'>`）。
+
 ### Bug Fix（迭代 #43 — 内部审计）
 - **`fix(engine): atomic_write_json 全局推广（5 个 critical 写盘点）**
   - 之前 `engine/state.py:save_state` 已 atomic、`engine/memory/manager.py:save_l2/save_l5`
