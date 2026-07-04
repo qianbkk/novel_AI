@@ -6311,3 +6311,29 @@ class TestMonitorRunNoDeadCode:
         src = inspect.getsource(mr_mod)
         assert "from engine.utils import atomic_write_json" in src, \
             "monitor_run.py 必须 from engine.utils import atomic_write_json"
+
+
+# ───────────────────────────────────────────
+# WWW: fix #56 — export_openapi.py 改用 atomic_write_json
+# ───────────────────────────────────────────
+class TestExportOpenapiAtomicWrite:
+    """迭代 #56: scripts/export_openapi.py 之前 write_text(json.dumps(...))
+    非 atomic — 跟 iter #43/#49/#55 同型。
+    后果：openapi.json 是 CI 校验漂移的基准（前端 vs 后端），半写损坏
+    会掩盖真实漂移 → 误报 / 漏报。
+    修法：atomic_write_json。
+    """
+    def test_export_openapi_uses_atomic_write(self):
+        import inspect
+        from scripts import export_openapi as eo_mod
+        src = inspect.getsource(eo_mod)
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        assert "atomic_write_json" in code_src, \
+            "export_openapi.py 必须用 atomic_write_json（iter #56）"
+        # 不能 raw write_text(json.dumps(...))
+        assert ".write_text(json.dumps(" not in code_src, \
+            "export_openapi.py 不能再 raw write_text(json.dumps(...))"
+        assert "from engine.utils import atomic_write_json" in code_src, \
+            "export_openapi.py 必须 from engine.utils import atomic_write_json"

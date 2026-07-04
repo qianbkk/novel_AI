@@ -61,10 +61,10 @@ def main() -> int:
     # 2. 写到目标
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(
-        json.dumps(spec, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    # 迭代 #56: 改用 atomic_write_json（跟 iter #43/#49/#55 同型 —
+    # openapi.json 是 CI 校验漂移的基准，半写损坏会掩盖真实漂移）
+    from engine.utils import atomic_write_json
+    atomic_write_json(str(out_path), spec)
     print(f"✓ 导出 {paths_count} 个 paths 到 {out_path}")
     print(f"  文件大小: {out_path.stat().st_size:,} bytes")
     return 0
