@@ -6,6 +6,17 @@
 
 ## [Unreleased] — 2026-07-04
 
+### Bug Fix（迭代 #38 — 内部审计）
+- **`fix(engine): llm_router 静默吞 decrypt 错误要 log warning**
+  - `engine/llm_router.py:load_routes` 之前 `except Exception` 静默吞
+    Provider.api_key_decrypt 错误（MASTER_KEY 变了 → key=""），无 log。
+  - 后果：用户改 MASTER_KEY env 后所有 LLM 不可用，错误日志里没任何线索，
+    排查只能从 DB 翻 Provider.api_key_encrypted 自己 decode。
+  - 修法：log warning（带 provider id + role_key + 错误类型）让运维知道。
+    仍设 key=""（不阻断 load_routes，但下游 LLM 调用会失败可追到原因）。
+  - 加 2 个 invariant test 锁死：mock decrypt 抛异常 → 必须 log warning；
+    源码必须 log.warning。
+
 ### Bug Fix（迭代 #37 — 内部审计）
 - **`fix(api): rules post-process LLM 失败不能再 fake-pass**
   - `app/api/rules.py:_llm_call_for_postprocess` 之前 `except Exception`
@@ -159,7 +170,7 @@
   TestLoadStateRobustness / TestDocCodeConsistency /
   TestSecurityConstants / TestProviderTableSchema /
   TestHumanEscalationNotEndRun / 等
-- 总 invariant suite：**226 passed / 0 warnings**
+- 总 invariant suite：**228 passed / 0 warnings**
 
 ## [Unreleased] — 2026-07-02
 

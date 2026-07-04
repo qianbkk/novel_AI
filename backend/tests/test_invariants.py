@@ -4474,6 +4474,111 @@ class TestPostProcessLLMFailure:
 
 
 # ───────────────────────────────────────────
+# QQQ: llm_router 静默 decrypt 失败要 log（迭代 #38）
+# ───────────────────────────────────────────
+class TestLlmRouterDecryptFailureLogging:
+    """迭代 #38: engine/llm_router.py load_routes 之前 except Exception
+    静默吞解密错误（MASTER_KEY 变了 → key=""），无 log。
+
+    后果：用户改 MASTER_KEY env 后所有 LLM 不可用，错误日志里没任何线索，
+    排查只能从 DB 翻 Provider.api_key_encrypted 自己 decode。
+
+    修法：log warning 告诉用户哪个 provider 解密失败。
+    本测试锁死：mock decrypt_api_key 抛异常 → load_routes 必须 log warning。
+    """
+    def test_load_routes_logs_warning_on_decrypt_failure(self, caplog):
+        """decrypt_api_key 抛异常 → load_routes 必须 log warning（不静默）。"""
+        import logging
+        from engine import llm_router
+        from engine.llm_router import LLMRouter as BridgeLLMRouter
+        from app.database import SessionLocal
+        from app.models import Provider, RoleAssignment
+        import secrets
+
+        # mock decrypt_api_key 抛异常
+        def fake_decrypt(ciphertext):
+            raise ValueError("simulated MASTER_KEY mismatch")
+        import app.security
+        original_decrypt = app.security.decrypt_api_key
+        app.security.decrypt_api_key = fake_decrypt
+        # llm_router 已经 import 了 decrypt_api_key 的引用，需要 patch 它
+        llm_router.decrypt_api_key = fake_decrypt
+
+        try:
+            # 准备 project + provider + role assignment
+            provider_id = f"test-decrypt-{secrets.token_hex(8)}"
+            role_key = f"test-role-{secrets.token_hex(4)}"
+            db = SessionLocal()
+            try:
+                p = Provider(
+                    id=provider_id,
+                    name="test-decrypt",
+                    provider_type="anthropic",
+                    api_key_encrypted="encrypted-blob-fake",
+                    api_key_suffix="abcd",
+                    default_model="claude-test",
+                )
+                db.add(p)
+                ra = RoleAssignment(role_key=role_key, provider_id=provider_id)
+                db.add(ra)
+                db.commit()
+            finally:
+                db.close()
+
+            r = BridgeLLMRouter("test-decrypt-novel")
+            with caplog.at_level(logging.WARNING, logger="novel_ai.llm_router"):
+                r.load_routes()
+            # 关键断言：必须 log warning（不能静默）
+            warnings = [r for r in caplog.records if r.levelname == "WARNING"]
+            assert len(warnings) >= 1, (
+                f"decrypt 失败时必须 log warning，实际 log："
+                f"{[(r.levelname, r.message) for r in caplog.records]}"
+            )
+            # warning 信息应含 provider id 或 role_key
+            assert any(role_key in r.message or provider_id in r.message for r in warnings), (
+                f"warning 信息应含 provider/role 标识，实际：{[r.message for r in warnings]}"
+            )
+        finally:
+            app.security.decrypt_api_key = original_decrypt
+            llm_router.decrypt_api_key = original_decrypt
+            # 清理
+            db = SessionLocal()
+            try:
+                db.query(RoleAssignment).filter_by(role_key=role_key).delete()
+                db.query(Provider).filter_by(id=provider_id).delete()
+                db.commit()
+            except Exception:
+                pass
+            db.close()
+
+    def test_load_routes_source_logs_on_decrypt_failure(self):
+        """源码级锁死：load_routes 必须 log.warning。"""
+        from pathlib import Path
+        router_py = Path(__file__).resolve().parents[1] / "engine" / "llm_router.py"
+        content = router_py.read_text(encoding="utf-8")
+        # 找 load_routes 函数体（兼容多行签名 + 缩进）
+        lines = content.splitlines()
+        body_start = None
+        for i, line in enumerate(lines):
+            if "def load_routes" in line:
+                body_start = i + 1
+                break
+        assert body_start is not None, "找不到 load_routes"
+        body_lines = []
+        for line in lines[body_start:]:
+            if line.startswith("def ") or line.startswith("    def ") or line.startswith("class "):
+                break
+            body_lines.append(line)
+        body = "\n".join(body_lines)
+        assert "log.warning" in body, (
+            "load_routes 必须 log.warning（之前静默吞 decrypt 错误无 log）"
+        )
+        assert "decrypt" in body.lower(), (
+            "load_routes 体内应有 decrypt 相关处理（不能是死代码）"
+        )
+
+
+# ───────────────────────────────────────────
 # WW: rate_limit X-RateLimit-Remaining 准确性（最后 #18 迭代）
 # ───────────────────────────────────────────
 class TestRateLimitHeaderAccuracy:

@@ -53,10 +53,12 @@ class LLMRouter:
     # ---- DB-driven configuration ----
     def load_routes(self) -> None:
         """Read RoleAssignment × Provider rows. Sets self._routes."""
+        import logging
         from app.database import SessionLocal
         from app.models import Provider, RoleAssignment
         from app.security import decrypt_api_key
 
+        log = logging.getLogger("novel_ai.llm_router")
         db = SessionLocal()
         try:
             rows = (
@@ -71,9 +73,16 @@ class LLMRouter:
                 if p.api_key_encrypted:
                     try:
                         key = decrypt_api_key(p.api_key_encrypted)
-                    except Exception:
-                        # 解密失败（MASTER_KEY 变了等）→ 该 provider 暂时不可用
-                        key = ""
+                    except Exception as exc:
+                        # 迭代 #38: 之前静默吞解密错误，MASTER_KEY 变了
+                        # → key="" → 该 provider 静默不可用，用户没线索。
+                        # 改：log warning（带 provider name + 错误类型）让运维知道。
+                        # 仍设 key=""（不阻断 load_routes，但下游 LLM 调用会失败）
+                        log.warning(
+                            "provider %s (%s) api_key 解密失败：%s。"
+                            "通常是 MASTER_KEY 变了或数据损坏。该 provider 暂时不可用。",
+                            p.id, ra.role_key, exc,
+                        )
                 routes[ra.role_key] = {
                     "type":  p.provider_type,
                     "key":   key,
