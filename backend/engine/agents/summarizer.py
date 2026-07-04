@@ -8,11 +8,15 @@ Both update L5 JSON files on disk via backend.engine.memory.manager.
 """
 from __future__ import annotations
 import json
+import logging
 
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
 from ..utils import parse_llm_json_response
 from ..memory.manager import get_l5, save_l5
+
+
+log = logging.getLogger("novel_ai.engine.summarizer")
 
 
 ARC_SUMMARY_SYSTEM = """你是网文编辑，负责对已完成的弧进行档案整理。
@@ -61,12 +65,22 @@ def summarize_arc(arc: dict, chapter_summaries: list, memory: dict, novel_id: st
     )
     arc_summary = parse_llm_json_response(resp, None)
     if arc_summary is None:
+        # 跟 tracker.py iter #40 同型：parse 失败时 log warning 让运维知道。
+        # 用户拿到的是 placeholder（"（摘要生成失败，见L2记忆）"），但日志有
+        # resp[:200] 可以让配置 bug 暴露（不需要重新跑 run 才知道哪次失败）。
+        log.warning(
+            "summarizer.弧档案 JSON parse failed for arc %s: resp[:200]=%r",
+            arc.get("arc_id"),
+            (resp or "")[:200],
+        )
         arc_summary = {
             "arc_id": arc.get("arc_id"),
             "arc_name": arc.get("arc_name"),
             "summary_100": "（摘要生成失败，见L2记忆）",
             "key_events": [],
             "unresolved_threads": memory.get("active_threads", []),
+            # iter #47: 加 _parse_failed=True 标记，让 UI / 后续审计能识别
+            "_parse_failed": True,
         }
 
     # 更新 L5

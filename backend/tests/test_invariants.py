@@ -5839,3 +5839,45 @@ class TestProxyApplied:
             "_get_proxied_client 必须从 _PROVIDER_PROXY.get(provider) 读 URL（fix #46）"
         assert "_proxy_mounts.get(provider)" not in code_src, \
             "_get_proxied_client 不能从 _proxy_mounts.get(provider) 读 URL（fix #46 之前 bug）"
+
+
+# ───────────────────────────────────────────
+# NNN: fix #47 — summarizer JSON parse 失败不再静默
+# ───────────────────────────────────────────
+class TestSummarizerParseFailureNotSilent:
+    """迭代 #47: summarizer.summarize_arc 之前 parse 失败时静默写 placeholder
+    到 L5.arc_summaries，没有 log warning 让运维知道（跟 tracker.py iter #40
+    同型问题，只是更早被作者放过）。
+
+    修法：log warning + 加 _parse_failed=True 标记到 placeholder dict。
+    """
+    def test_summarizer_logs_warning_on_parse_failure(self, caplog):
+        from unittest.mock import patch, MagicMock
+        from engine.agents import summarizer as summ_mod
+
+        mock_router = MagicMock()
+        mock_router.call.return_value = ("乱码不是 JSON", 0.001)
+        with patch.object(summ_mod, "get_active_router", return_value=mock_router), \
+             patch.object(summ_mod, "save_l5"):
+            memory = {"hot": {"recent_summaries": []}, "active_threads": []}
+            with caplog.at_level("WARNING"):
+                arc_summary, cost = summ_mod.summarize_arc(
+                    {"arc_id": 3, "arc_name": "测试弧"}, [], memory, "test_novel",
+                )
+        warning_msgs = [r.message for r in caplog.records if r.levelname == "WARNING"]
+        assert any("summarizer" in m.lower() for m in warning_msgs), \
+            f"summarizer parse 失败时必须 log warning，实际: {warning_msgs}"
+        assert arc_summary.get("_parse_failed") is True, \
+            f"parse 失败时 placeholder 必须 _parse_failed=True，实际: {arc_summary}"
+
+    def test_summarizer_placeholder_carries_failure_marker(self):
+        import inspect
+        from engine.agents import summarizer as summ_mod
+        src = inspect.getsource(summ_mod.summarize_arc)
+        assert "_parse_failed" in src, \
+            "summarizer.summarize_arc 的 placeholder 必须带 _parse_failed=True 标记"
+
+    def test_summarizer_has_logger(self):
+        from engine.agents import summarizer as summ_mod
+        assert hasattr(summ_mod, "log"), \
+            "summarizer 必须有 module-level log（用于 log.warning 而非 print）"
