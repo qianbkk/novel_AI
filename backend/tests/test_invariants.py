@@ -6162,3 +6162,62 @@ class TestMinimaxEndpointUpdated:
         from app.config import settings
         assert "M3" in settings.minimax_model or "minimax" in settings.minimax_model.lower(), \
             f"config.minimax_model 默认应指向当前在用的 model，实际 {settings.minimax_model}"
+
+
+# ───────────────────────────────────────────
+# TTT: fix #53 — _load_state_for_project 损坏文件不再静默 fallback
+# ───────────────────────────────────────────
+class TestLoadStateNoSilentFallback:
+    """迭代 #53: engine/graph.py:_load_state_for_project 之前
+    `except Exception: pass` 静默兜底 — 损坏的 state 文件会被忽略，
+    走 DB 路径返回 fresh initial state → 用户 50 章进度静默丢失。
+
+    修法：损坏时 backup 到 .corrupted.{ts}，然后 raise 让 caller 看到
+    （不静默 fallback）。
+    """
+    def test_corrupt_state_file_raises_not_silently_falls_back(self, tmp_path, monkeypatch):
+        """state 文件损坏 → 必须 raise，不能 return fresh state。"""
+        from engine import graph as graph_mod
+
+        # 切 STATE_PATH 到损坏文件
+        corrupt_path = tmp_path / "state.json"
+        corrupt_path.write_text("{ this is not valid JSON", encoding="utf-8")
+        monkeypatch.setattr(graph_mod, "_STATE_PATH", str(corrupt_path))
+
+        with pytest.raises(Exception) as exc_info:
+            graph_mod._load_state_for_project("test_proj")
+
+        # 必须是 JSONDecodeError（不能是 fresh state dict 静默返回）
+        assert "JSON" in str(exc_info.value) or "Expecting" in str(exc_info.value) or \
+               "state" in str(exc_info.value).lower(), \
+            f"损坏 state 文件必须 raise JSONDecodeError，实际 {type(exc_info.value).__name__}: {exc_info.value}"
+
+    def test_corrupt_state_file_backed_up(self, tmp_path, monkeypatch):
+        """损坏 state 文件必须被备份成 .corrupted.{ts}。"""
+        from engine import graph as graph_mod
+
+        corrupt_path = tmp_path / "state.json"
+        corrupt_path.write_text("{ broken", encoding="utf-8")
+        monkeypatch.setattr(graph_mod, "_STATE_PATH", str(corrupt_path))
+
+        try:
+            graph_mod._load_state_for_project("test_proj")
+        except Exception:
+            pass  # expected
+
+        # 必须有 .corrupted.* 备份文件
+        backups = list(tmp_path.glob("state.json.corrupted.*"))
+        assert len(backups) >= 1, \
+            f"损坏 state 必须被备份成 .corrupted.*，实际 {list(tmp_path.iterdir())}"
+
+    def test_no_silent_except_in_load_state(self):
+        """源码扫描：_load_state_for_project 不能有 except Exception: pass。"""
+        import inspect
+        from engine import graph as graph_mod
+        src = inspect.getsource(graph_mod._load_state_for_project)
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        # 不能再有 silent pass
+        assert "except Exception:\n        pass" not in code_src, \
+            "_load_state_for_project 不能有 except Exception: pass（损坏文件必须 raise）"

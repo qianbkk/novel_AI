@@ -189,14 +189,32 @@ def _load_state_for_project(project_id: str) -> dict:
       1. JSON state file on disk
       2. Project row → config_json → initial state
       3. Hardcoded defaults
+
+    迭代 #53: 之前 state 文件损坏时 `except Exception: pass` 静默兜底到
+    DB 路径 → 返回 fresh initial state → 用户 50 章进度静默丢失。
+    修法：损坏时 backup 文件到 .corrupted.{ts} 后 raise，让 caller
+    （run_graph_task / run_orchestrator）fail-fast；上层可以决定
+    是 abort 还是 fallback 到 DB。状态丢失不能 silent。
     """
     from .state import load_state, create_initial_state
 
     if os.path.exists(_STATE_PATH):
         try:
             return load_state(_STATE_PATH)
-        except Exception:
-            pass
+        except Exception as e:
+            # 损坏文件备份后 raise（参考 iter #36 memory save 的损坏文件备份模式）
+            try:
+                import time as _t
+                corrupted = _STATE_PATH + f".corrupted.{int(_t.time())}"
+                os.replace(_STATE_PATH, corrupted)
+                log.warning(
+                    "_load_state_for_project: state 文件损坏，已备份到 %s: %s",
+                    corrupted, e,
+                )
+            except Exception:
+                pass
+            # raise 而不是 pass —— 让 caller 看到状态文件坏（不要静默 fallback 到 fresh state）
+            raise
 
     from app.database import SessionLocal
     from app.models import Project
