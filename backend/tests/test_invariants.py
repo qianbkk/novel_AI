@@ -6357,3 +6357,24 @@ class TestRewriteLengthAtomicMeta:
             "rewrite_length.persist_chapter 必须用 atomic_write_json（iter #57）"
         assert "f_meta.write_text(json.dumps" not in code_src, \
             "rewrite_length.persist_chapter 不能再 raw write_text(json.dumps(...))"
+
+
+# ───────────────────────────────────────────
+# YYY: fix #58 — orchestrator.run_tracker 异常不再静默
+# ───────────────────────────────────────────
+class TestOrchestratorTrackerNotSilent:
+    """迭代 #58: orchestrator.node_save_and_track 之前 except Exception
+    静默兜底 updated_mem=memory, cost=0 —— tracker LLM 失败时没信号。
+    修法：标 task._tracker_failed + error_log + 不静默吞。
+    """
+    def test_orchestrator_marks_tracker_failed(self):
+        import inspect
+        from engine import orchestrator as orch_mod
+        src = inspect.getsource(orch_mod.node_save_and_track)
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        assert "_tracker_failed" in code_src, \
+            "orchestrator.node_save_and_track 异常路径必须标 _tracker_failed（iter #58）"
+        assert "error_log" in code_src, \
+            "orchestrator.node_save_and_track 异常路径必须 log error_log"

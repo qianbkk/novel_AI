@@ -468,7 +468,17 @@ def node_save_and_track(state: OrchestratorState) -> OrchestratorState:
     try:
         updated_mem, cost = run_tracker(text, task, memory, state.get("novel_id", "default"))
     except Exception as e:
+        # 迭代 #58: 之前 except Exception 静默兜底 updated_mem=memory, cost=0
+        # —— tracker LLM 调用失败时 memory 不更新、cost 不记，
+        # 下一章 tracker 又从老 memory 接着跑，但用户看不到任何「tracker
+        # 连续失败」的信号（跟 fake-pass 同型风险）。
+        # 修法：log error_log 标 _tracker_failed=True + updated_mem
+        # 仍用旧 memory（保持连续性）+ 标 task._tracker_failed 让
+        # 后续 summarizer / 报告能看到。cost=0.0 保持（LLM 没真调用）。
         log(f"ERR tracker failed: {e}", state)
+        state["error_log"] = (state.get("error_log", []) +
+                              [f"tracker failed ch{task['chapter_number']}: {e}"])
+        task["_tracker_failed"] = True
         updated_mem, cost = memory, 0.0
     _add_cost(state, cost)
 
