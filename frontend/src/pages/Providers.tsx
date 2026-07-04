@@ -1,10 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
-import type { Provider } from "../types";
+import type { Provider, ProviderForm, ProviderCreate } from "../types";
 
 const PROVIDER_TYPES: Provider["provider_type"][] = ["anthropic", "deepseek", "gemini", "kimi", "minimax", "custom"];
-
-type ProviderForm = Omit<Provider, "id">;
 
 const EMPTY_FORM: ProviderForm = {
   name: "",
@@ -68,18 +66,24 @@ export default function Providers() {
   async function handleSubmit() {
     if (!form.name.trim()) return;
     // 编辑模式下 api_key 是空 → 阻止提交（避免误清空）
-    if (editingId && !form.api_key?.trim()) {
+    if (editingId && !form.api_key.trim()) {
       setError("编辑 Provider 时必须重新填写 api_key（后端不返回明文，无法预填）");
       return;
     }
     setSaving(true);
     setError(null);
-    const payload: ProviderForm = {
-      ...form,
+    // 表单值 → API 请求体：把空字符串归一为 null（api_base / default_model）
+    const payload: ProviderCreate = {
       name: form.name.trim(),
-      api_base: form.api_base?.trim() || null,
-      api_key: form.api_key?.trim() || "",
-      default_model: form.default_model?.trim() || null,
+      provider_type: form.provider_type,
+      api_base: form.api_base.trim() || null,
+      // 编辑时 api_key 已在第 71 行校验过必填；新增时 form.api_key 是空 → 用户
+      // 必须自己填（前端不静默放过）。后端 save 时 api_key 空字符串 = "没有设置 key"，
+      // 不会清空已有 key（这是后端 update_provider 的设计：空字符串跳过更新）。
+      api_key: form.api_key.trim(),
+      default_model: form.default_model.trim() || null,
+      extra_json: form.extra_json,
+      needs_proxy: form.needs_proxy,
     };
 
     try {

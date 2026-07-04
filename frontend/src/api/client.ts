@@ -8,6 +8,7 @@ import type {
   ChapterCreateResult,
   ChapterSearchResult,
   Provider,
+  ProviderCreate,
   RoleAssignment,
   BridgeRun,
   BridgeStatus,
@@ -37,7 +38,17 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   if (resp.status === 204) return undefined as T;
   const text = await resp.text();
   if (!text) return undefined as T;
-  return JSON.parse(text) as T;
+  // 包一层 JSON 解析错误：原始 SyntaxError 容易让用户以为是代码 bug。
+  // 现在 catch 后吐 "响应不是有效 JSON: ${path} body[:200]=..." 让用户
+  // 知道是后端返回了非 JSON（比如 HTML 错误页 / 半写文件 / proxy 拦截）。
+  try {
+    return JSON.parse(text) as T;
+  } catch (e) {
+    const snippet = text.slice(0, 200).replace(/\s+/g, " ");
+    throw new Error(
+      `响应不是有效 JSON (${path}): ${(e as Error).message} | body[:200]=${snippet}`,
+    );
+  }
 }
 
 export const api = {
@@ -88,13 +99,13 @@ export const api = {
 
   listProviders: () => request<Provider[]>("/providers"),
 
-  createProvider: (payload: Omit<Provider, "id">) =>
+  createProvider: (payload: ProviderCreate) =>
     request<Provider>("/providers", {
       method: "POST",
       body: JSON.stringify(payload),
     }),
 
-  updateProvider: (id: string, payload: Omit<Provider, "id">) =>
+  updateProvider: (id: string, payload: ProviderCreate) =>
     request<Provider>(`/providers/${id}`, {
       method: "PUT",
       body: JSON.stringify(payload),

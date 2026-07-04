@@ -75,7 +75,12 @@ export default function BridgeConsole() {
       });
     api.listChapters(projectId)
       .then(setChapters)
-      .catch(() => setChapters([]));
+      // 之前 .catch(() => setChapters([])) — listChapters 失败时静默显示空列表，
+      // 用户看不到已导入的章节以为是 bug。改为 toast.error 提示真实原因。
+      .catch((e) => {
+        toast.error("加载章节列表失败", String(e));
+        setChapters([]);
+      });
     return () => eventSourceRef.current?.close();
   }, [projectId]);
 
@@ -194,7 +199,11 @@ export default function BridgeConsole() {
         const payload: BridgeLogLine = JSON.parse((e as MessageEvent).data);
         appendLogLine("complete", `status=${payload.status || "?"}`, "ok");
         if (payload.status === "done") {
-          api.listChapters(projectId!).then(setChapters).catch(() => {});
+          // 之前 .catch(() => {}) — 章节列表刷新失败时静默吞掉，用户看到
+          // 陈旧的章节数以为是 run 没成功。改为 toast.warn 留信号。
+          api.listChapters(projectId!).then(setChapters).catch((e) => {
+            toast.warn("刷新章节列表失败", String(e));
+          });
           toast.success(`${label} 完成`);
         }
       });
@@ -208,7 +217,9 @@ export default function BridgeConsole() {
         setActiveLabel(null);
         setActiveNode(null);
         // 跑完命令后刷新章节数
-        api.listChapters(projectId!).then(setChapters).catch(() => {});
+        api.listChapters(projectId!).then(setChapters).catch((e) => {
+          toast.warn("刷新章节列表失败", String(e));
+        });
       });
       es.addEventListener("error", (e) => {
         try {

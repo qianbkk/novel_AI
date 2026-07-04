@@ -124,14 +124,42 @@ export interface Provider {
   name: string;
   provider_type: "anthropic" | "deepseek" | "gemini" | "kimi" | "minimax" | "custom";
   api_base: string | null;
-  // 注意：API 返回绝不包含明文 api_key（commit 加密后）。
-  // 后端返回 api_key_set=true + api_key_suffix="xxxx"（明文后 4 位）。
-  // 用户编辑时如果不重新填 api_key，PUT 会用前端已有的值覆盖——所以前端表单要保留原始 api_key 字段供编辑。
-  api_key?: string | null;
+  // 重要：API 返回**绝不**包含明文 api_key（commit 加密后）。
+  // 后端只返回 api_key_set（布尔）+ api_key_suffix（明文后 4 位，仅供 UI 显示）。
+  // 因此 Provider 类型里**没有** api_key 字段——避免 TypeScript 误以为可以
+  // 直接读它、或意外 spread 到 PUT 请求体里把已有 key 清空。
+  // 编辑表单需要单独定义 ProviderForm 类型（见 Providers.tsx）。
   api_key_set?: boolean;
   api_key_suffix?: string | null;
   default_model: string | null;
   extra_json?: Record<string, unknown> | null;
+  needs_proxy: boolean;
+}
+
+/** Provider 的编辑表单类型（包含明文 api_key 字段）。
+ *  与 Provider 区分开：Provider 来自 API（无 api_key），ProviderForm 是用户
+ *  在表单里输入的（必含 api_key，方便校验「编辑时是否填了 key」）。
+ */
+export interface ProviderForm {
+  name: string;
+  provider_type: Provider["provider_type"];
+  api_base: string;
+  api_key: string;
+  default_model: string;
+  extra_json: Record<string, unknown> | null;
+  needs_proxy: boolean;
+}
+
+/** Provider 创建/更新请求体（对应后端 ProviderCreate schema）。
+ *  与 ProviderForm 的区别：默认值规范化（null vs 空字符串）。
+ */
+export interface ProviderCreate {
+  name: string;
+  provider_type: Provider["provider_type"];
+  api_base: string | null;
+  api_key: string;
+  default_model: string | null;
+  extra_json: Record<string, unknown> | null;
   needs_proxy: boolean;
 }
 
