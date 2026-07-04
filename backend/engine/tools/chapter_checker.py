@@ -95,7 +95,29 @@ def llm_consistency_check(chapter_text: str, known_facts: dict) -> tuple[dict, f
         max_tokens=800,
         temperature=0.1,
     )
-    result = parse_llm_json_response(resp, {"has_issues": False, "issues": [], "score": 8})
+    # 迭代 #48: 之前 fake-pass — parse 失败时返回 {"has_issues": False}。
+    # 后果：LLM 检测到一致性问题的 JSON 解析失败 → 报告"没问题" →
+    # 跨章节矛盾漏检，错误积累到后续章节。
+    # 修法：保守策略 — parse 失败时设 has_issues=True + _parse_failed=True
+    # 标记，issues 里加一条说明。这样下游 scan_all_chapters 会把这条
+    # "解析失败"算进 all_issues，下次重跑或人工 review。
+    result = parse_llm_json_response(resp, None)
+    if result is None:
+        import logging
+        logging.getLogger("novel_ai.engine.chapter_checker").warning(
+            "consistency_check JSON parse failed: resp[:200]=%r",
+            (resp or "")[:200],
+        )
+        result = {
+            "has_issues": True,
+            "issues": [{
+                "type": "解析失败",
+                "description": "LLM 一致性检查 JSON 解析失败（数据完整性优先，宁可误报）",
+                "severity": "medium",
+            }],
+            "score": 0,  # 0 分标记「LLM 调用失败」，区别于正常低分
+            "_parse_failed": True,
+        }
     return result, cost
 
 

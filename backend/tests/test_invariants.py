@@ -5881,3 +5881,51 @@ class TestSummarizerParseFailureNotSilent:
         from engine.agents import summarizer as summ_mod
         assert hasattr(summ_mod, "log"), \
             "summarizer 必须有 module-level log（用于 log.warning 而非 print）"
+
+
+# ───────────────────────────────────────────
+# OOO: fix #48 — chapter_checker llm_consistency_check fake-pass
+# ───────────────────────────────────────────
+class TestChapterCheckerNoFakePass:
+    """迭代 #48: chapter_checker.llm_consistency_check 之前 parse 失败时
+    返回 {"has_issues": False} — silent pass（同 compliance iter #41 /
+    orchestrator iter #28 fake-pass 同型问题）。
+
+    后果：LLM 检测到的跨章节矛盾（人物等级跳变 / 道具未获得 / 时间线错乱）
+    JSON 解析失败 → 报告「无问题」→ 错误积累到后续章节。
+    修法：parse 失败时 has_issues=True + issues 加 "解析失败" + _parse_failed=True
+    """
+    def test_consistency_check_parse_fail_not_silent_pass(self):
+        from engine.tools import chapter_checker as checker_mod
+        from unittest.mock import patch, MagicMock
+
+        mock_router = MagicMock()
+        mock_router.call.return_value = ("乱码不是 JSON", 0.001)
+        with patch.object(checker_mod, "get_active_router", return_value=mock_router):
+            result, cost = checker_mod.llm_consistency_check(
+                "章节正文", {"characters": {}, "protagonist_level": "感债者",
+                            "protagonist_points": 0, "inventory": [],
+                            "established_facts": []},
+            )
+        assert result["has_issues"] is True, \
+            f"JSON parse 失败时必须 has_issues=True（保守策略），实际 {result['has_issues']}"
+        assert result.get("_parse_failed") is True, \
+            f"parse 失败时必须 _parse_failed=True 标记，实际 {result}"
+        assert any(
+            "解析失败" in i.get("description", "") or "JSON" in i.get("description", "")
+            for i in result.get("issues", [])
+        ), f"parse 失败时 issues 必须包含解析失败条目，实际 {result.get('issues')}"
+
+    def test_consistency_check_source_no_fake_pass(self):
+        import inspect
+        from engine.tools import chapter_checker as checker_mod
+        src = inspect.getsource(checker_mod.llm_consistency_check)
+        # 去掉注释（避免「之前 fake-pass {"has_issues": False}」这种历史说明误匹配）
+        code_lines = [
+            l for l in src.split("\n") if l.strip() and not l.strip().startswith("#")
+        ]
+        code_src = "\n".join(code_lines)
+        assert '{"has_issues": False' not in code_src, \
+            "chapter_checker.llm_consistency_check 不能再用 has_issues=False 默认值（fake-pass）"
+        assert "parse_llm_json_response(resp, None)" in code_src, \
+            "chapter_checker.llm_consistency_check 必须用 None default 检测 parse 失败"
