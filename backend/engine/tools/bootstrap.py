@@ -207,8 +207,8 @@ def run_bootstrap(novel_id: str = "renqingzhai_v1", num_candidates: int = 3) -> 
     summary = {}
     for key, cands in all_candidates.items():
         summary[key] = [{k: v for k, v in c.items() if k != "text"} for c in cands]
-    with open(BOOTSTRAP_OUT, "w", encoding="utf-8") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
+    # 迭代 #49: 改用 atomic_write_json（避免 bootstrap_candidates.json 半写损坏）
+    atomic_write_json(BOOTSTRAP_OUT, summary)
 
     # Save each version + the highest-scored default
     for task in tasks:

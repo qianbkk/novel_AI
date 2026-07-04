@@ -16,6 +16,7 @@ from ..config.paths import (
 )
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
+from ..utils import atomic_write_json
 
 
 # Budget log lives alongside the orchestrator state
@@ -64,6 +65,8 @@ def generate_report(budget_limit: float = 500.0) -> dict:
     records = load_all_records()
     if not records:
         total, chapters_done, budget_limit = 0.0, 0, budget_limit
+        # 跟 records 路径一样，从 STATE_PATH 读 planned + budget_limit
+        total_planned = 157  # 默认值，跟 records 路径一致
         if os.path.exists(STATE_PATH_STR):
             try:
                 with open(STATE_PATH_STR, encoding="utf-8") as f:
@@ -71,6 +74,8 @@ def generate_report(budget_limit: float = 500.0) -> dict:
                 total = state.get("budget_used_usd", 0.0)
                 budget_limit = state.get("budget_limit_usd", budget_limit)
                 chapters_done = state.get("current_chapter", 0)
+                # 迭代 #50: 也读 planned，否则 print_report 会 KeyError
+                total_planned = state.get("total_chapters_planned", total_planned)
             except Exception:
                 pass
         return {
@@ -79,6 +84,8 @@ def generate_report(budget_limit: float = 500.0) -> dict:
             "budget_used_pct": total / budget_limit * 100 if budget_limit else 0,
             "chapters_done": chapters_done,
             "cost_per_chapter": total / chapters_done if chapters_done else 0,
+            # 迭代 #50: 加上 total_chapters_planned 键，否则 print_report KeyError
+            "total_chapters_planned": total_planned,
             "records_available": False,
         }
 
@@ -156,8 +163,12 @@ def print_report() -> None:
     print(f"{'═'*55}")
     print(f"  已用：${report['total_cost_usd']:.4f} / ${report['budget_limit_usd']:.0f}")
     print(f"  [{bar}] {pct:.1f}%")
-    print(f"  章节：{report['chapters_done']} / {report['total_chapters_planned']}")
-    print(f"  均价：${report['cost_per_chapter_avg']:.4f}/章（近20章：${report['cost_per_chapter_recent20']:.4f}）")
+    print(f"  章节：{report['chapters_done']} / {report.get('total_chapters_planned', '?')}")
+    # 迭代 #50: 空 records 路径返回 cost_per_chapter 不是 _avg，
+    # 且没有 cost_per_chapter_recent20 / projected_total_cost，用 .get()
+    # 拿默认值，避免 KeyError。
+    print(f"  均价：${report.get('cost_per_chapter_avg', report.get('cost_per_chapter', 0)):.4f}/章"
+          f"（近20章：${report.get('cost_per_chapter_recent20', 0):.4f}）")
     print(f"  预计总成本：${report.get('projected_total_cost', 0):.2f} "
           f"({'✅在预算内' if report.get('projected_within_budget') else '⚠️超预算'})")
     if report.get("by_agent"):
@@ -169,8 +180,8 @@ def print_report() -> None:
         print(f"\n  {lvl} {alert['msg']}")
     print(f"{'═'*55}\n")
     report_path = os.path.join(REPORT_DIR, "budget_report.json")
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
+    # 迭代 #49: 改用 atomic_write_json（避免 budget_report.json 半写损坏）
+    atomic_write_json(report_path, report)
 
 
 if __name__ == "__main__":

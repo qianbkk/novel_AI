@@ -14,7 +14,7 @@ from ..config.paths import CHAPTERS_DIR_STR, OUTPUT_DIR_STR, SETTING_PATH_STR
 from ..config.power_levels import POWER_LEVELS
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
-from ..utils import parse_llm_json_response
+from ..utils import parse_llm_json_response, atomic_write_json
 from ..memory.manager import get_l2
 
 
@@ -186,8 +186,10 @@ def scan_all_chapters(novel_id: str = "renqingzhai_v1") -> dict:
         "scan_cost_usd": total_cost,
     }
     report_path = os.path.join(REPORTS_DIR, "consistency_report.json")
-    with open(report_path, "w", encoding="utf-8") as f:
-        json.dump(report, f, ensure_ascii=False, indent=2)
+    # 迭代 #49: 之前 raw open(w)+json.dump，跟 iter #36/#39/#43 同型——
+    # 半写损坏 → consistency_report.json 损坏 → 下次扫到的所有 issue 历史丢失。
+    # 改用 atomic_write_json 复用 utils 公共工具。
+    atomic_write_json(report_path, report)
     print(f"\n{'─'*50}")
     print(f"📋 一致性扫描完成")
     print(f"   扫描章节：{len(chapter_files)}")

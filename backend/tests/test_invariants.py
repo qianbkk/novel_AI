@@ -5929,3 +5929,129 @@ class TestChapterCheckerNoFakePass:
             "chapter_checker.llm_consistency_check 不能再用 has_issues=False 默认值（fake-pass）"
         assert "parse_llm_json_response(resp, None)" in code_src, \
             "chapter_checker.llm_consistency_check 必须用 None default 检测 parse 失败"
+
+
+# ───────────────────────────────────────────
+# PPP: fix #49 — atomic_write_json 推广到剩余报告 JSON
+# ───────────────────────────────────────────
+class TestAtomicWriteJsonFinalPropagation:
+    """迭代 #49: 跟 #43 同型——把 atomic_write_json 一次性推广到所有剩余的
+    `with open(...w...); json.dump(...)` 写盘点：
+    - budget_manager.generate_report → budget_report.json
+    - calibrate_checker → calibration_result.json
+    - chapter_checker.scan_all_chapters → consistency_report.json
+    - bootstrap.run_bootstrap → bootstrap_candidates.json
+
+    锁死：源码不能再有 `open(...w...); json.dump(...)` 模式（half-write 损坏风险）。
+    """
+    def test_budget_report_uses_atomic_write(self):
+        import inspect, re
+        from engine.tools import budget_manager as bm_mod
+        src = inspect.getsource(bm_mod)
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        assert "atomic_write_json" in code_src, \
+            "budget_manager 必须用 atomic_write_json 写 budget_report.json"
+        bad_pattern = re.findall(
+            r"with\s+open\([^)]*[\"']w[\"'][^)]*\)\s+as\s+\w+:\s*json\.dump",
+            code_src,
+        )
+        assert not bad_pattern, \
+            f"budget_manager 不能再有 `open(...w...); json.dump(...)` 模式，实际 {bad_pattern}"
+
+    def test_calibrate_checker_uses_atomic_write(self):
+        import inspect
+        from engine.tools import calibrate_checker as cc_mod
+        src = inspect.getsource(cc_mod)
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        assert "atomic_write_json" in code_src, \
+            "calibrate_checker 必须用 atomic_write_json 写 calibration_result.json"
+
+    def test_chapter_checker_consistency_report_uses_atomic(self):
+        import inspect
+        from engine.tools import chapter_checker as chk_mod
+        src = inspect.getsource(chk_mod)
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        assert "atomic_write_json" in code_src, \
+            "chapter_checker 必须用 atomic_write_json 写 consistency_report.json"
+
+    def test_bootstrap_candidates_uses_atomic(self):
+        import inspect
+        from engine.tools import bootstrap as boot_mod
+        src = inspect.getsource(boot_mod)
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        assert "atomic_write_json" in code_src, \
+            "bootstrap 必须用 atomic_write_json 写 bootstrap_candidates.json"
+
+    def test_atomic_write_json_actually_used_at_runtime(self, tmp_path, monkeypatch):
+        """跑 budget_manager.print_report 实际写到 tmp，验证是 atomic。"""
+        from engine.tools import budget_manager as bm_mod
+        monkeypatch.setattr(bm_mod, "REPORT_DIR", str(tmp_path))
+        report_path = tmp_path / "budget_report.json"
+        bm_mod.print_report()
+        assert report_path.exists(), "budget_report.json 必须被写入"
+        assert not (tmp_path / "budget_report.json.tmp").exists(), \
+            "atomic write 完成后 .tmp 必须被替换走"
+        import json
+        with open(report_path, encoding="utf-8") as f:
+            data = json.load(f)
+        assert "total_cost_usd" in data
+
+
+# ───────────────────────────────────────────
+# QQQ: fix #50 — print_report KeyError when budget_log empty
+# ───────────────────────────────────────────
+class TestBudgetReportEmptyLogNoKeyError:
+    """迭代 #50: budget_manager.generate_report 在 budget_log 为空时返回的 dict
+    缺少 total_chapters_planned / cost_per_chapter_recent20 / projected_total_cost
+    等 key。print_report 直接 `report["total_chapters_planned"]` → KeyError。
+
+    后果：第一次启动 / 删 budget_log 后 → 用户跑 status/budget 命令 → 后端 500
+    + traceback 暴露给前端。
+
+    修法：generate_report 空 records 路径补 total_chapters_planned 字段；
+    print_report 用 .get() 兜底 cost_per_chapter_recent20 / projected_total_cost。
+    """
+    def test_generate_report_empty_log_has_total_chapters_planned(self, tmp_path, monkeypatch):
+        """budget_log 不存在时 generate_report 必须返回 total_chapters_planned 键。"""
+        from engine.tools import budget_manager as bm_mod
+        # budget_log 不存在 + state_path 不存在
+        monkeypatch.setattr(bm_mod, "BUDGET_LOG", str(tmp_path / "no_log.jsonl"))
+        monkeypatch.setattr(bm_mod, "STATE_PATH_STR", str(tmp_path / "no_state.json"))
+        report = bm_mod.generate_report()
+        assert "total_chapters_planned" in report, \
+            f"空 log 路径 generate_report 必须有 total_chapters_planned 键，实际 keys: {list(report.keys())}"
+
+    def test_print_report_no_keyerror_on_empty_log(self, tmp_path, monkeypatch, capsys):
+        """budget_log 为空时 print_report 不能抛 KeyError（之前必崩）。"""
+        from engine.tools import budget_manager as bm_mod
+        monkeypatch.setattr(bm_mod, "BUDGET_LOG", str(tmp_path / "no_log.jsonl"))
+        monkeypatch.setattr(bm_mod, "STATE_PATH_STR", str(tmp_path / "no_state.json"))
+        # 不应抛 KeyError
+        bm_mod.print_report()
+        captured = capsys.readouterr()
+        assert "💰 预算报告" in captured.out, "print_report 必须打报告内容"
+        assert "KeyError" not in captured.out, "print_report 不应打 KeyError"
+
+    def test_generate_report_loads_planned_from_state(self, tmp_path, monkeypatch):
+        """从 STATE_PATH 读 total_chapters_planned 时，空 log 也要拿到。"""
+        from engine.tools import budget_manager as bm_mod
+        # 写一个 mock state
+        state = {"total_chapters_planned": 200, "budget_limit_usd": 800,
+                 "budget_used_usd": 12.5, "current_chapter": 50}
+        state_path = tmp_path / "state.json"
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        monkeypatch.setattr(bm_mod, "BUDGET_LOG", str(tmp_path / "no_log.jsonl"))
+        monkeypatch.setattr(bm_mod, "STATE_PATH_STR", str(state_path))
+        report = bm_mod.generate_report()
+        assert report["total_chapters_planned"] == 200, \
+            f"必须从 STATE_PATH 读 total_chapters_planned=200，实际 {report['total_chapters_planned']}"
+        assert report["budget_limit_usd"] == 800
+        assert report["chapters_done"] == 50

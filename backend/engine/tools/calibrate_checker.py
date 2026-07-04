@@ -12,7 +12,7 @@ import sys
 from ..config.paths import OUTPUT_DIR_STR
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
-from ..utils import parse_llm_json_response
+from ..utils import parse_llm_json_response, atomic_write_json
 
 
 CALIB_DIR = os.path.join(OUTPUT_DIR_STR, "calibration")
@@ -175,8 +175,8 @@ def run_calibration() -> dict:
     print(f"  校准整体：{'✅ 通过' if calibration_result['passed'] else '❌ 需要调整'}")
 
     result_path = os.path.join(RESULT_DIR, "calibration_result.json")
-    with open(result_path, "w", encoding="utf-8") as f:
-        json.dump(calibration_result, f, ensure_ascii=False, indent=2)
+    # 迭代 #49: 改用 atomic_write_json
+    atomic_write_json(result_path, calibration_result)
     print(f"  结果已保存：{result_path}")
     return calibration_result
 
