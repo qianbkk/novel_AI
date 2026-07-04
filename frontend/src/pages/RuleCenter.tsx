@@ -3,6 +3,7 @@ import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Project, PostProcessResult, RuleConfig } from "../types";
 import { useReveal } from "../hooks/useReveal";
+import { useToast } from "../components/Toast";
 
 const STYLE_PRESETS = [
   { key: "webnovel", label: "网文轻快", sample: "节奏明快，爽点密集，对话口语化", chips: ["爽点", "金手指", "短句对白"] },
@@ -83,6 +84,7 @@ function playTick(audioCtxRef: React.MutableRefObject<AudioContext | null>, freq
 
 export default function RuleCenter() {
   const { projectId } = useParams<{ projectId: string }>();
+  const toast = useToast();
   const [project, setProject] = useState<Project | null>(null);
   const [style, setStyle] = useState<"webnovel" | "literary" | "wuxia">("webnovel");
   const [taboos, setTaboos] = useState<string[]>([]);
@@ -105,7 +107,11 @@ export default function RuleCenter() {
   // ── 初始加载：先读远端，再回退到 localStorage，再回退到默认 ──
   useEffect(() => {
     if (!projectId) return;
-    api.getProject(projectId).then(setProject).catch(() => {});
+    api.getProject(projectId).then(setProject).catch((e) => {
+      // 之前 .catch(() => {}) — project_id 不存在 / 权限问题时 RuleCenter
+      // 显示空白页无任何线索。改为 toast.error 留信号。
+      toast.error("加载项目失败", String(e));
+    });
     api.getRules(projectId)
       .then((cfg: RuleConfig) => {
         setStyle(cfg.style);
