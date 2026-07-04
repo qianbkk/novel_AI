@@ -171,6 +171,10 @@ def main() -> int:
             BACKEND / "data" / "engine" / "output" / "chapters",
         ]
         chapters_dirs = [d for d in chapters_dirs if d.exists()]
+        # 迭代 #55: 之前 `if False` 死代码（db 已关），initial_chapter_count
+        # 永远是 0 → 监控无法报告「跑前已有几章」。现在在 db 还开着时查。
+        initial_chapter_count = db.query(Chapter).filter_by(
+            project_id=args.pid).count()
     finally:
         db.close()
 
@@ -193,8 +197,7 @@ def main() -> int:
     initial_state = json.loads(state_path.read_text(encoding="utf-8"))
     collector.initial_error_log_len = len(initial_state.get("error_log", []))
     collector.initial_budget_usd = float(initial_state.get("budget_used_usd", 0))
-    collector.initial_chapter_count = db.query(Chapter).filter_by(
-        project_id=args.pid).count() if False else 0  # db 已关
+    collector.initial_chapter_count = initial_chapter_count
     collector.error_log_seen = set(initial_state.get("error_log", []))
     collector.record("start",
                      error_log_len=collector.initial_error_log_len,
@@ -279,8 +282,10 @@ def main() -> int:
     finally:
         report = collector.report()
         report_path = output_path.with_suffix(".report.json")
-        report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2),
-                                encoding="utf-8")
+        # 迭代 #55: 改用 atomic_write_json（跟 iter #43/#49 同型 — 报告
+        # JSON 半写损坏 → 用户看到的「跑完报告」是损坏的）
+        from engine.utils import atomic_write_json
+        atomic_write_json(str(report_path), report)
         print(f"\n{'='*60}")
         print(f"事件汇总: {json.dumps(report['summary'], ensure_ascii=False, indent=2)}")
         print(f"new_errors 样本: {json.dumps(report['new_errors_sample'], ensure_ascii=False, indent=2)}")

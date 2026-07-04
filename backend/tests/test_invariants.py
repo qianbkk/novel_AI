@@ -6270,3 +6270,44 @@ class TestDrainStdoutExceptionHandling:
         src = inspect.getsource(bridge_mod)
         assert "import traceback" in src, \
             "app/api/bridge.py 必须 import traceback（#54 用 traceback.format_exc）"
+
+
+# ───────────────────────────────────────────
+# VVV: fix #55 — monitor_run.py `if False` dead code + atomic write
+# ───────────────────────────────────────────
+class TestMonitorRunNoDeadCode:
+    """迭代 #55: scripts/monitor_run.py 之前 initial_chapter_count
+    永远返回 0（`if False else 0`）—— db 关了之后查 db 的死代码。
+    后果：监控脚本拿不到「跑前已有几章」，报告不准。
+    修法：把 db 查询移到 db 还开着时；atomic_write_json 写报告。
+    """
+    def test_monitor_run_no_if_false(self):
+        """源码不能再有 `if False else` 死代码。"""
+        import inspect
+        from scripts import monitor_run as mr_mod
+        src = inspect.getsource(mr_mod)
+        # 去掉注释（避免「之前 `if False`」这种历史说明误匹配）
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        assert "if False" not in code_src, \
+            "monitor_run.py 不能再有 `if False` 死代码"
+
+    def test_monitor_run_uses_atomic_write_for_report(self):
+        import inspect
+        from scripts import monitor_run as mr_mod
+        src = inspect.getsource(mr_mod)
+        assert "atomic_write_json" in src, \
+            "monitor_run.py 必须用 atomic_write_json 写 report（iter #55）"
+        # 不能 raw write_text(json.dumps(...))
+        assert ".write_text(json.dumps(" not in src, \
+            "monitor_run.py 不能再 raw write_text(json.dumps(...))"
+
+    def test_monitor_run_imports_engine_utils(self):
+        """monitor_run.py 必须能 import engine.utils（已自动 by BACKEND path）。"""
+        import inspect
+        from scripts import monitor_run as mr_mod
+        # 验证 atomic_write_json 是从 engine.utils 导入
+        src = inspect.getsource(mr_mod)
+        assert "from engine.utils import atomic_write_json" in src, \
+            "monitor_run.py 必须 from engine.utils import atomic_write_json"
