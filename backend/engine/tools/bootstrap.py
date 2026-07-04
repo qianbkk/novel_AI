@@ -15,6 +15,7 @@ from ..config.paths import (
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
 from ..memory.manager import empty_l2, save_l2
+from ..utils import atomic_write_json
 
 
 CHAPTERS_DIR = CHAPTERS_DIR_STR
@@ -230,8 +231,9 @@ def run_bootstrap(novel_id: str = "renqingzhai_v1", num_candidates: int = 3) -> 
             "bootstrap": True,
             "all_scores": {c["version"]: c["score"] for c in cands},
         }
-        with open(os.path.join(CHAPTERS_DIR, f"ch_{ch:04d}_meta.json"), "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
+        atomic_write_json(
+            os.path.join(CHAPTERS_DIR, f"ch_{ch:04d}_meta.json"), meta,
+        )
 
     print(f"\n{'='*60}")
     print(f"✅ Bootstrap完成！总成本：${total_cost:.4f}")
@@ -261,8 +263,7 @@ def select_version(chapter_num: int, version: str,
             meta = json.load(f)
         meta["selected_version"] = version
         meta["manually_selected"] = True
-        with open(meta_path, "w", encoding="utf-8") as f:
-            json.dump(meta, f, ensure_ascii=False, indent=2)
+        atomic_write_json(meta_path, meta)
     if chapter_num == 1:
         style_path = os.path.join(STYLE_DIR, "anchor_ch01.txt")
         with open(style_path, "w", encoding="utf-8") as f:

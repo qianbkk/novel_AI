@@ -4,6 +4,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# 迭代 #43: orchestrator_state.json（apply_review 等写入）之前直接 write_text
+# 半写损坏 → 下次 pull_review / apply_review 失败。改用 atomic_write_json。
+from engine.utils import atomic_write_json
+
 VALID_REVIEW_ACTIONS = {"accept", "reject", "edit"}
 
 
@@ -142,7 +146,8 @@ def apply_review(
         "reviewed_at": datetime.now(timezone.utc).isoformat(),
     })
     state["last_updated"] = datetime.now(timezone.utc).isoformat()
-    state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    # 迭代 #43: 改用 atomic_write_json
+    atomic_write_json(str(state_path), state)
     return {
         "available": True,
         "action": action,

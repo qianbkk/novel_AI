@@ -36,6 +36,7 @@ from .agents.outline    import (
     run_outline, run_outline_card, run_outline_talk,
 )
 from .memory.manager import get_l2
+from .utils import atomic_write_json
 
 # ── Paths (relative to backend/) ──
 BACKEND_DIR = Path(__file__).resolve().parent.parent
@@ -92,8 +93,12 @@ def save_chapter(novel_id: str, ch_num: int, text: str, meta: dict) -> None:
     CHAPTERS_DIR.mkdir(parents=True, exist_ok=True)
     with open(CHAPTERS_DIR / f"ch_{ch_num:04d}.txt", "w", encoding="utf-8") as f:
         f.write(text)
-    with open(CHAPTERS_DIR / f"ch_{ch_num:04d}_meta.json", "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+    # 迭代 #43: ch_NNNN_meta.json 之前直接 open(w) + json.dump，半写损坏后
+    # 该章 meta 全丢（score / word_count / selected_version 等），下次 save
+    # 覆盖空数据。改用 atomic_write_json 复用 utils 公共工具。
+    atomic_write_json(
+        str(CHAPTERS_DIR / f"ch_{ch_num:04d}_meta.json"), meta,
+    )
 
 
 def log(msg: str, state: OrchestratorState) -> None:
@@ -215,8 +220,10 @@ def node_load_arc_tasks(state: OrchestratorState) -> OrchestratorState:
 
     # Save task sheet
     out_path = OUTPUT_DIR / f"arc_{arc.get('arc_id', arc_idx+1)}_tasks.json"
-    with open(out_path, "w", encoding="utf-8") as f:
-        json.dump(tasks, f, ensure_ascii=False, indent=2)
+    # 迭代 #43: arc_N_tasks.json 是 chapter_task_queue 的磁盘镜像，
+    # 半写损坏 → 下次 run 拿到 corrupted JSON → 整次 run 启动失败。
+    # 改用 atomic_write_json（跟 save_state 同模式）。
+    atomic_write_json(str(out_path), tasks)
 
     if arc_idx > 0:
         state["human_pending"] = state.get("human_pending", []) + [{

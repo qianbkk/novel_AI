@@ -6,6 +6,34 @@
 
 ## [Unreleased] — 2026-07-04
 
+### Bug Fix（迭代 #43 — 内部审计）
+- **`fix(engine): atomic_write_json 全局推广（5 个 critical 写盘点）**
+  - 之前 `engine/state.py:save_state` 已 atomic、`engine/memory/manager.py:save_l2/save_l5`
+    跟 `engine/agents/planner.py` 已 atomic，但 **其他 critical 写盘点仍是 raw
+    open(w)+json.dump**，同样的「半写损坏→静默覆盖→数据丢失」风险：
+    1. `engine/orchestrator.save_chapter` → `ch_NNNN_meta.json` (chapter meta)
+    2. `engine/orchestrator.node_load_arc_tasks` → `arc_N_tasks.json` (task sheet，
+       是 chapter_task_queue 的磁盘镜像，损坏 → 整次 run 启动失败)
+    3. `app/bridge/setting_sync.push_concept` → `novel_config.json` (用户 concept)
+    4. `app/bridge/reports.apply_review` → `orchestrator_state.json` (bridge state)
+    5. `engine/tools/bootstrap` → `ch_NNNN_meta.json` (x2)
+  - 修法：5 个点全部改用 `engine.utils.atomic_write_json`（iter #39 公共工具），
+    一次性扫完所有 critical JSON 写入点。
+  - 这次审计的核心教训（独立审查 §3.3）：发现某类 bug 时值得**顺手搜一遍
+    代码库里其他同构调用点**，一次性修完，而不是分好几轮迭代才补齐。
+  - 加 7 个 invariant test 锁死（6 个 source-level + 1 runtime）。
+
+### Tests（持续加固）
+- **`fix(security): NOVEL_PRODUCTION MASTER_KEY 强制检查测试补齐**
+  - `app/main.py:_check_master_key_in_production`（独立审查 §3.2 提到的高危点）
+    **代码已存在 + 已在 lifespan 调用**，但缺测试。本轮补 5 个 invariant test：
+    - 源码必须有 NOVEL_PRODUCTION env 检查
+    - 必须在 lifespan 调用（启动时 fail-fast）
+    - 必须在 run_migrations **之前**调用（否则先读到 api_key_encrypted
+      → decrypt 失败）
+    - production + no MASTER_KEY → RuntimeError
+    - dev mode + no MASTER_KEY → 不抛（warn 但继续）
+
 ### Bug Fix（迭代 #42 — 内部审计）
 - **`fix(engine): init_arc setting_package.json 损坏返回清晰错误**
   - `engine/agents/init_arc.py:21` 之前直接 `json.loads(raw read)`——

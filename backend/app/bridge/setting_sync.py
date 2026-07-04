@@ -22,6 +22,10 @@ from ..models import (
     Currency, MapNode, Foreshadowing, RuleConfig, EntityRelation,
 )
 from ..logging_setup import get_logger
+# 迭代 #43: novel_config.json 之前直接 .write_text(json.dumps(...)) —
+# 半写损坏 → 下次 push concept 失败 / 整个 worldbuild 流卡住。
+# 改用 engine.utils.atomic_write_json 统一 atomic write 模式。
+from engine.utils import atomic_write_json
 
 log = get_logger("novel_ai.setting_sync")
 
@@ -77,8 +81,10 @@ async def push_setting_concept(project_id: str, novel_ai_dir: str, db: Session) 
     }
     config_dir = Path(novel_ai_dir, "config")
     config_dir.mkdir(parents=True, exist_ok=True)
-    Path(config_dir, "novel_config.json").write_text(
-        json.dumps(novel_config, ensure_ascii=False, indent=2), encoding="utf-8"
+    # 迭代 #43: 改用 atomic_write_json，避免半写损坏
+    atomic_write_json(
+        str(Path(config_dir, "novel_config.json")),
+        novel_config,
     )
     project.novel_ai_status = "concept_pushed"
     db.commit()

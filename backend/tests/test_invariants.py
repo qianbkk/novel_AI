@@ -5419,4 +5419,183 @@ class TestInitArcJsonDecodeHandling:
 
         with patch.object(init_mod, "SETTING_PATH_STR", str(corrupt)):
             with pytest.raises(RuntimeError, match="setting_package.json 损坏"):
-                init_mod.build_state_from_setting("test_proj")
+                init_mod.build_state_from_setting("test_proj")# ───────────────────────────────────────────
+# III: atomic_write_json 全局推广（迭代 #43）
+# ───────────────────────────────────────────
+class TestAtomicWriteJsonPropagated:
+    """迭代 #43: 之前发现 save_l2/save_l5 + planner 用了 atomic_write_json，
+    但 orchestrator / setting_sync / reports / bootstrap 还在用 raw open(w) +
+    json.dump。一次性全部修完，避免下一个项目里再发现「某个写盘点是 raw」。
+
+    修复点（全部 critical，非可再生数据）：
+    - engine/orchestrator.save_chapter: ch_NNNN_meta.json
+    - engine/orchestrator.load_arc_tasks: arc_N_tasks.json
+    - app/bridge/setting_sync.push_concept: novel_config.json
+    - app/bridge/reports.apply_review: orchestrator_state.json
+    - engine/tools/bootstrap: ch_NNNN_meta.json (x2)
+    """
+    def test_orchestrator_save_chapter_uses_atomic(self):
+        import inspect, re
+        from engine import orchestrator as orch_mod
+        src = inspect.getsource(orch_mod.save_chapter)
+        assert "atomic_write_json" in src, \
+            "orchestrator.save_chapter 必须用 atomic_write_json（之前 raw open(w) 半写损坏）"
+        # meta.json 写盘点必须用 atomic；text 写盘（plain string）可用 raw open
+        json_dump_with_open = re.findall(
+            r"with\s+open\([^)]*[\"']w[\"'][^)]*\)\s+as\s+\w+:\s*json\.dump",
+            src,
+        )
+        assert not json_dump_with_open, (
+            "orchestrator.save_chapter 不能有 `open(...w...); json.dump(...)` 模式（半写损坏）"
+            f"实际命中: {json_dump_with_open}"
+        )
+
+    def test_orchestrator_task_sheet_uses_atomic(self):
+        import inspect
+        from engine import orchestrator as orch_mod
+        src = inspect.getsource(orch_mod)
+        assert "arc_" in src and "tasks.json" in src, \
+            "orchestrator 必须写 arc_N_tasks.json"
+        assert "atomic_write_json" in src, \
+            "orchestrator 必须 import + 用 atomic_write_json 写 arc_N_tasks.json"
+
+    def test_setting_sync_push_concept_uses_atomic(self):
+        import inspect
+        from app.bridge import setting_sync as sync_mod
+        # 去掉 docstring（避免 `Path(`, `write_text` 等关键词在 docstring 误匹配）
+        src = inspect.getsource(sync_mod)
+        code_lines = []
+        in_docstring = False
+        for line in src.split("\n"):
+            stripped = line.strip()
+            if '"""' in stripped or "'''" in stripped:
+                count = stripped.count('"""') + stripped.count("'''")
+                if count == 1:
+                    in_docstring = not in_docstring
+                    continue
+                elif count == 2:
+                    continue
+                else:
+                    in_docstring = not in_docstring
+                    continue
+            if in_docstring or stripped.startswith("#"):
+                continue
+            code_lines.append(line)
+        code_src = "\n".join(code_lines)
+        assert "atomic_write_json" in code_src, \
+            "setting_sync 必须 import + 用 atomic_write_json 写 novel_config.json"
+        # 不能 raw write_text + json.dumps 组合
+        assert ".write_text(json.dumps" not in code_src, \
+            "setting_sync 不能 raw write_text(json.dumps(...))（半写损坏风险）"
+
+    def test_reports_apply_review_uses_atomic(self):
+        import inspect
+        from app.bridge import reports as reports_mod
+        src = inspect.getsource(reports_mod)
+        assert "atomic_write_json" in src, \
+            "reports 必须 import + 用 atomic_write_json 写 orchestrator_state.json"
+        # 不能 raw write_text + json.dumps
+        assert 'state_path.write_text(json.dumps' not in src, \
+            "reports 不能 raw write_text(json.dumps(...))（半写损坏风险）"
+
+    def test_bootstrap_ch_meta_uses_atomic(self):
+        import inspect
+        from engine.tools import bootstrap as bootstrap_mod
+        src = inspect.getsource(bootstrap_mod)
+        assert "atomic_write_json" in src, \
+            "bootstrap 必须 import + 用 atomic_write_json 写 ch_NNNN_meta.json"
+
+    def test_orchestrator_atomic_write_roundtrip(self, tmp_path, monkeypatch):
+        """实际跑 save_chapter 验证写入是 atomic 的。"""
+        from engine import orchestrator as orch_mod
+
+        # 切到临时 CHAPTERS_DIR
+        monkeypatch.setattr(orch_mod, "CHAPTERS_DIR", tmp_path)
+
+        orch_mod.save_chapter("test", 42, "正文内容", {"score": 8.5, "chapter_role": "爽点"})
+
+        target = tmp_path / "ch_0042_meta.json"
+        assert target.exists(), "save_chapter 必须写 meta 文件"
+        # 不应残留 .tmp
+        assert not (tmp_path / "ch_0042_meta.json.tmp").exists(), \
+            "atomic write 完成后 .tmp 必须被替换走"
+        # 数据要能 load 回来
+        import json
+        with open(target, encoding="utf-8") as f:
+            meta = json.load(f)
+        assert meta["score"] == 8.5
+        assert meta["chapter_role"] == "爽点"
+
+
+# ───────────────────────────────────────────
+# JJJ: NOVEL_PRODUCTION MASTER_KEY 强制检查（之前审查指出的高危点）
+# ───────────────────────────────────────────
+class TestNovelProductionEnforcement:
+    """独立审查 §3.2 提到：生产环境忘设 MASTER_KEY → 临时 key 加密 →
+    重启后无法解密 → 数据永久损坏。
+
+    修法（app/main.py._check_master_key_in_production）：
+    - NOVEL_PRODUCTION=1 + MASTER_KEY 未设 → 启动时 fail-fast（RuntimeError）
+    - NOVEL_PRODUCTION=1 + MASTER_KEY 已设 → 继续运行
+    - dev 模式（默认）→ 保持原行为（warn 但继续）
+
+    本测试锁死：源码必须有 fail-fast 检查 + env 开关语义正确。
+    """
+    def test_source_has_production_check(self):
+        import inspect
+        from app import main as main_mod
+        src = inspect.getsource(main_mod._check_master_key_in_production)
+        assert "NOVEL_PRODUCTION" in src, \
+            "main._check_master_key_in_production 必须读 NOVEL_PRODUCTION env"
+        assert "MASTER_KEY" in src, \
+            "main._check_master_key_in_production 必须检查 MASTER_KEY"
+
+    def test_production_check_wired_into_lifespan(self):
+        """_check_master_key_in_production 必须在 lifespan 里被调用（启动时 fail-fast）。"""
+        import inspect
+        from app import main as main_mod
+        lifespan_src = inspect.getsource(main_mod.lifespan)
+        assert "_check_master_key_in_production" in lifespan_src, \
+            "main.lifespan 必须调用 _check_master_key_in_production（启动时 fail-fast）"
+
+    def test_production_check_runs_before_migrations(self):
+        """_check_master_key_in_production 必须在 run_migrations 之前调用——
+        否则 MASTER_KEY 缺失 + 已存在的 api_key_encrypted 会先被读到 → decrypt 失败。"""
+        import inspect
+        from app import main as main_mod
+        lifespan_src = inspect.getsource(main_mod.lifespan)
+        check_pos = lifespan_src.find("_check_master_key_in_production")
+        migration_pos = lifespan_src.find("run_migrations")
+        assert check_pos != -1, "lifespan 必须调 _check_master_key_in_production"
+        assert migration_pos != -1, "lifespan 必须调 run_migrations"
+        assert check_pos < migration_pos, \
+            f"_check_master_key_in_production (pos={check_pos}) 必须在 run_migrations (pos={migration_pos}) 之前调用"
+
+    def test_production_no_master_key_fails(self, monkeypatch):
+        """NOVEL_PRODUCTION=1 + MASTER_KEY 未设 → 必须抛 RuntimeError。"""
+        monkeypatch.setenv("NOVEL_PRODUCTION", "1")
+        monkeypatch.delenv("MASTER_KEY", raising=False)
+        from app import security as sec_mod
+        if hasattr(sec_mod.get_master_key, "cache_clear"):
+            sec_mod.get_master_key.cache_clear()
+        from app import main as main_mod
+        import pytest
+        with pytest.raises(RuntimeError, match="MASTER_KEY"):
+            main_mod._check_master_key_in_production()
+
+    def test_dev_mode_no_master_key_passes(self, monkeypatch):
+        """dev 模式（无 NOVEL_PRODUCTION）+ MASTER_KEY 未设 → 不抛（warn 但继续）。"""
+        monkeypatch.delenv("NOVEL_PRODUCTION", raising=False)
+        monkeypatch.delenv("MASTER_KEY", raising=False)
+        from app import security as sec_mod
+        if hasattr(sec_mod.get_master_key, "cache_clear"):
+            sec_mod.get_master_key.cache_clear()
+        from app import main as main_mod
+        # 不应抛
+        try:
+            main_mod._check_master_key_in_production()
+        except RuntimeError as e:
+            if "MASTER_KEY" in str(e) or "PRODUCTION" in str(e):
+                import pytest
+                pytest.fail(f"dev 模式不应抛 RuntimeError：{e}")
+            raise
