@@ -172,9 +172,12 @@ def _llm_call_for_postprocess(tool: str, style: Optional[str],
         raise HTTPException(400, f"unknown tool: {tool}")
 
     # Lazy import to avoid circular deps / heavy startup cost
+    # 迭代 #37: 之前 except Exception 返回占位文本（"[tool] LLM 调用失败..."）
+    # 是 fake-pass 同型问题——前端收到占位 + cost=0，误以为"逻辑评估完成"
+    # 实际 LLM 失败。改为 raise HTTPException(503) 让用户看到真实错误。
+    from engine.llm_router import get_active_router
+    from engine.llm.router import LLMRouter
     try:
-        from engine.llm_router import get_active_router
-        from engine.llm.router import LLMRouter
         router = get_active_router()
         if router is None:
             router = LLMRouter()
@@ -187,13 +190,14 @@ def _llm_call_for_postprocess(tool: str, style: Optional[str],
         )
         return text, cost
     except Exception as exc:
-        # 真 LLM 不可用时返回占位：前端仍能看到结构化空壳
-        return (
-            f"[{tool}] LLM 调用失败：{exc}\n"
-            f"目标文风：{style_hint}\n"
-            f"请检查后端 LLM 路由（providers / role-assignments）配置。",
-            0.0,
-        )
+        # 真实 LLM 失败 → 直接抛 503（service unavailable）+ 错误信息
+        # 让用户 / 前端能区分"成功完成"和"LLM 不可用"
+        raise HTTPException(
+            status_code=503,
+            detail=f"LLM 调用失败（{type(exc).__name__}）：{exc}。"
+                   f"请检查后端 providers / role-assignments 配置，或"
+                   f"设置 NOVEL_ENGINE_MOCK=1 走 mock provider。",
+        ) from exc
 
 
 def _parse_findings(raw: str) -> list[dict]:

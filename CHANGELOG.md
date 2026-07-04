@@ -6,6 +6,17 @@
 
 ## [Unreleased] — 2026-07-04
 
+### Bug Fix（迭代 #37 — 内部审计）
+- **`fix(api): rules post-process LLM 失败不能再 fake-pass**
+  - `app/api/rules.py:_llm_call_for_postprocess` 之前 `except Exception`
+    返回占位文本（"[tool] LLM 调用失败..."）+ cost=0。
+  - 后果：前端收到占位 + cost=0，误以为"逻辑评估/毒舌查漏/去 AI 痕迹 完成"
+    实际 LLM 失败。用户拿到的是空壳，没有真评估。
+  - 修法：改为 `raise HTTPException(503, "LLM 调用失败...")`，
+    让用户/前端能区分"成功完成"和"LLM 不可用"。
+  - 加 2 个 invariant test 锁死：mock LLM 抛异常 → 必须 503；
+    源码必须 raise HTTPException 不能 return 占位。
+
 ### Bug Fix（迭代 #36 — 内部审计）
 - **`fix(engine): save_l2 / save_l5 atomic write + 损坏文件备份**
   - `engine/memory/manager.py` save_l2 / save_l5 之前直接 `open(path, "w")`
@@ -148,7 +159,7 @@
   TestLoadStateRobustness / TestDocCodeConsistency /
   TestSecurityConstants / TestProviderTableSchema /
   TestHumanEscalationNotEndRun / 等
-- 总 invariant suite：**224 passed / 0 warnings**
+- 总 invariant suite：**226 passed / 0 warnings**
 
 ## [Unreleased] — 2026-07-02
 

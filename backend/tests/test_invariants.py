@@ -4352,6 +4352,128 @@ class TestMemorySaveAtomic:
 
 
 # ───────────────────────────────────────────
+# PPP: rules post-process LLM 失败不能 fake-pass（迭代 #37）
+# ───────────────────────────────────────────
+class TestPostProcessLLMFailure:
+    """迭代 #37: rules.py _llm_call_for_postprocess 之前 except Exception
+    返回占位文本（"[tool] LLM 调用失败..."）+ cost=0。
+
+    这是 fake-pass 同型问题：前端收到占位 + cost=0，误以为"逻辑评估完成"
+    实际 LLM 失败。改 raise HTTPException(503) 让用户看到真实错误。
+
+    本测试锁死：mock LLM 抛异常 → post_process 必须 raise 503，
+    不是返回占位文本。
+    """
+    def test_post_process_raises_503_on_llm_failure(self, monkeypatch):
+        """LLM 抛异常 → post_process 必须 raise HTTPException 503。"""
+        from fastapi.testclient import TestClient
+        from app.main import app
+        from app.database import SessionLocal
+        from app.models import Project, Chapter, RuleConfig
+        import secrets
+
+        project_id = f"test-postproc-{secrets.token_hex(8)}"
+        db = SessionLocal()
+        try:
+            # 准备 project + chapter + rule config
+            project = Project(
+                id=project_id, title="test", genre="玄幻", status="ready",
+                config_json={},
+            )
+            db.add(project)
+            chapter = Chapter(
+                project_id=project_id, chapter_no=1, title="ch1",
+                content="林尘盘膝坐下，闭目调息。\n",
+            )
+            db.add(chapter)
+            db.commit()
+        finally:
+            db.close()
+
+        # mock LLM router 抛异常
+        from app.api import rules as rules_mod
+        from engine.llm import router as router_mod
+
+        class FakeRouter:
+            def call(self, *a, **kw):
+                raise ConnectionError("simulated LLM 503")
+
+        # monkeypatch get_active_router 返回 FakeRouter
+        from engine import llm_router
+        monkeypatch.setattr(llm_router, "get_active_router", lambda: FakeRouter())
+        monkeypatch.setattr(router_mod, "LLMRouter", lambda *a, **kw: FakeRouter())
+
+        client = TestClient(app)
+        try:
+            r = client.post(
+                f"/projects/{project_id}/rules/post-process",
+                json={"tool": "logic"},
+            )
+            # 必须 503（之前是 200 + 占位文本）
+            assert r.status_code == 503, (
+                f"LLM 失败时应返回 503，实际 {r.status_code}：{r.text}"
+            )
+            # detail 必须含 "LLM 调用失败" 关键词
+            body = r.json()
+            assert "LLM 调用失败" in str(body), (
+                f"503 响应 detail 应含 'LLM 调用失败'，实际：{body}"
+            )
+        finally:
+            db = SessionLocal()
+            try:
+                from app.models import Chapter
+                db.query(Chapter).filter_by(project_id=project_id).delete()
+                db.query(RuleConfig).filter_by(project_id=project_id).delete()
+                db.query(Project).filter_by(id=project_id).delete()
+                db.commit()
+            except Exception:
+                pass
+            db.close()
+
+    def test_post_process_source_uses_503_not_fake_pass(self):
+        """源码级锁死：post-process LLM 失败时必须 raise HTTPException 不是 return 占位。"""
+        from pathlib import Path
+        rules_py = Path(__file__).resolve().parents[1] / "app" / "api" / "rules.py"
+        content = rules_py.read_text(encoding="utf-8")
+        # 找 _llm_call_for_postprocess 函数体
+        lines = content.splitlines()
+        body_start = None
+        for i, line in enumerate(lines):
+            if line.startswith("def _llm_call_for_postprocess"):
+                body_start = i + 1
+                break
+        assert body_start is not None, "找不到 _llm_call_for_postprocess"
+        body_lines = []
+        for line in lines[body_start:]:
+            if line.startswith("def ") or line.startswith("class "):
+                break
+            body_lines.append(line)
+        body = "\n".join(body_lines)
+        # 关键：必须有 raise HTTPException（不是 return 占位）
+        assert "raise HTTPException" in body, (
+            "_llm_call_for_postprocess 必须 raise HTTPException（不是 return 占位）"
+        )
+        # 关键：不能有"return 失败占位"模式
+        assert "LLM 调用失败" in body, (
+            "需要 raise HTTPException 503 with 'LLM 调用失败' detail"
+        )
+        # 反向：真代码行不能有 return 一个虚假成功占位
+        code_lines = [
+            line for line in body.splitlines()
+            if not line.strip().startswith("#")
+        ]
+        code_body = "\n".join(code_lines)
+        # 检查不能有"LLM 调用失败"字面量被作为 return 内容
+        # （出现在 raise detail 里是 OK 的）
+        return_lines = [l for l in code_body.splitlines() if "return" in l and "LLM" in l]
+        # 允许 raise ... "LLM 调用失败"（含 LLM 字面量）但不应该是 return
+        for line in return_lines:
+            assert line.strip().startswith("raise"), (
+                f"不能 return 含 LLM 字面量的占位文本（应该是 raise）：{line!r}"
+            )
+
+
+# ───────────────────────────────────────────
 # WW: rate_limit X-RateLimit-Remaining 准确性（最后 #18 迭代）
 # ───────────────────────────────────────────
 class TestRateLimitHeaderAccuracy:
