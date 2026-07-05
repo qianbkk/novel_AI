@@ -6,6 +6,37 @@
 
 ## [Unreleased] — 2026-07-04
 
+### Bug Fix（迭代 #59 — 内部审计）
+- **`fix(engine): human_review.py atomic write + load_state 不再 silent fallback**
+  - human_review.py save_state 用 raw open(w) 写 orchestrator_state.json
+  - load_state 损坏时 `except Exception: pass` → 返回 `{}` →
+    人工审核看到空 state 却不知道文件坏了 → 假审核
+  - 修法：atomic_write_json + 损坏时 backup 到 .corrupted.{ts} 后 raise
+    （跟 iter #36/#53 同型）
+
+### Bug Fix（迭代 #58 — 内部审计）
+- **`fix(engine): orchestrator.run_tracker 异常不再静默**
+  - orchestrator.node_save_and_track 之前 `except Exception` 静默兜底
+    `updated_mem=memory, cost=0` —— tracker LLM 失败时没信号
+  - 修法：标 `task._tracker_failed=True` + `error_log` 增量
+
+### Bug Fix（迭代 #57 — scripts/ 原子写扫描）
+- **`fix(scripts): rewrite_length.py meta.json 改用 atomic_write_json**
+  - 跟 iter #43/#49/#55/#56 同型 — 搜索所有 `with open(...w...); json.dump(...)`
+    一次性扫完
+
+### Bug Fix（迭代 #56 — scripts/ 原子写扫描）
+- **`fix(scripts): export_openapi.py 改用 atomic_write_json**
+  - 之前 `out_path.write_text(json.dumps(spec, ...))` 非 atomic
+  - openapi.json 是 CI 校验漂移的基准，半写损坏会掩盖真实漂移
+
+### Bug Fix（迭代 #55 — scripts/ 死代码 + 原子写）
+- **`fix(scripts): monitor_run.py `if False` 死代码 + 报告 atomic_write**
+  - line 197: `db.query(...).count() if False else 0` —— db 已关的死代码，
+    initial_chapter_count 永远 0
+  - line 282: report_path.write_text(json.dumps(...)) 非 atomic
+  - 修法：把 db 查询移到 db 还开着时；atomic_write_json 写报告
+
 ### Bug Fix（迭代 #54 — 内部审计）
 - **`fix(api): _drain_stdout daemon 线程异常不再静默死**
   - `_drain_stdout` 是 daemon 线程，之前 try/finally 但没有 except
