@@ -128,10 +128,18 @@ def _get_proxied_client(provider: str, base_url: str, timeout: int = 120) -> htt
                 if host:
                     client.mount(f"https://{host}", httpx.Client(proxy=proxy_url, timeout=timeout))
                     client.mount(f"http://{host}", httpx.Client(proxy=proxy_url, timeout=timeout))
-            except Exception:
-                pass
+            except Exception as e:
+                # 迭代 #76: 之前 bare except + pass，proxy 配置失败时
+                # caller 完全看不到信号——以为是网络问题实际是代码 bug。
+                # 修法：log.warning 带 base_url + exception type 让运维快速定位。
+                log.warning(
+                    "_get_proxied_client: mount proxy 失败 for provider=%s base_url=%r (%s: %s); "
+                    "proxied client 仍可用，但 proxy mounts 缺失——回退到直连",
+                    provider, base_url, type(e).__name__, e,
+                )
+                # 仍然继续 — client 在没 proxy 情况下能工作；log 让运维知道
             _proxy_mounts[key] = client
-        return _proxy_mounts[key]
+        return _proxy_mounts[key]  # type: ignore[return-value]
 
 
 # Module-level proxy map exposed to LLMRouter.set_proxy_map
