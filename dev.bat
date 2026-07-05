@@ -56,21 +56,30 @@ echo   Logs dir : %LOG_DIR%
 echo %CYAN%------------------------------------------------------------%RESET%
 goto :eof
 
-:print_menu
+:print_top_menu
 echo.
 echo %YELLOW%Choose action:%RESET%
 echo   %GREEN%1)%RESET% start BOTH        (uvicorn :8132 + vite :5293)
-echo   %GREEN%2)%RESET% restart BOTH      (stop, wait, start both)
-echo   %GREEN%3)%RESET% stop BOTH
-echo   %GREEN%4)%RESET% start backend     (uvicorn :8132)
-echo   %GREEN%5)%RESET% start frontend    (vite    :5293)
-echo   %GREEN%6)%RESET% stop backend
-echo   %GREEN%7)%RESET% stop frontend
-echo   %GREEN%8)%RESET% tail logs
+echo   %GREEN%2)%RESET% stop BOTH
+echo   %GREEN%3)%RESET% restart BOTH      (stop, wait, start both)
 echo   %GREEN%0)%RESET% detailed status   (port + pid + HTTP /health)
+echo   %GREEN%x)%RESET% more options...
+echo.
+set /p "CHOICE=  Your choice [0-3, x]: "
+goto :eof
+
+:print_submenu
+echo.
+echo %YELLOW%More options:%RESET%
+echo   %GREEN%1)%RESET% start backend     (uvicorn :8132)
+echo   %GREEN%2)%RESET% start frontend    (vite    :5293)
+echo   %GREEN%3)%RESET% stop backend
+echo   %GREEN%4)%RESET% stop frontend
+echo   %GREEN%5)%RESET% tail logs
+echo   %GREEN%0)%RESET% back to top menu
 echo   %GREEN%9)%RESET% exit
 echo.
-set /p "CHOICE=  Your choice [0-9]: "
+set /p "CHOICE=  Your choice [0-5, 9]: "
 goto :eof
 
 REM ---------- PID lookup by LISTENING port ----------
@@ -197,17 +206,17 @@ goto :eof
 REM ---------- smart hint (consumes BE_UP/FE_UP set by :print_status) ----------
 :_hint
 if "%BE_UP%%FE_UP%"=="00" (
-    echo %YELLOW%hint%RESET%  both stopped. Press %GREEN%3%RESET% from the menu, or run:  dev.bat start-all
+    echo %YELLOW%hint%RESET%  both stopped. Press %GREEN%1%RESET% to start both, or run:  dev.bat start-all
     goto :eof
 )
 if "%BE_UP%"=="0" (
     echo %YELLOW%hint%RESET%  backend is down but frontend is up. The web UI will not be able to reach the API.
-    echo          start it with menu option %GREEN%1%RESET%, or:  dev.bat start-backend
+    echo          press %GREEN%x%RESET% then %GREEN%1%RESET% to start backend, or run:  dev.bat start-backend
     goto :eof
 )
 if "%FE_UP%"=="0" (
     echo %YELLOW%hint%RESET%  backend is up but frontend is down. You can hit the API directly at http://%BACKEND_HOST%:%BACKEND_PORT%/docs
-    echo          start the UI with menu option %GREEN%2%RESET%, or:  dev.bat start-frontend
+    echo          press %GREEN%x%RESET% then %GREEN%2%RESET% to start frontend, or run:  dev.bat start-frontend
 )
 goto :eof
 
@@ -401,7 +410,7 @@ if not "%~1"=="" (
 
 REM No CLI arg: fall through to interactive menu. (Don't fall through to
 REM :print_help label below - that would just print Usage and exit.)
-goto :menu_loop
+goto :top_menu
 
 :print_help
 echo.
@@ -418,10 +427,10 @@ echo   dev.bat status                print port / pid / /health
 echo   dev.bat help                  show this
 goto :exit_script
 
-:menu_loop
+:top_menu
 call :print_banner
-call :print_menu
-if "%CHOICE%"=="" goto :menu_loop
+call :print_top_menu
+if "%CHOICE%"=="" goto :top_menu
 
 set "LAST_RESULT=ok"
 
@@ -429,38 +438,68 @@ if "%CHOICE%"=="1" (
     call :start_backend
     call :start_frontend
 )
-if "%CHOICE%"=="2" (
+if "%CHOICE%"=="2" call :stop_all
+if "%CHOICE%"=="3" (
     call :stop_all
     ping -n 3 127.0.0.1 >nul
     call :start_backend
     call :start_frontend
 )
-if "%CHOICE%"=="3" call :stop_all
-if "%CHOICE%"=="4" call :start_backend
-if "%CHOICE%"=="5" call :start_frontend
-if "%CHOICE%"=="6" call :stop_backend
-if "%CHOICE%"=="7" call :stop_frontend
-if "%CHOICE%"=="8" call :tail_logs
 if "%CHOICE%"=="0" call :print_status
-if "%CHOICE%"=="9" goto :exit_script
+if /I "%CHOICE%"=="X" goto :submenu
 
-call :post_action_prompt
-goto :menu_loop
-
-REM ---------- post-action prompt: M=menu, 0=status, Q=quit, else=menu ----------
-:post_action_prompt
-:post_prompt_loop
+REM ---------- top-menu post-action prompt ----------
+:top_post_prompt
 echo.
 echo %GRAY%------------------------------------------------------------%RESET%
-echo   Press %GREEN%M%RESET% for menu  %GREEN%0%RESET% for status  %GREEN%Q%RESET% to quit
+echo   Press %GREEN%M%RESET% for top menu  %GREEN%x%RESET% for more options  %GREEN%0%RESET% for status  %GREEN%Q%RESET% to quit
 set /p "NEXT=  ... "
 if /I "!NEXT!"=="Q" goto :exit_script
+if /I "!NEXT!"=="X" goto :submenu
 if "!NEXT!"=="0" (
     call :print_status
-    goto :post_prompt_loop
+    echo.
+    echo %GRAY%------------------------------------------------------------%RESET%
+    echo   Press %GREEN%M%RESET% for top menu  %GREEN%x%RESET% for more options  %GREEN%Q%RESET% to quit
+    set /p "NEXT=  ... "
+    if /I "!NEXT!"=="Q" goto :exit_script
+    if /I "!NEXT!"=="X" goto :submenu
 )
-REM M, empty, or anything else -> back to menu
-goto :eof
+goto :top_menu
+
+:submenu
+call :print_banner
+call :print_submenu
+if "%CHOICE%"=="" goto :submenu
+
+set "LAST_RESULT=ok"
+
+if "%CHOICE%"=="1" call :start_backend
+if "%CHOICE%"=="2" call :start_frontend
+if "%CHOICE%"=="3" call :stop_backend
+if "%CHOICE%"=="4" call :stop_frontend
+if "%CHOICE%"=="5" call :tail_logs
+if "%CHOICE%"=="0" goto :top_menu
+if "%CHOICE%"=="9" goto :exit_script
+
+REM ---------- submenu post-action prompt ----------
+:sub_post_prompt
+echo.
+echo %GRAY%------------------------------------------------------------%RESET%
+echo   Press %GREEN%M%RESET% for more options  %GREEN%T%RESET% for top menu  %GREEN%0%RESET% for status  %GREEN%Q%RESET% to quit
+set /p "NEXT=  ... "
+if /I "!NEXT!"=="Q" goto :exit_script
+if /I "!NEXT!"=="T" goto :top_menu
+if "!NEXT!"=="0" (
+    call :print_status
+    echo.
+    echo %GRAY%------------------------------------------------------------%RESET%
+    echo   Press %GREEN%M%RESET% for more options  %GREEN%T%RESET% for top menu  %GREEN%Q%RESET% to quit
+    set /p "NEXT=  ... "
+    if /I "!NEXT!"=="Q" goto :exit_script
+    if /I "!NEXT!"=="T" goto :top_menu
+)
+goto :submenu
 
 :exit_script
 endlocal
