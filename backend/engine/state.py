@@ -183,8 +183,22 @@ def save_state(state: OrchestratorState, path: str) -> None:
     # + 文件锁防并发（Windows 用 msvcrt，POSIX 用 fcntl）
     tmp_path = path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
+        # 迭代 #66: Windows 上 msvcrt.locking(fd, LK_LOCK, 1) 要求 position+1
+        # 字节可访问 —— 空文件（刚 truncate）position=0 时 nbytes=1 失败。
+        # 修法：先写一个 placeholder byte 占位、锁住后写 JSON、写完 truncate 掉
+        # placeholder。POSIX 用 fcntl.flock 不需要这个 hack（lock 整个 fd）。
+        import sys as _sys
+        if _sys.platform == "win32":
+            try:
+                f.write(" ")  # placeholder byte
+                f.flush()
+            except Exception:
+                pass
         _acquire_lock(f)  # no-op if not supported on platform
         try:
+            if _sys.platform == "win32":
+                f.seek(0)  # 重置 position 到 0
+                f.truncate()
             json.dump(payload, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())

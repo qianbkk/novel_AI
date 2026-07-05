@@ -6807,3 +6807,27 @@ class TestOrchestratorSettingCacheInvalidates:
             "invalidate_setting_cache 必须重置 _setting_cache 为 None"
         assert orch_mod._setting_mtime is None, \
             "invalidate_setting_cache 必须重置 _setting_mtime 为 None"
+
+
+# ───────────────────────────────────────────
+# GGGG: fix #66 — engine/state.py save_state Windows 空文件 lock 失败
+# ───────────────────────────────────────────
+class TestSaveStateWindowsEmptyFileLock:
+    """迭代 #66: Windows 上 msvcrt.locking(fd, LK_LOCK, 1) 要求 position+1
+    字节可访问。空文件（刚 truncate）position=0 时锁 1 字节失败 → 返回 False →
+    save_state 走无锁路径（race condition）。
+    修法：先写 1 字节 placeholder、锁住后 seek(0)+truncate 清掉占位，
+    再正常写 JSON。POSIX 路径不受影响（fcntl 不需要这个 hack）。
+    """
+    def test_save_state_source_has_windows_empty_file_workaround(self):
+        import inspect
+        from engine import state as state_mod
+        src = inspect.getsource(state_mod.save_state)
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        # 源码必须有 Windows + placeholder 关键词（说明做了绕过空文件 hack）
+        assert "win32" in code_src, \
+            "engine.state.save_state 必须有 win32 平台分支处理空文件 lock 失败"
+        assert "placeholder" in code_src or "seek(0)" in code_src, \
+            "engine.state.save_state 必须有 placeholder byte / seek(0) workaround"
