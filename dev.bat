@@ -59,16 +59,16 @@ goto :eof
 :print_menu
 echo.
 echo %YELLOW%Choose action:%RESET%
-echo   %GREEN%1)%RESET% start backend     (uvicorn :8132)
-echo   %GREEN%2)%RESET% start frontend    (vite    :5293)
-echo   %GREEN%3)%RESET% start BOTH
-echo   %GREEN%4)%RESET% stop backend
-echo   %GREEN%5)%RESET% stop frontend
-echo   %GREEN%6)%RESET% stop BOTH
-echo   %GREEN%7)%RESET% status           (port + pid + HTTP /health)
+echo   %GREEN%1)%RESET% start BOTH        (uvicorn :8132 + vite :5293)
+echo   %GREEN%2)%RESET% restart BOTH      (stop, wait, start both)
+echo   %GREEN%3)%RESET% stop BOTH
+echo   %GREEN%4)%RESET% start backend     (uvicorn :8132)
+echo   %GREEN%5)%RESET% start frontend    (vite    :5293)
+echo   %GREEN%6)%RESET% stop backend
+echo   %GREEN%7)%RESET% stop frontend
 echo   %GREEN%8)%RESET% tail logs
-echo   %GREEN%9)%RESET% restart BOTH
-echo   %GREEN%0)%RESET% exit
+echo   %GREEN%0)%RESET% detailed status   (port + pid + HTTP /health)
+echo   %GREEN%9)%RESET% exit
 echo.
 set /p "CHOICE=  Your choice [0-9]: "
 goto :eof
@@ -240,7 +240,7 @@ set "APP_NAME=frontend"
 set "APP_HOST=%FRONTEND_HOST%"
 set "APP_PORT=%FRONTEND_PORT%"
 set "APP_DIR=%FRONTEND_DIR%"
-set "TOOL_NAME=vite"
+set "TOOL_NAME=vite   "
 set "UP_URL=http://%FRONTEND_HOST%:%FRONTEND_PORT%/"
 set "LOG_BASENAME=frontend"
 set "WINDOW_TITLE=novelai-frontend"
@@ -365,37 +365,46 @@ goto :exit_script
 :menu_loop
 call :print_banner
 call :print_menu
-if "%CHOICE%"=="" set "CHOICE=0"
+if "%CHOICE%"=="" goto :menu_loop
 
 set "LAST_RESULT=ok"
 
-if "%CHOICE%"=="1" call :start_backend
-if "%CHOICE%"=="2" call :start_frontend
-if "%CHOICE%"=="3" (
+if "%CHOICE%"=="1" (
     call :start_backend
     call :start_frontend
 )
-if "%CHOICE%"=="4" call :stop_backend
-if "%CHOICE%"=="5" call :stop_frontend
-if "%CHOICE%"=="6" call :stop_all
-if "%CHOICE%"=="7" call :print_status
-if "%CHOICE%"=="8" call :tail_logs
-if "%CHOICE%"=="9" (
+if "%CHOICE%"=="2" (
     call :stop_all
     ping -n 3 127.0.0.1 >nul
     call :start_backend
     call :start_frontend
 )
+if "%CHOICE%"=="3" call :stop_all
+if "%CHOICE%"=="4" call :start_backend
+if "%CHOICE%"=="5" call :start_frontend
+if "%CHOICE%"=="6" call :stop_backend
+if "%CHOICE%"=="7" call :stop_frontend
+if "%CHOICE%"=="8" call :tail_logs
+if "%CHOICE%"=="0" call :print_status
+if "%CHOICE%"=="9" goto :exit_script
 
-if "%CHOICE%"=="0" goto :exit_script
-
-REM Only pause when the last action failed; otherwise the user wants to chain
-REM the next action (e.g. start-backend, then start-frontend) without a wait.
-if /I not "%LAST_RESULT%"=="ok" (
-    echo.
-    pause
-)
+call :post_action_prompt
 goto :menu_loop
+
+REM ---------- post-action prompt: M=menu, 0=status, Q=quit, else=menu ----------
+:post_action_prompt
+:post_prompt_loop
+echo.
+echo %GRAY%------------------------------------------------------------%RESET%
+echo   Press %GREEN%M%RESET% for menu  %GREEN%0%RESET% for status  %GREEN%Q%RESET% to quit
+set /p "NEXT=  ... "
+if /I "!NEXT!"=="Q" goto :exit_script
+if "!NEXT!"=="0" (
+    call :print_status
+    goto :post_prompt_loop
+)
+REM M, empty, or anything else -> back to menu
+goto :eof
 
 :exit_script
 endlocal
