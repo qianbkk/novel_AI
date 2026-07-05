@@ -7525,3 +7525,110 @@ class TestRouterProxyMountNoSilentException:
         finally:
             llm_router._proxy_mounts.clear()
             llm_router._PROVIDER_PROXY.pop("test_provider", None)
+
+
+# ───────────────────────────────────────────
+# NNNN: 迭代 #77 — style_manager.py 不能静默吞异常（同 #73 同型扫描）
+# ───────────────────────────────────────────
+class TestStyleManagerNoSilentException:
+    """迭代 #77：engine/tools/style_manager.py 4 处静默 `except Exception:
+    continue`（L26/55/71/99）跟 #73 memory/manager.py 同型。
+
+    这是 CLI 工具而非核心 runtime，但审计模式应一致：损坏文件时
+    应该 log.exception 让运维看到信号。
+
+    修法：模块级 `_log` logger + 4 处都加 `_log.exception(...)` 后 continue。
+    """
+    def test_module_has_logger(self):
+        """源码扫描：style_manager.py 必须有 logger（#77 标志）。"""
+        import inspect
+        from engine.tools import style_manager as sm
+        src = inspect.getsource(sm)
+        assert "_log" in src or "getLogger" in src, (
+            "engine/tools/style_manager.py 必须有 module logger（#77）"
+        )
+
+    def _function_source(self, func):
+        import inspect
+        return inspect.getsource(func)
+
+    def test_list_samples_excepts_have_log(self):
+        """list_samples 段 except 必须有 log。"""
+        from engine.tools import style_manager as sm
+        src = self._function_source(sm.list_samples)
+        idx = src.find("except Exception:")
+        assert idx != -1, "list_samples 必须有 except Exception"
+        chunk = src[idx:idx + 200]
+        # 找下一个 except 或函数结束
+        next_except = src.find("except Exception:", idx + 10)
+        if next_except != -1 and next_except - idx < 250:
+            chunk = src[idx:next_except]
+        assert "log" in chunk.lower(), \
+            f"list_samples except 必须 log（#77），chunk:\n{chunk}"
+
+    def test_extract_internal_samples_excepts_have_log(self):
+        """extract_internal_samples 两处 except 都必须有 log。"""
+        from engine.tools import style_manager as sm
+        src = self._function_source(sm.extract_internal_samples)
+        except_indices = []
+        pos = 0
+        while True:
+            i = src.find("except Exception:", pos)
+            if i == -1:
+                break
+            except_indices.append(i)
+            pos = i + 1
+        assert len(except_indices) >= 2, \
+            f"extract_internal_samples 应至少有 2 处 except，实际 {len(except_indices)}"
+        # 每处 except 都必须在后续 250 字符内有 log
+        for idx in except_indices:
+            chunk = src[idx:idx + 250]
+            assert "log" in chunk.lower(), \
+                f"extract_internal_samples except @ {idx} 必须 log（#77），chunk:\n{chunk}"
+
+    def test_generate_style_prefix_excepts_have_log(self):
+        """generate_style_prefix except 必须有 log。"""
+        from engine.tools import style_manager as sm
+        src = self._function_source(sm.generate_style_prefix)
+        idx = src.find("except Exception:")
+        assert idx != -1, "generate_style_prefix 必须有 except Exception"
+        chunk = src[idx:idx + 250]
+        assert "log" in chunk.lower(), \
+            f"generate_style_prefix except 必须 log（#77），chunk:\n{chunk}"
+
+    def test_behavioral_broken_meta_logs_and_continues(self, tmp_path, monkeypatch, caplog):
+        """行为测试：chapter meta 文件损坏时 extract_internal_samples 必须 log 但仍 continue。"""
+        import json
+        import logging
+        from engine.tools import style_manager as sm
+
+        # 重定向 STYLE_DIR + CHAPTERS_DIR 到临时目录
+        monkeypatch.setattr(sm, "STYLE_DIR", str(tmp_path / "samples"))
+        monkeypatch.setattr(sm, "CHAPTERS_DIR", str(tmp_path))
+        (tmp_path / "samples").mkdir(exist_ok=True)
+
+        # 写 1 个坏 meta + 1 个好 meta + 对应章节文件
+        bad_meta = tmp_path / "ch_0001_meta.json"
+        bad_meta.write_text("{ broken json", encoding="utf-8")
+        good_meta = tmp_path / "ch_0002_meta.json"
+        good_meta.write_text(json.dumps({"score": 8.0, "chapter_number": 2}),
+                             encoding="utf-8")
+        good_ch = tmp_path / "ch_0002.txt"
+        good_ch.write_text("高分章节正文", encoding="utf-8")
+
+        with caplog.at_level(logging.ERROR, logger="novel_ai.engine.tools.style_manager"):
+            extracted = sm.extract_internal_samples(min_score=7.5, max_samples=5)
+
+        # 行为：好那条被提取了
+        assert extracted >= 1, \
+            f"好 meta + 对应章节应被提取，实际 {extracted}"
+        # 关键：坏 meta 必须产生 log 记录
+        err_records = [r for r in caplog.records
+                       if r.levelno >= logging.ERROR
+                       and "style_manager" in r.name]
+        assert err_records, (
+            "损坏 meta 必须被 log（之前静默吞掉，#77）"
+            f"实际 caplog: {[(r.levelname, r.name, r.getMessage()) for r in caplog.records]}"
+        )
+        assert any("ch_0001" in r.getMessage() for r in err_records), \
+            f"log 应包含坏文件路径 ch_0001，实际 messages: {[r.getMessage() for r in err_records]}"

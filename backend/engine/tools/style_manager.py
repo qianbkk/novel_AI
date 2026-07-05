@@ -2,14 +2,23 @@
 
 Migrated from novel_AI/tools/style_manager.py. Reads/writes
 backend/data/engine/output/style_samples/.
+
+迭代 #77: 之前 4 处 `except Exception: continue` 静默吞读样本失败
+（跟 #73 memory/manager.py 同型扫描结果）。CLI 工具但遵循同样的
+fail-visible 原则：损坏样本 / meta 文件时用 log.exception 让运维看到
+信号，行为仍 continue。
 """
 from __future__ import annotations
 import glob
 import json
+import logging
 import os
 
 from ..config.paths import STYLE_SAMPLES_DIR_STR, CHAPTERS_DIR_STR
 
+
+# 迭代 #77: module logger
+_log = logging.getLogger("novel_ai.engine.tools.style_manager")
 
 STYLE_DIR = STYLE_SAMPLES_DIR_STR
 CHAPTERS_DIR = CHAPTERS_DIR_STR
@@ -23,7 +32,8 @@ def list_samples() -> list[dict]:
         try:
             with open(fpath, encoding="utf-8") as f:
                 content = f.read()
-        except Exception:
+        except Exception:  # 迭代 #77
+            _log.exception("读取风格样本失败: %s", fpath)
             continue
         lines = [l for l in content.split("\n") if not l.startswith("#")]
         text = "\n".join(lines).strip()
@@ -52,7 +62,8 @@ def extract_internal_samples(min_score: float = 7.5, max_samples: int = 5) -> in
         try:
             with open(mf, encoding="utf-8") as f:
                 meta = json.load(f)
-        except Exception:
+        except Exception:  # 迭代 #77
+            _log.exception("读取章节 meta 失败: %s", mf)
             continue
         score = meta.get("score", 0)
         ch = meta.get("chapter_number", 0)
@@ -68,7 +79,8 @@ def extract_internal_samples(min_score: float = 7.5, max_samples: int = 5) -> in
         try:
             with open(ch_path, encoding="utf-8") as f:
                 text = f.read()
-        except Exception:
+        except Exception:  # 迭代 #77
+            _log.exception("读取章节正文失败: %s", ch_path)
             continue
         if text.startswith("[待修订]"):
             continue
@@ -96,7 +108,8 @@ def generate_style_prefix(max_chars: int = 800) -> str:
         try:
             with open(fpath, encoding="utf-8") as f:
                 content = f.read()
-        except Exception:
+        except Exception:  # 迭代 #77
+            _log.exception("读取风格样本（生成 prefix）失败: %s", fpath)
             continue
         lines = [l for l in content.split("\n") if not l.startswith("#")]
         text = "\n".join(lines).strip()
