@@ -2107,6 +2107,13 @@ label {
               stroke var(--duration-base) var(--ease-out);
   cursor: pointer;
 }
+.fg-node--protagonist .fg-node-circle { fill: var(--color-accent-soft); stroke: var(--color-accent-strong); stroke-width: 2.2; }
+.fg-node--ally .fg-node-circle { stroke: var(--color-moss); stroke-width: 1.5; }
+.fg-node--hostile .fg-node-circle { stroke: var(--color-stamp); stroke-width: 1.5; }
+.fg-edge--mentor { stroke: var(--color-accent); }
+.fg-edge--ambiguous { stroke: var(--color-warn); stroke-dasharray: 4 3; }
+.fg-node-role { font-size: 10px; fill: var(--color-fg-3); font-family: var(--font-display); }
+
 .fg-node:hover .fg-node-circle { fill: var(--color-bg-1); stroke: var(--color-accent-strong); }
 .fg-node-label {
   font-family: var(--font-display);

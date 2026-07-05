@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { Project, WorldBuildResult, StageEvent, MapNode, ForeshadowingRow } from "../types";
+import { RelationGraph } from "../components/RelationGraph";
 
 // 跟后端 worldbuild/stages.py 里的 STAGES 保持一致——原型阶段先手动同步，
 // 更稳妥的做法是让后端在 /worldbuild/start 的响应里把阶段清单带回来，
@@ -229,6 +230,17 @@ export default function WorldBuild() {
           {/* ===================== 人物阵营 tab ===================== */}
           {topTab === "人物阵营" && (
             <div>
+              {/* Phase 6: 关系图谱（嵌入 tab 顶部） */}
+              <h3 className="module-heading">
+                <span className="module-heading__index">M04</span>
+                关系图谱
+                <span className="module-heading__sub">主角居中 · 按 role 扇区分布 · 关系边按类型染色</span>
+              </h3>
+              <RelationGraph
+                projectId={projectId!}
+                onNodeClick={(cid) => navigate(`/projects/${projectId}/characters/${cid}`)}
+              />
+
               <h3 className="module-heading">
                 <span className="module-heading__index">M04</span>
                 角色动态生命周期
