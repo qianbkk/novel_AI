@@ -6,6 +6,30 @@
 
 ## [Unreleased] — 2026-07-04
 
+### Bug Fix（迭代 #65 — 内部审计）
+- **`fix(engine): orchestrator._setting 缓存按 mtime 自动 invalidate**
+  - 之前 cache 一旦填就永不刷新 — 同一进程里跑 planner 后
+    setting_package.json 更新了，orchestrator 还用旧值（arc_plans / title）
+  - 修法：缓存同时存 _setting_mtime，每次 _setting() 检查文件 mtime —
+    变了就重新 load。文件不存在时清空 cache（如果后来创建能立刻读到）
+  - 模块级 `invalidate_setting_cache()` helper 用于测试或手动 invalidate
+  - 加 3 个 invariant test 锁死：文件改 → reload / 同 mtime → cache hit /
+    invalidate_setting_cache 必须重置两个状态
+
+### Bug Fix（迭代 #62 — 内部审计）
+- **`fix(app): llm_client.py IndexError/TypeError 不再跳出重试循环**
+  - `app/llm_client.py:71` 之前 catch 只到 KeyError
+  - LLM 返回 `{"choices": []}` → IndexError → 跳出重试 → LLMError
+    把最后一次 IndexError 暴露给上层
+  - LLM 返回 `{"choices": [{"message": null}]}` → None["content"] → TypeError 同型
+  - 这两个都是真实场景（rate limit fallback / 模型降级 / truncated stream）
+  - 修法：扩 catch 列表到 `(IndexError, TypeError)`
+
+### Bug Fix（迭代 #60 — 内部审计）
+- **`fix(engine): orchestrator.run_summarizer 异常不再静默（跟 #58 同型）**
+  - 之前 `except Exception: cost=0.0` 静默 fallback
+  - 修法：log error_log + 标 arc_plan._summarizer_failed
+
 ### Bug Fix（迭代 #59 — 内部审计）
 - **`fix(engine): human_review.py atomic write + load_state 不再 silent fallback**
   - human_review.py save_state 用 raw open(w) 写 orchestrator_state.json
