@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://novel_ai.local/schema/character_card.schema.json",
+  "title": "Novel AI Character Card",
+  "description": "engine/worldbuild/stages.py::stage_characters 输出的角色卡（8 段）。其中 personality.tags、catchphrase.lines、arc 三段必填。改字段必须先改本文件。",
+  "type": "object",
+  "required": ["personality", "catchphrase", "arc"],
+  "additionalProperties": true,
+  "properties": {
+    "basic": {
+      "type": "object",
+      "description": "基础信息：性别 / 年龄 / 身份 / 势力归属",
+      "properties": {
+        "gender":      {"type": "string"},
+        "age":         {"type": ["string", "integer"]},
+        "identity":    {"type": "string"},
+        "faction_id":  {"type": ["string", "null"]}
+      }
+    },
+    "appearance": {
+      "type": "object",
+      "description": "外貌描写：身高 / 发型 / 服饰 / 辨识特征",
+      "properties": {
+        "height":                {"type": "string"},
+        "hair":                  {"type": "string"},
+        "outfit":                {"type": "string"},
+        "distinguishing_feature":{"type": "string"}
+      }
+    },
+    "personality": {
+      "type": "object",
+      "required": ["tags", "summary"],
+      "description": "性格特征：3-5 个标签 + 50+ 字总结",
+      "properties": {
+        "tags":    {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "summary": {"type": "string", "minLength": 20}
+      }
+    },
+    "background": {
+      "type": "object",
+      "description": "背景故事：出身 / 动机 / 秘密",
+      "properties": {
+        "origin":     {"type": "string"},
+        "motivation": {"type": "string"},
+        "secret":     {"type": "string"}
+      }
+    },
+    "abilities": {
+      "type": "object",
+      "description": "能力体系：功法名 / 当前境界 / 成长上限",
+      "properties": {
+        "power_name":       {"type": "string"},
+        "current_tier":     {"type": "string"},
+        "growth_potential": {"type": "string"}
+      }
+    },
+    "catchphrase": {
+      "type": "object",
+      "required": ["lines"],
+      "description": "口癖台词：2-3 句标志性台词",
+      "properties": {
+        "lines": {"type": "array", "minItems": 1, "items": {"type": "string"}}
+      }
+    },
+    "props": {
+      "type": "object",
+      "description": "持有道具：信物 / 同行者",
+      "properties": {
+        "signature_item": {"type": "string"},
+        "companion":      {"type": "string"}
+      }
+    },
+    "arc": {
+      "type": "object",
+      "required": ["start_state", "catalyst", "end_state"],
+      "description": "成长弧：起点 → 转折 → 终点",
+      "properties": {
+        "start_state": {"type": "string"},
+        "catalyst":    {"type": "string"},
+        "end_state":   {"type": "string"}
+      }
+    }
+  }
+}

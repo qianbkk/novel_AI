@@ -65,11 +65,15 @@ class WorldSetting(Base):
 
     id = Column(String, primary_key=True, default=gen_id)
     project_id = Column(String, ForeignKey("projects.id"), unique=True)
-    world_view = Column(Text, nullable=True)            # 世界观设定
-    story_core = Column(Text, nullable=True)            # 故事核心/主要冲突
+    world_view = Column(Text, nullable=True)            # 世界观设定（legacy 字段，保留向后兼容）
+    story_core = Column(Text, nullable=True)            # 故事核心/主要冲突（legacy 字段）
     plot_skeleton_json = Column(JSON, nullable=True)    # 卷级情节脉络（粗粒度，章节级留给大纲阶段）
     special_settings_json = Column(JSON, nullable=True) # 特殊设定（金手指类型等）
     novel_ai_raw_setting_json = Column(JSON, nullable=True)  # novel_AI 回灌的原始设定包，唯一真相来源
+    # ─── Phase 1: 结构化世界观（7 段 + 故事核心 4 段 + 历史时间线）───
+    world_view_rich_json = Column(JSON, nullable=True)   # {cosmos, geography, history, society, technology, races, customs}
+    story_core_struct_json = Column(JSON, nullable=True) # {goal, conflict, theme, hook}
+    history_timeline_json = Column(JSON, nullable=True)  # [{era, event, impact}, ...]
 
     project = relationship("Project", back_populates="world_setting")
 
@@ -82,6 +86,15 @@ class Character(Base):
     name = Column(String, nullable=False)
     role = Column(String, nullable=True)        # 主角/重要配角/反派...
     detail_json = Column(JSON, nullable=True)   # 身世/能力/动机等结构化细节
+    # ─── Phase 1: 角色卡 8 段 ───
+    card_basic_json = Column(JSON, nullable=True)        # {gender, age, identity, faction_id?}
+    card_appearance_json = Column(JSON, nullable=True)   # {height, hair, outfit, distinguishing_feature?}
+    card_personality_json = Column(JSON, nullable=True)  # {tags: [], summary}
+    card_background_json = Column(JSON, nullable=True)   # {origin, motivation, secret?}
+    card_abilities_json = Column(JSON, nullable=True)    # {power_name, current_tier, growth_potential}
+    card_catchphrase_json = Column(JSON, nullable=True)  # {lines: []}
+    card_props_json = Column(JSON, nullable=True)        # {signature_item, companion}
+    card_arc_json = Column(JSON, nullable=True)          # {start_state, catalyst, end_state}
 
     project = relationship("Project", back_populates="characters")
 
@@ -167,6 +180,12 @@ class EntityRelation(Base):
     to_id = Column(String, nullable=False)
     relation = Column(String, nullable=False)     # 青梅竹马/师徒/宿敌/上下级...
     description = Column(Text, nullable=True)
+    # ─── Phase 1: 富关系 ───
+    mutual = Column(Boolean, default=False)             # 是否双向关系
+    intensity = Column(Integer, nullable=True)          # 0-10 关系强度
+    tags_json = Column(JSON, nullable=True)             # ["敌对", "师徒", "暧昧", ...]
+    evolution_json = Column(JSON, nullable=True)         # [{phase, state}] 关系随剧情演化
+    key_events_json = Column(JSON, nullable=True)        # [{chapter_hint, event}] 关键转折事件
 
     project = relationship("Project", back_populates="entity_relations")
 

@@ -1,0 +1,20 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://novel_ai.local/schema/world_view_rich.schema.json",
+  "title": "Novel AI World View (Rich)",
+  "description": "engine/worldbuild/stages.py::stage_world_basics 输出的结构化世界观。7 段必填，每段 ≥30 字。改字段必须先改本文件。",
+  "type": "object",
+  "required": [
+    "cosmos", "geography", "history", "society", "technology", "races", "customs"
+  ],
+  "additionalProperties": true,
+  "properties": {
+    "cosmos":      {"type": "string", "minLength": 30, "description": "宇宙观 / 天地法则"},
+    "geography":   {"type": "string", "minLength": 30, "description": "地理总览"},
+    "history":     {"type": "string", "minLength": 30, "description": "历史概述"},
+    "society":     {"type": "string", "minLength": 30, "description": "社会制度"},
+    "technology":  {"type": "string", "minLength": 30, "description": "科技 / 修炼体系总览"},
+    "races":       {"type": "string", "minLength": 30, "description": "种族 / 族群"},
+    "customs":     {"type": "string", "minLength": 30, "description": "风土人情"}
+  }
+}

@@ -29,6 +29,10 @@ _SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schema"
 # 懒加载 + 缓存（避免每个请求都从磁盘读）
 _setting_pkg_schema: dict | None = None
 _chapter_meta_schema: dict | None = None
+# ─── Phase 1：世界构建板块结构化 ───
+_world_view_rich_schema: dict | None = None
+_character_card_schema: dict | None = None
+_entity_relation_rich_schema: dict | None = None
 
 
 class SchemaError(ValueError):
@@ -62,6 +66,28 @@ def get_chapter_meta_schema() -> dict:
     return _chapter_meta_schema
 
 
+# ─── Phase 1：世界构建板块结构化校验 ───
+def get_world_view_rich_schema() -> dict:
+    global _world_view_rich_schema
+    if _world_view_rich_schema is None:
+        _world_view_rich_schema = _load("world_view_rich.schema.json")
+    return _world_view_rich_schema
+
+
+def get_character_card_schema() -> dict:
+    global _character_card_schema
+    if _character_card_schema is None:
+        _character_card_schema = _load("character_card.schema.json")
+    return _character_card_schema
+
+
+def get_entity_relation_rich_schema() -> dict:
+    global _entity_relation_rich_schema
+    if _entity_relation_rich_schema is None:
+        _entity_relation_rich_schema = _load("entity_relation_rich.schema.json")
+    return _entity_relation_rich_schema
+
+
 def _check(data: Any, schema: dict, name: str) -> None:
     v = jsonschema.Draft7Validator(schema)
     errs = sorted(v.iter_errors(data), key=lambda e: list(e.path))
@@ -81,10 +107,31 @@ def validate_chapter_meta(data: Any) -> None:
     _check(data, get_chapter_meta_schema(), "chapter_meta")
 
 
+def validate_world_view_rich(data: Any) -> None:
+    """校验 stage_world_basics 的 7 段世界观。失败抛 SchemaError。"""
+    _check(data, get_world_view_rich_schema(), "world_view_rich")
+
+
+def validate_character_card(data: Any) -> None:
+    """校验 stage_characters 的角色卡。失败抛 SchemaError。"""
+    _check(data, get_character_card_schema(), "character_card")
+
+
+def validate_entity_relation_rich(data: Any) -> None:
+    """校验 stage_relations 的富关系（强度 / 标签 / 演化 / 关键事件）。失败抛 SchemaError。"""
+    _check(data, get_entity_relation_rich_schema(), "entity_relation_rich")
+
+
 __all__ = [
     "SchemaError",
     "validate_setting_package",
     "validate_chapter_meta",
+    "validate_world_view_rich",
+    "validate_character_card",
+    "validate_entity_relation_rich",
     "get_setting_package_schema",
     "get_chapter_meta_schema",
+    "get_world_view_rich_schema",
+    "get_character_card_schema",
+    "get_entity_relation_rich_schema",
 ]

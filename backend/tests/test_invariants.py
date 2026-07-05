@@ -23,6 +23,8 @@ sys.path.insert(0, str(BACKEND))
 from app.schema_validator import (  # noqa: E402
     validate_setting_package, validate_chapter_meta, SchemaError,
     get_setting_package_schema, get_chapter_meta_schema,
+    validate_world_view_rich, validate_character_card, validate_entity_relation_rich,
+    get_world_view_rich_schema, get_character_card_schema, get_entity_relation_rich_schema,
 )
 
 
@@ -8347,3 +8349,150 @@ class TestBudgetHardValueDocumented:
             f"BUDGET_HARD 文档必须告诉读者怎么改严（#201），"
             f"实际 chunk:\n{chunk}"
         )
+
+
+# ───────────────────────────────────────────
+# Phase 1：世界构建板块结构化不变量
+# ───────────────────────────────────────────
+
+class TestWorldViewRichSchema:
+    """防 world_view_rich 7 段字段漂移（之前 → 世界观简陋、一段 text）。"""
+
+    def test_schema_requires_all_7_sections(self):
+        schema = get_world_view_rich_schema()
+        required = set(schema["required"])
+        for must_have in ["cosmos", "geography", "history", "society", "technology", "races", "customs"]:
+            assert must_have in required, f"{must_have} 必须在 schema.required 里"
+
+    def test_known_good_worldview_passes(self):
+        """最小可用 7 段世界观必须能通过校验（每段 ≥30 字）"""
+        minimal = {
+            "cosmos":     "蓝星与九天之上并存，人间是科技主导的现代都市，修士隐于暗面，" * 1,
+            "geography":  "云州、临海、苍莽山脉三足鼎立；州内分七区，每区有独立的风物与宗门。" * 1,
+            "history":    "1984 年首次灵气潮汐以来，世界观经历了三波大迭代，逐步形成当前格局。" * 1,
+            "society":    "修士与凡人共治，修士内部分九品，每品对应不同的话语权与资源分配。" * 1,
+            "technology": "灵气+科技的混合形态：灵力可与电路耦合，催生新型工业体系初具规模。" * 1,
+            "races":      "人族 / 古妖族 / 幽冥族三大种族鼎立，下设数十个亚族与部落分支。" * 1,
+            "customs":    "祭剑节 / 走火大会 / 长辈赐字；新人入门必须经三年苦修方可下山。" * 1,
+        }
+        # 每段都超过 30 字
+        for k, v in minimal.items():
+            assert len(v) >= 30, f"{k} 长度不足"
+        validate_world_view_rich(minimal)  # 不抛 = pass
+
+    def test_missing_section_fails(self):
+        """7 段缺一就 fail（防止 Planner 漏字段）"""
+        bad = {
+            "cosmos": "x" * 50,
+            "geography": "x" * 50,
+            # 缺 history / society / technology / races / customs
+        }
+        with pytest.raises(SchemaError) as exc:
+            validate_world_view_rich(bad)
+        assert "history" in str(exc.value) or "society" in str(exc.value)
+
+    def test_section_too_short_fails(self):
+        """任何一段 < 30 字就 fail（防止 LLM 偷懒）"""
+        bad = {
+            "cosmos":     "x" * 50,
+            "geography":  "x" * 50,
+            "history":    "太短",  # < 30
+            "society":    "x" * 50,
+            "technology": "x" * 50,
+            "races":      "x" * 50,
+            "customs":    "x" * 50,
+        }
+        with pytest.raises(SchemaError) as exc:
+            validate_world_view_rich(bad)
+        assert "history" in str(exc.value)
+
+
+class TestCharacterCardSchema:
+    """防角色卡字段漂移（之前 → Character 只剩 name + role，看不到任何详情）。"""
+
+    def test_schema_requires_3_top_sections(self):
+        """personality / catchphrase / arc 三段必填"""
+        schema = get_character_card_schema()
+        required = set(schema["required"])
+        for must_have in ["personality", "catchphrase", "arc"]:
+            assert must_have in required, f"{must_have} 必须在 schema.required 里"
+
+    def test_known_good_card_passes(self):
+        """最小可用角色卡必须通过校验"""
+        minimal = {
+            "basic":       {"gender": "男", "age": 32, "identity": "云州林氏长子"},
+            "appearance":  {"height": "182cm", "hair": "短黑", "outfit": "深灰风衣"},
+            "personality": {"tags": ["克制", "精算"], "summary": "外表冷峻内心压着火，行动前必先算三步。" * 2},
+            "background":  {"origin": "云州林氏", "motivation": "改写林家破产命运", "secret": "前世是 2024 的商业老兵"},
+            "abilities":   {"power_name": "先知回响", "current_tier": "一级", "growth_potential": "七阶"},
+            "catchphrase": {"lines": ["这局我来开局。", "记住，你是来学习的。"]},
+            "props":       {"signature_item": "老旧铜怀表", "companion": "瘸腿狼狗'阿斗'"},
+            "arc":         {"start_state": "破产边缘的小商人", "catalyst": "重生回到 2012", "end_state": "云州新一代商盟领袖"},
+        }
+        validate_character_card(minimal)
+
+    def test_missing_arc_fails(self):
+        """缺 arc 段 fail"""
+        bad = {
+            "personality": {"tags": ["克制"], "summary": "x" * 50},
+            "catchphrase": {"lines": ["x"]},
+            # 缺 arc
+        }
+        with pytest.raises(SchemaError) as exc:
+            validate_character_card(bad)
+        assert "arc" in str(exc.value)
+
+    def test_personality_missing_tags_fails(self):
+        """personality.tags 必填（防止 LLM 只写 summary 不写标签）"""
+        bad = {
+            "personality": {"summary": "x" * 50},  # 缺 tags
+            "catchphrase": {"lines": ["x"]},
+            "arc":         {"start_state": "x", "catalyst": "x", "end_state": "x"},
+        }
+        with pytest.raises(SchemaError) as exc:
+            validate_character_card(bad)
+        assert "tags" in str(exc.value)
+
+
+class TestEntityRelationRichSchema:
+    """防富关系字段漂移（之前 → EntityRelation 只有 from/to/relation/description 一行）。"""
+
+    def test_intensity_bounds(self):
+        """intensity 必须在 0-10 之间"""
+        bad = {
+            "mutual":    True,
+            "intensity": 15,  # 越界
+            "tags":      ["敌对"],
+            "evolution": [{"phase": "开端", "state": "陌生"}],
+            "key_events": [{"chapter_hint": "第3章", "event": "初遇"}],
+        }
+        with pytest.raises(SchemaError) as exc:
+            validate_entity_relation_rich(bad)
+        assert "intensity" in str(exc.value)
+
+    def test_known_good_relation_passes(self):
+        """最小可用富关系必须通过校验"""
+        minimal = {
+            "mutual":     True,
+            "intensity":  9,
+            "tags":       ["亲密", "信任"],
+            "evolution":  [
+                {"phase": "开端", "state": "互有好感"},
+                {"phase": "中段", "state": "因破产疏远"},
+                {"phase": "结尾", "state": "重逢后共事"},
+            ],
+            "key_events": [
+                {"chapter_hint": "第3章",  "event": "主角劝阻她投资"},
+                {"chapter_hint": "第18章", "event": "破产后仍守在身边"},
+            ],
+        }
+        validate_entity_relation_rich(minimal)
+
+    def test_evolution_missing_phase_fails(self):
+        """evolution[].phase 必填"""
+        bad = {
+            "evolution": [{"state": "陌生"}],  # 缺 phase
+        }
+        with pytest.raises(SchemaError) as exc:
+            validate_entity_relation_rich(bad)
+        assert "phase" in str(exc.value)

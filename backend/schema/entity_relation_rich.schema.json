@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://novel_ai.local/schema/entity_relation_rich.schema.json",
+  "title": "Novel AI Entity Relation (Rich)",
+  "description": "engine/worldbuild/stages.py::stage_relations 输出的富关系（强度 0-10 + 标签 + 演化 + 关键事件）。改字段必须先改本文件。",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "mutual":    {"type": "boolean", "description": "是否双向关系"},
+    "intensity": {"type": "integer", "minimum": 0, "maximum": 10, "description": "关系强度 0-10"},
+    "tags":      {"type": "array", "items": {"type": "string"}, "description": "关系标签：敌对/师徒/暧昧/家族/..."},
+    "evolution": {
+      "type": "array",
+      "description": "关系随剧情演化",
+      "items": {
+        "type": "object",
+        "required": ["phase", "state"],
+        "properties": {
+          "phase": {"type": "string"},
+          "state": {"type": "string"}
+        }
+      }
+    },
+    "key_events": {
+      "type": "array",
+      "description": "关键转折事件",
+      "items": {
+        "type": "object",
+        "required": ["chapter_hint", "event"],
+        "properties": {
+          "chapter_hint": {"type": "string"},
+          "event":        {"type": "string"}
+        }
+      }
+    }
+  }
+}
