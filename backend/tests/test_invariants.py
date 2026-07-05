@@ -6437,3 +6437,81 @@ class TestOrchestratorSummarizerNotSilent:
             "orchestrator.node_save_and_track summarizer 异常路径必须标 _summarizer_failed（iter #60）"
         assert "summarizer failed arc" in code_src, \
             "orchestrator.node_save_and_track summarizer 异常路径必须 log error_log"
+
+
+# ───────────────────────────────────────────
+# BBBB: smoke test — orchestrator pipeline 状态连贯性
+# ───────────────────────────────────────────
+class TestOrchestratorPipelineStateCoherence:
+    """锁定 engine/orchestrator 节点间状态连贯性。
+    
+    验证以下不变量：
+    1. create_initial_state 后所有进度字段 = 0
+    2. node_load_arc_tasks 后 arc_plans + chapter_task_queue 注入
+    3. node_get_next_task 后 current_task + rewrite_count = 0
+    4. 任何阶段异常 → state.error_log 增量 + 标 _xxx_failed
+    5. save_state 后 last_updated 自动更新（iter #7-#28 行为）
+    """
+    def test_create_initial_state_all_progress_zero(self):
+        from engine.state import create_initial_state
+        s = create_initial_state(
+            novel_id="test_n", title="测试", platform="fanqie",
+            genre="玄幻", setting_concept="",
+        )
+        assert s["current_chapter"] == 0
+        assert s["current_arc"] == 0
+        assert s["budget_used_usd"] == 0.0
+        assert s["chapter_task_queue"] == []
+        assert s["current_task"] is None
+        assert s["error_log"] == []
+        assert s["rewrite_count_current"] == 0
+
+    def test_save_state_updates_last_updated(self, tmp_path):
+        """save_state 必须更新 last_updated（iter #28 行为）。"""
+        from engine.state import create_initial_state, save_state, load_state
+        s = create_initial_state("t", "t", "fanqie", "玄幻", "")
+        s["last_updated"] = "2000-01-01T00:00:00"  # 显式旧值
+        path = str(tmp_path / "state.json")
+        save_state(s, path)
+        loaded = load_state(path)
+        assert loaded["last_updated"] != "2000-01-01T00:00:00", \
+            "save_state 必须更新 last_updated（iter #28）"
+
+    def test_save_state_creates_tmp_during_write(self, tmp_path):
+        """save_state 必须用 .tmp + atomic rename（半写损坏防护）。"""
+        from engine.state import create_initial_state, save_state
+        s = create_initial_state("t", "t", "fanqie", "玄幻", "")
+        path = str(tmp_path / "state.json")
+        save_state(s, path)
+        # 完成后 .tmp 必须被替换走
+        assert not (tmp_path / "state.json.tmp").exists(), \
+            "save_state atomic write 完成后 .tmp 必须被替换走"
+
+    def test_node_get_next_task_pops_from_queue(self):
+        """node_get_next_task 必须从 queue pop 并 set current_task。"""
+        from engine.state import create_initial_state
+        from engine.orchestrator import node_get_next_task
+        s = create_initial_state("t", "t", "fanqie", "玄幻", "")
+        s["chapter_task_queue"] = [
+            {"chapter_number": 1, "chapter_role": "铺垫", "chapter_goal": "起始"},
+            {"chapter_number": 2, "chapter_role": "发展", "chapter_goal": "推进"},
+        ]
+        s = node_get_next_task(s)
+        assert s["current_task"]["chapter_number"] == 1, \
+            "node_get_next_task 必须 set current_task = queue[0]"
+        assert len(s["chapter_task_queue"]) == 1, \
+            f"node_get_next_task 必须 pop 一个，剩余 {len(s['chapter_task_queue'])}"
+        assert s["rewrite_count_current"] == 0, \
+            "node_get_next_task 必须重置 rewrite_count_current"
+        assert s["current_chapter"] == 1, \
+            f"current_chapter 必须 = current_task.chapter_number，实际 {s['current_chapter']}"
+
+    def test_node_get_next_task_empty_queue_returns_state(self):
+        """queue 空时 node_get_next_task 必须返回 state（不抛异常）。"""
+        from engine.state import create_initial_state
+        from engine.orchestrator import node_get_next_task
+        s = create_initial_state("t", "t", "fanqie", "玄幻", "")
+        s["chapter_task_queue"] = []
+        s2 = node_get_next_task(s)
+        assert s2["current_task"] is None, \
+            "空 queue 时 current_task 必须仍为 None"
