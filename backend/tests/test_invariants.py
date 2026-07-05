@@ -8053,3 +8053,297 @@ class TestRateLimitMemoryCleanup:
         stale_remaining = [k for k in limiter._buckets if k.startswith("stale_")]
         assert not stale_remaining, \
             f"stale 桶仍残留: {len(stale_remaining)} 个（{stale_remaining[:3]}...）"
+
+
+# ───────────────────────────────────────────
+# SSSS: 迭代 #82 — dev master key 必须持久化到磁盘解决 --reload 重启失效问题
+# ───────────────────────────────────────────
+class TestMasterKeyPersistedAcrossRestarts:
+    """迭代 #82 — 用户审计报告 (2026-07-05) 指出 #72 模块级缓存在 dev.bat
+    `--reload` 工作流下完全无效：uvicorn --reload 每保存一次代码文件就
+    重启子进程，模块级 `_dev_master_key` 跟着清空 → 每次 reload 都生成
+    新 key → 已加密的 Provider key **永久失效** ("昨天还好好的今天突然
+    全部 Provider 解密失败")。错误信息只有"解密失败"，用户完全无法定位。
+
+    正确修法：dev 模式首次生成后写到 backend/data/.dev_master_key
+    (gitignored)，下次启动 / --reload 自动重启时读回同个 key。
+    env MASTER_KEY 仍是 source-of-truth（运维改了 env 自动覆盖）。
+
+    加 invariant test 锁死：模拟"进程重启"（重置模块缓存）→ 仍能从
+    磁盘拿到同一个 key。
+    """
+    def _clean_dev_state(self, monkeypatch):
+        """清掉 MASTER_KEY env + 模块缓存 + 磁盘文件。"""
+        from app import security
+        monkeypatch.delenv("MASTER_KEY", raising=False)
+        monkeypatch.setattr(security, "_dev_master_key", None)
+        # 删除磁盘持久化文件（如果存在）
+        if security._DEV_MASTER_KEY_PATH.exists():
+            monkeypatch.setattr(
+                security, "_DEV_MASTER_KEY_PATH",
+                security._DEV_MASTER_KEY_PATH.with_name(
+                    security._DEV_MASTER_KEY_PATH.name + ".bak"
+                ),
+            )
+
+    def test_dev_key_persisted_to_disk_on_first_generation(self, monkeypatch, tmp_path):
+        """行为测试：dev 模式首次生成 key 必须写到磁盘（#82）。"""
+        from app import security
+        # 重定向持久化路径到 tmp_path（避免污染 backend/data/）
+        test_path = tmp_path / ".dev_master_key"
+        monkeypatch.setattr(security, "_DEV_MASTER_KEY_PATH", test_path)
+        self._clean_dev_state(monkeypatch)
+
+        from app.security import get_master_key
+        key1 = get_master_key()
+        # 文件必须存在
+        assert test_path.exists(), (
+            f"dev master key 必须持久化到 {test_path}（#82 --reload 安全）"
+        )
+        # 文件内容必须跟返回的 key 一致
+        persisted = test_path.read_text(encoding="utf-8").strip().encode("ascii")
+        assert persisted == key1, (
+            f"持久化的 key 必须跟 get_master_key() 返回一致，"
+            f"实际 {persisted[:20]}... vs {key1[:20]}..."
+        )
+
+    def test_dev_key_survives_simulated_process_restart(self, monkeypatch, tmp_path):
+        """核心 #82 测试：模拟 uvx --reload（清空模块缓存）→ 仍能解密旧 ciphertext。
+
+        这是用户报告的具体场景：保存代码 → uvicorn 重启 → 重启后解密之前
+        填的 Provider key。
+
+        行为测试方案：
+          1. 进程 1：get_master_key() → 拿到 key_A，写盘
+          2. 用 key_A 加密 plaintext → ciphertext
+          3. 模拟进程重启：清空 _dev_master_key cache（reload 触发）
+          4. 进程 2：get_master_key() → 从盘读到 key_A（应该一致）
+          5. decrypt(ciphertext) 必须成功
+        """
+        from app import security
+        test_path = tmp_path / ".dev_master_key"
+        monkeypatch.setattr(security, "_DEV_MASTER_KEY_PATH", test_path)
+        self._clean_dev_state(monkeypatch)
+
+        from app.security import get_master_key, encrypt_api_key, decrypt_api_key
+        # 进程 1：拿 key + 加密
+        key1 = get_master_key()
+        plaintext = "sk-test-real-key-12345"
+        ciphertext = encrypt_api_key(plaintext)
+        # 模拟 --reload 重启：清空模块缓存
+        monkeypatch.setattr(security, "_dev_master_key", None)
+        # 进程 2：拿 key（应该从磁盘读回同一个）+ 解密
+        key2 = get_master_key()
+        assert key2 == key1, (
+            f"--reload 重启后 key 必须保持一致（#82 核心需求），"
+            f"key1[:20]={key1[:20]!r} vs key2[:20]={key2[:20]!r}"
+        )
+        # 关键：重启后能解密之前写的 ciphertext（这是用户报告的核心痛点）
+        decrypted = decrypt_api_key(ciphertext)
+        assert decrypted == plaintext, (
+            f"--reload 重启后必须能解密之前的密文（#82），"
+            f"实际 decrypted={decrypted!r}, 期望={plaintext!r}"
+        )
+
+    def test_env_master_key_overrides_persisted_file(self, monkeypatch, tmp_path):
+        """覆盖关系测试：env MASTER_KEY 必须胜过磁盘持久化（source-of-truth）。
+
+        防止用户设了 env 但磁盘有旧 dev key 时静默用旧 key——这种情况下
+        新 ciphertext 用新 env key 加密，但解密时读的是旧 dev key 会爆。
+        """
+        from app import security
+        import base64, secrets
+        test_path = tmp_path / ".dev_master_key"
+        monkeypatch.setattr(security, "_DEV_MASTER_KEY_PATH", test_path)
+        # 先在磁盘写一个 dev key（模拟"上次 dev 模式生成的"）
+        old_key = base64.urlsafe_b64encode(secrets.token_bytes(32))
+        test_path.write_text(old_key.decode("ascii"), encoding="utf-8")
+        # 清掉内存缓存，确保走 env+disk 解析路径
+        monkeypatch.setattr(security, "_dev_master_key", None)
+        # 设置 env MASTER_KEY（不同值）
+        new_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+        monkeypatch.setenv("MASTER_KEY", new_key)
+        from app.security import get_master_key
+        result = get_master_key().decode("ascii")
+        assert result == new_key, (
+            f"env MASTER_KEY 必须胜过磁盘 dev key（#82 — source-of-truth），"
+            f"实际 {result[:20]}... 期望 {new_key[:20]}..."
+        )
+        # 磁盘 dev key 不应该被删除（让用户能切回 dev 模式仍用它）——不验证
+
+    def test_corrupted_disk_file_regenerates(self, monkeypatch, tmp_path):
+        """磁盘文件损坏时必须重新生成 + 覆盖（#82 — 容错）。"""
+        from app import security
+        test_path = tmp_path / ".dev_master_key"
+        monkeypatch.setattr(security, "_DEV_MASTER_KEY_PATH", test_path)
+        monkeypatch.delenv("MASTER_KEY", raising=False)
+        monkeypatch.setattr(security, "_dev_master_key", None)
+        # 写一个无效的 key 文件（不是 base64 格式）
+        test_path.write_text("not-valid-base64-!!!", encoding="utf-8")
+        from app.security import get_master_key
+        # 不应该抛；应该重新生成
+        key = get_master_key()
+        # 校验 key 格式
+        import base64
+        decoded = base64.urlsafe_b64decode(key)
+        assert len(decoded) == 32, (
+            f"损坏文件应触发重新生成（#82 容错），生成的 key 必须有效，实际 {key[:20]!r}"
+        )
+        # 文件应被覆盖为合法 key
+        persisted = test_path.read_text(encoding="utf-8").strip().encode("ascii")
+        import base64
+        decoded_persisted = base64.urlsafe_b64decode(persisted)
+        assert len(decoded_persisted) == 32, (
+            f"损坏文件应被覆盖为新 key（#82），实际 {persisted[:20]!r}"
+        )
+
+    def test_reset_master_key_cache_clears_disk_file(self, monkeypatch, tmp_path):
+        """reset_master_key_cache() 必须也清掉磁盘文件（#82 — API 完整）。"""
+        from app import security
+        test_path = tmp_path / ".dev_master_key"
+        monkeypatch.setattr(security, "_DEV_MASTER_KEY_PATH", test_path)
+        monkeypatch.delenv("MASTER_KEY", raising=False)
+        monkeypatch.setattr(security, "_dev_master_key", None)
+        # 先填一个文件
+        test_path.write_text("placeholder-key-value-here", encoding="utf-8")
+        from app.security import reset_master_key_cache
+        reset_master_key_cache()
+        # 内存缓存清空
+        assert security._dev_master_key is None
+        # 文件也应删除
+        assert not test_path.exists(), (
+            f"reset_master_key_cache() 必须也删磁盘文件（#82），但 {test_path} 仍存在"
+        )
+
+    def test_source_has_dev_key_persistence(self):
+        """源码扫描：get_master_key() 必须有磁盘持久化 + 加载逻辑（#82 — 防止回退）。"""
+        import inspect
+        from app import security
+        src = inspect.getsource(security.get_master_key)
+        # 必须读 dev_master_key 路径
+        assert "_DEV_MASTER_KEY_PATH" in src or "dev_master_key" in src.lower(), \
+            "get_master_key() 必须读磁盘 dev master key 文件（#82）"
+        # 必须有 atomic write 持久化逻辑
+        assert "_persist_dev_key" in src or "persist" in src.lower(), \
+            "get_master_key() 必须把首次生成的 key 持久化到磁盘（#82）"
+        # 必须优先 env 而非文件
+        if src.find("env_key = os.environ.get") < src.find("_load_persisted_dev_key"):
+            pass  # env 在前，OK
+        else:
+            # env 必须在持久化之前检查
+            assert False, "env MASTER_KEY 必须在持久化路径之前检查（source-of-truth）"
+
+    def test_dev_key_path_is_gitignored(self):
+        """dev master key 文件路径必须被 .gitignore 覆盖（#82 — 不能误提交）。"""
+        from pathlib import Path
+        repo_root = Path(__file__).resolve().parents[2]  # backend/tests → backend → repo_root
+        # .gitignore 必须包含 .dev_master_key
+        gi = repo_root / ".gitignore"
+        content = gi.read_text(encoding="utf-8")
+        assert ".dev_master_key" in content, (
+            f".gitignore 必须包含 .dev_master_key（#82 — 防误提交）"
+        )
+
+
+# ───────────────────────────────────────────
+# TTTT: 迭代 #83 — frontend Providers.tsx 必须有 master key 加密行为警告
+# ───────────────────────────────────────────
+class TestProvidersFrontendMasterKeyWarning:
+    """迭代 #83 — 用户审计反馈 (2026-07-05) frontend Providers.tsx 搜索
+    '重启 / 临时 / 失效' 关键词零提示——用户填 Key 时完全不知道有失效风险。
+
+    修法：在 Providers 页面顶部加醒目 banner 说明 dev mode 持久化行为 +
+    怎么显式设固定 MASTER_KEY。
+
+    加 invariant test 锁死源码包含警告文本（防止设计改动误删）。
+    """
+    def test_providers_tsx_has_master_key_warning(self):
+        """源码扫描：Providers.tsx 必须包含 MASTER_KEY / 加密行为警告。"""
+        from pathlib import Path
+        providers_tsx = Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages" / "Providers.tsx"
+        content = providers_tsx.read_text(encoding="utf-8")
+        # 必须包含警告组件标记
+        assert "MASTER_KEY_DEV_WARNING" in content, (
+            "frontend Providers.tsx 必须定义 MASTER_KEY_DEV_WARNING 组件（#83）"
+        )
+        # 必须包含关键提示关键词
+        required_phrases = [
+            "dev",  # 提及 dev 模式
+            "MASTER_KEY",  # 变量名
+            "重启",  # 重启相关提示（用户搜索过这个关键词）
+            "decrypt_api_key" if "decrypt" in content else "解密失败",  # 失效提示
+            "scripts.generate_master_key" if "generate_master_key" in content else "scripts/generate_master_key",  # 给出解决命令
+        ]
+        missing = [p for p in required_phrases if p not in content]
+        assert not missing, (
+            f"Providers.tsx 警告必须包含关键短语: {missing}\n"
+            f"实际内容片段: {content[content.find('MASTER_KEY_DEV_WARNING'):content.find('MASTER_KEY_DEV_WARNING')+500] if 'MASTER_KEY_DEV_WARNING' in content else 'N/A'}"
+        )
+
+    def test_providers_tsx_warning_is_rendered(self):
+        """警告必须在 Providers 组件里被实际 render（不只是定义）。"""
+        from pathlib import Path
+        providers_tsx = Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages" / "Providers.tsx"
+        content = providers_tsx.read_text(encoding="utf-8")
+        # 找到 Providers 组件 render 部分
+        render_part = content[content.find("return ("):]
+        assert "{MASTER_KEY_DEV_WARNING}" in render_part, (
+            "Providers 组件 render 区必须实际挂载 MASTER_KEY_DEV_WARNING 组件（#83 — 定义但不用 = 没效果）"
+        )
+
+
+# ───────────────────────────────────────────
+# UUUU: 迭代 #201 — BUDGET_HARD 50% 放宽必须文档化（避免被误当成 bug）
+# ───────────────────────────────────────────
+class TestBudgetHardValueDocumented:
+    """迭代 #201：用户审计报告 (2026-07-05) 指出 BUDGET_HARD = 1.50 等于
+    把界面预算上限乘以 150% 才硬停（填 $500 → 实际 $750 才停）—— 文档
+    之前只说 "MVP-relaxed per patches/2026-06-28"，没说为什么 / 怎么改。
+
+    修法：BUDGET_HARD 定义上方加详细 docstring 说明设计原因 + 怎么调严。
+    加 invariant test 锁死当前数值 + 文档说明存在——防止有人"修正"成 1.0
+    而没有更新文档沟通用户。
+    """
+    def test_budget_hard_value_is_150(self):
+        """BUDGET_HARD 必须保持 1.50（如果改成更严必须更新 #201 docstring）。"""
+        from engine import orchestrator as orch
+        assert orch.BUDGET_HARD == 1.50, (
+            f"BUDGET_HARD 必须保持 1.50（迭代 #201 设计的 MVP 放宽阈值）。"
+            f"实际 {orch.BUDGET_HARD}。"
+            f"改成更严前务必更新 #201 文档说明 + 跟用户沟通。"
+        )
+
+    def test_budget_hard_has_documentation(self):
+        """BUDGET_HARD 文档必须明确说明 100% vs 150% 行为差异 + 怎么调严。"""
+        import re
+        from engine import orchestrator as orch
+        import inspect
+        src = inspect.getsource(orch)
+        # 找 BUDGET_HARD 定义及其上方 docstring/注释
+        # regex 匹配 "N 行注释/连续注释 + BUDGET_HARD"
+        # 简化做法：取源码前 30 行（包含 docstring + BUDGET_HARD）作为 chunk
+        budget_lines = []
+        for line in src.split("\n"):
+            budget_lines.append(line)
+            if "BUDGET_HARD" in line and "=" in line and "1.50" in line:
+                break
+        chunk = "\n".join(budget_lines[-30:])
+        # 必须包含关键说明短语
+        required_phrases = [
+            "MVP",  # 提及 MVP 阶段
+            "100%",  # 提及 100% 区间行为
+            "150%",  # 提及 150% 阈值
+            "放宽",  # 提及"放宽"或类似
+        ]
+        missing = [p for p in required_phrases if p not in chunk]
+        assert not missing, (
+            f"BUDGET_HARD 上方文档必须包含关键短语: {missing}\n"
+            f"实际 chunk:\n{chunk}"
+        )
+        # 怎么调严：必须有指引
+        guidance_keywords = ["BUDGET_HARD = 1.00", "改 BUDGET_HARD", "调严"]
+        has_guidance = any(k in chunk for k in guidance_keywords)
+        assert has_guidance, (
+            f"BUDGET_HARD 文档必须告诉读者怎么改严（#201），"
+            f"实际 chunk:\n{chunk}"
+        )

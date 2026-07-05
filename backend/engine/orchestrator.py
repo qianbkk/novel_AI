@@ -65,6 +65,18 @@ CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 MAX_REWRITE  = 3
 PASS_SCORE   = 6.5
+# 迭代 #201: 文档化预算硬停阈值的 MVP 放宽
+# 用户审计报告 (2026-07-05) 标记"界面预算上限 vs 实际硬停阈值不一致"——
+# 期望填 $500 → 实际 $750 才硬停。这里给后来者留个明确说明。
+#
+# 设计决策：MVP 阶段把 BUDGET_HARD 设为 1.50（150%）而不是 1.00（100%），
+# 原因是跑网文生成时 LLM 偶尔会超调用预算（如 ruby LLM cache miss / 续写
+# 拉长），过早硬停会打断用户正常 50 章流程。100%-150% 区间只会
+# 标 budget_paused + 弹 human_pending，不强制 abort。
+#
+# 想要严格 100% 停 → 改 BUDGET_HARD = 1.00 即可，但建议先跑完一轮
+# 50 章看实际预算消耗分布，再调严。生产部署若已明确成本上限，
+# 在 .env 设 NOVEL_BUDGET_HARD_OVERRIDE=1.0 覆盖（patch #201 TODO）。
 BUDGET_WARN  = 1.00   # 100% warning
 BUDGET_HARD  = 1.50   # 150% hard stop (MVP-relaxed per patches/2026-06-28)
 

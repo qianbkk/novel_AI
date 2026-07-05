@@ -14,6 +14,41 @@ const EMPTY_FORM: ProviderForm = {
   needs_proxy: false,
 };
 
+// 迭代 #83：用户审计反馈前端没有任何关于 master key 失效风险的提示。
+// 在 Providers 页面顶部加醒目 banner 说明 dev 模式下 master key 持久化
+// 行为 + 如何显式设固定 MASTER_KEY 保护已有数据。
+// （后端 #82 已经修了 dev mode 自动持久化到 data/.dev_master_key 文件，
+//  让 --reload 重启不会失效——但用户仍应了解行为）
+const MASTER_KEY_DEV_WARNING = (
+  <div
+    role="alert"
+    style={{
+      background: "#fff8e1",
+      border: "1px solid #ffcc02",
+      borderRadius: 6,
+      padding: "10px 14px",
+      marginBottom: 16,
+      fontSize: 13,
+      lineHeight: 1.5,
+      color: "#5d4506",
+    }}
+  >
+    <strong style={{ display: "block", marginBottom: 4 }}>
+      ⚠️ 关于 Provider Key 加密
+    </strong>
+    后端默认用 dev mode 持久化的 master key 加密你填写的 API key——
+    <code>backend/data/.dev_master_key</code> (gitignored)。每次保存代码 uvicorn
+    重启都会读回同一个 key，<strong>已配置 Key 不会失效</strong>。
+    <br />
+    但如果你清掉 <code>backend/data/</code> 目录或换了台电脑，
+    <strong>所有 Provider Key 会永久失效</strong>（"解密失败"）。
+    想要真正固定：<code>export MASTER_KEY=&lt;base64&gt;</code>{" "}
+    <span style={{ color: "#666" }}>
+      （生成：<code>python -m scripts.generate_master_key --print</code>）
+    </span>
+  </div>
+);
+
 export default function Providers() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [form, setForm] = useState<ProviderForm>(EMPTY_FORM);
@@ -130,6 +165,8 @@ export default function Providers() {
       </div>
 
       {error && <div className="banner banner-danger">{error}</div>}
+      {/* 迭代 #83：顶部 master key 加密行为警告 — 让用户知道 dev mode 安全但需了解 */}
+      {MASTER_KEY_DEV_WARNING}
 
       <div className="card">
         <h3 className="card__title">{editingId ? "编辑 Provider" : "新增 Provider"}</h3>

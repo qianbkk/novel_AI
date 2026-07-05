@@ -49,3 +49,10 @@ PID
 
 # Backend runtime logs (see backend/app/logging_setup.py)
 backend/logs/
+
+# Dev master key for Fernet encryption (迭代 #82)
+# 由 app/security.py 在 MASTER_KEY env 未设时自动生成持久化——
+# dev.bat --reload 工作流下保证重启后仍能解密 Provider key。
+# （已在 backend/data/ 规则覆盖，但显式列出防止后续重构挪动 data 目录时漏掉）
+backend/data/.dev_master_key
+*.dev_master_key
