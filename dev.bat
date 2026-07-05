@@ -85,6 +85,17 @@ for /F "tokens=5" %%P in ('netstat -ano ^| findstr ":%PORT_TO_CHECK% " ^| findst
 )
 goto :eof
 
+REM ---------- Read our recorded PIDs from .runlogs/<name>.pid ----------
+REM Sets TRUSTED_PIDS to space-separated PIDs, or empty if file missing/blank.
+REM This is the "guest list" we wrote when WE started the app, so we can
+REM distinguish our process from any foreign listener squatting on the port.
+:read_pid_file
+set "TRUSTED_PIDS="
+if exist "%~1" (
+    set /p "TRUSTED_PIDS=" < "%~1"
+)
+goto :eof
+
 :kill_pid
 set "PID_TO_KILL=%~1"
 taskkill /F /PID %PID_TO_KILL% >nul 2>&1
@@ -96,23 +107,56 @@ echo.
 echo %CYAN%[Snapshot]%RESET%
 echo %GRAY%------------------------------------------------------------%RESET%
 
+REM Backend snapshot — three states:
+REM   running : PID file exists AND our recorded PID is still on the port.
+REM   unknown : port is bound but NOT by our recorded PID (foreign process).
+REM   stopped : nothing on the port (PID file cleared if stale).
 call :find_pids_by_port %BACKEND_PORT%
-set "BE_PIDS=!RESULT_PIDS!"
-if defined BE_PIDS (
-    echo   backend  :%BACKEND_PORT%    %GREEN%running%RESET%   PIDs: !BE_PIDS!
-    set "BE_UP=1"
+set "BE_PORT_PIDS=!RESULT_PIDS!"
+call :read_pid_file "%LOG_DIR%\backend.pid"
+set "BE_TRUSTED_PIDS=!TRUSTED_PIDS!"
+set "BE_UP=0"
+if defined BE_TRUSTED_PIDS (
+    for %%P in (!BE_TRUSTED_PIDS!) do (
+        for %%Q in (!BE_PORT_PIDS!) do (
+            if "%%P"=="%%Q" set "BE_UP=1"
+        )
+    )
+)
+if "!BE_UP!"=="1" (
+    echo   backend  :%BACKEND_PORT%    %GREEN%running%RESET%   PIDs: !BE_PORT_PIDS!
 ) else (
-    echo   backend  :%BACKEND_PORT%    %GRAY%stopped%RESET%
+    REM Either no PID file or our PID is gone — clean up stale file if any.
+    if exist "%LOG_DIR%\backend.pid" del "%LOG_DIR%\backend.pid" >nul 2>&1
+    if defined BE_PORT_PIDS (
+        echo   backend  :%BACKEND_PORT%    %YELLOW%unknown%RESET%   PIDs: !BE_PORT_PIDS!  not started by dev.bat
+    ) else (
+        echo   backend  :%BACKEND_PORT%    %GRAY%stopped%RESET%
+    )
     set "BE_UP=0"
 )
 
 call :find_pids_by_port %FRONTEND_PORT%
-set "FE_PIDS=!RESULT_PIDS!"
-if defined FE_PIDS (
-    echo   frontend :%FRONTEND_PORT%    %GREEN%running%RESET%   PIDs: !FE_PIDS!
-    set "FE_UP=1"
+set "FE_PORT_PIDS=!RESULT_PIDS!"
+call :read_pid_file "%LOG_DIR%\frontend.pid"
+set "FE_TRUSTED_PIDS=!TRUSTED_PIDS!"
+set "FE_UP=0"
+if defined FE_TRUSTED_PIDS (
+    for %%P in (!FE_TRUSTED_PIDS!) do (
+        for %%Q in (!FE_PORT_PIDS!) do (
+            if "%%P"=="%%Q" set "FE_UP=1"
+        )
+    )
+)
+if "!FE_UP!"=="1" (
+    echo   frontend :%FRONTEND_PORT%    %GREEN%running%RESET%   PIDs: !FE_PORT_PIDS!
 ) else (
-    echo   frontend :%FRONTEND_PORT%    %GRAY%stopped%RESET%
+    if exist "%LOG_DIR%\frontend.pid" del "%LOG_DIR%\frontend.pid" >nul 2>&1
+    if defined FE_PORT_PIDS (
+        echo   frontend :%FRONTEND_PORT%    %YELLOW%unknown%RESET%   PIDs: !FE_PORT_PIDS!  not started by dev.bat
+    ) else (
+        echo   frontend :%FRONTEND_PORT%    %GRAY%stopped%RESET%
+    )
     set "FE_UP=0"
 )
 echo %GRAY%------------------------------------------------------------%RESET%
@@ -214,6 +258,10 @@ echo %RED%[!APP_NAME! start failed]%RESET% see: %LOG_DIR%\!LOG_BASENAME!.log
 set "LAST_RESULT=fail"
 goto :eof
 :_launch_app_report_up
+REM Record our PID(s) so :print_status can later distinguish "our" process
+REM from any foreign listener squatting on the port. Format: one line, space-
+REM separated, same as RESULT_PIDS.
+> "%PID_FILE%" echo !RESULT_PIDS!
 echo %GREEN%[!APP_NAME! up]%RESET% PIDs: !RESULT_PIDS!    !UP_URL!
 goto :eof
 
@@ -226,6 +274,7 @@ set "TOOL_NAME=uvicorn"
 set "UP_URL=http://%BACKEND_HOST%:%BACKEND_PORT%/docs"
 set "LOG_BASENAME=backend"
 set "WINDOW_TITLE=novelai-backend"
+set "PID_FILE=%LOG_DIR%\backend.pid"
 set "START_WAIT=5"
 set "BOOT_RETRY=0"
 set "BOOT_WAIT=0"
@@ -244,6 +293,7 @@ set "TOOL_NAME=vite   "
 set "UP_URL=http://%FRONTEND_HOST%:%FRONTEND_PORT%/"
 set "LOG_BASENAME=frontend"
 set "WINDOW_TITLE=novelai-frontend"
+set "PID_FILE=%LOG_DIR%\frontend.pid"
 set "START_WAIT=6"
 set "BOOT_RETRY=1"
 set "BOOT_WAIT=6"
@@ -260,8 +310,11 @@ set "APP_NAME=%~1"
 set "APP_PORT=%~2"
 set "ORPHAN_RETRY=%~3"
 set "LAST_RESULT=ok"
+set "PID_FILE=%LOG_DIR%\!APP_NAME!.pid"
 call :find_pids_by_port %APP_PORT%
 if not defined RESULT_PIDS (
+    REM Nothing on port — clear any stale PID file.
+    if exist "!PID_FILE!" del "!PID_FILE!" >nul 2>&1
     echo %GRAY%[!APP_NAME! not running]%RESET%
     goto :eof
 )
@@ -270,6 +323,8 @@ for %%P in (!RESULT_PIDS!) do call :kill_pid %%P
 ping -n 2 127.0.0.1 >nul
 call :find_pids_by_port %APP_PORT%
 if not defined RESULT_PIDS (
+    REM Success — drop the guest list so a future start is clean.
+    if exist "!PID_FILE!" del "!PID_FILE!" >nul 2>&1
     echo %GREEN%[!APP_NAME! stopped]%RESET%
     goto :eof
 )
@@ -286,6 +341,7 @@ if defined RESULT_PIDS (
     echo %RED%[stop failed]%RESET%   PIDs still on :%APP_PORT%: !RESULT_PIDS!
     set "LAST_RESULT=fail"
 ) else (
+    if exist "!PID_FILE!" del "!PID_FILE!" >nul 2>&1
     echo %GREEN%[!APP_NAME! stopped]%RESET%
 )
 goto :eof
