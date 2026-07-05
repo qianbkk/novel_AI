@@ -66,9 +66,15 @@ async def call_llm_json(
                 )
                 resp.raise_for_status()
                 data = resp.json()
+                # 迭代 #62: 之前 catch 只到 KeyError — IndexError（empty choices
+                # 或 missing message）会跳出重试循环。LLM 返回 {"choices": []}
+                # 或 {"choices": [{"message": null}]} 是真实场景（rate limit
+                # 触发的 fallback、模型挂了等）→ IndexError / TypeError 都应该
+                # 走重试，而不是直接 LLMError 把最后一次 IndexError 暴露。
                 text = data["choices"][0]["message"]["content"]
                 return json.loads(text)
-            except (httpx.HTTPError, json.JSONDecodeError, KeyError) as e:
+            except (httpx.HTTPError, json.JSONDecodeError, KeyError,
+                    IndexError, TypeError) as e:
                 last_error = e
                 continue
     raise LLMError(

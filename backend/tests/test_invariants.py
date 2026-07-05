@@ -6515,3 +6515,96 @@ class TestOrchestratorPipelineStateCoherence:
         s2 = node_get_next_task(s)
         assert s2["current_task"] is None, \
             "空 queue 时 current_task 必须仍为 None"
+
+
+# ───────────────────────────────────────────
+# CCCC: fix #62 — app/llm_client.py IndexError 不再逃出重试循环
+# ───────────────────────────────────────────
+class TestLlmClientRetryCatchesAll:
+    """迭代 #62: app/llm_client.py:71 之前只 catch KeyError — IndexError
+    （choices 空列表）和 TypeError（message 是 None）会跳出重试循环。
+    修法：扩 catch 列表。
+    """
+    def test_llm_client_catches_index_error(self):
+        """LLM 返回 {\"choices\": []} 必须走重试，不是直接抛 IndexError。"""
+        from unittest.mock import patch, AsyncMock, MagicMock
+        from app import llm_client as lc_mod
+        import httpx
+
+        # mock resolve_provider 返回 fake provider
+        fake_cfg = MagicMock()
+        fake_cfg.provider = "deepseek"
+        fake_cfg.api_base = "https://api.deepseek.com/v1"
+        fake_cfg.api_key = "sk-fake"
+        fake_cfg.model = "deepseek-chat"
+
+        # 第一次返回 choices=[]（IndexError），第二次成功
+        empty_resp = MagicMock()
+        empty_resp.raise_for_status = MagicMock()
+        empty_resp.json = MagicMock(return_value={"choices": []})
+        ok_resp = MagicMock()
+        ok_resp.raise_for_status = MagicMock()
+        ok_resp.json = MagicMock(return_value={
+            "choices": [{"message": {"content": '{"ok": true}'}}]
+        })
+        # 使用 AsyncMock 让两次调用返回不同值
+        async def post_side_effect(*args, **kwargs):
+            return empty_resp if post_side_effect.call_count == 0 else ok_resp
+        post_side_effect.call_count = 0
+        async def track(*args, **kwargs):
+            post_side_effect.call_count += 1
+            if post_side_effect.call_count == 1:
+                return empty_resp
+            return ok_resp
+
+        with patch.object(lc_mod, "resolve_provider", return_value=fake_cfg), \
+             patch.object(lc_mod, "_build_httpx_client") as mock_client:
+            # 构造 AsyncClient that 走 __aenter__ 返回 .post side_effect
+            mock_inst = MagicMock()
+            mock_inst.__aenter__ = AsyncMock(return_value=mock_inst)
+            mock_inst.__aexit__ = AsyncMock(return_value=None)
+            mock_inst.post = track
+            mock_client.return_value = mock_inst
+
+            import asyncio
+            result = asyncio.run(lc_mod.call_llm_json("structured_logic", "sys", "user"))
+        assert result == {"ok": True}, \
+            f"IndexError 必须被重试吞掉，第二次成功返回 dict，实际 {result}"
+
+    def test_llm_client_catches_type_error(self):
+        """LLM 返回 {\"choices\": [{\"message\": null}]} 必须走重试。"""
+        from unittest.mock import patch, AsyncMock, MagicMock
+        from app import llm_client as lc_mod
+
+        fake_cfg = MagicMock()
+        fake_cfg.provider = "deepseek"
+        fake_cfg.api_base = "https://api.deepseek.com/v1"
+        fake_cfg.api_key = "sk-fake"
+        fake_cfg.model = "deepseek-chat"
+
+        type_err_resp = MagicMock()
+        type_err_resp.raise_for_status = MagicMock()
+        type_err_resp.json = MagicMock(return_value={
+            "choices": [{"message": None}]  # None["content"] → TypeError
+        })
+        ok_resp = MagicMock()
+        ok_resp.raise_for_status = MagicMock()
+        ok_resp.json = MagicMock(return_value={
+            "choices": [{"message": {"content": '{"ok": true}'}}]
+        })
+
+        with patch.object(lc_mod, "resolve_provider", return_value=fake_cfg), \
+             patch.object(lc_mod, "_build_httpx_client") as mock_client:
+            mock_inst = MagicMock()
+            mock_inst.__aenter__ = AsyncMock(return_value=mock_inst)
+            mock_inst.__aexit__ = AsyncMock(return_value=None)
+            call_count = [0]
+            async def track(*args, **kwargs):
+                call_count[0] += 1
+                return type_err_resp if call_count[0] == 1 else ok_resp
+            mock_inst.post = track
+            mock_client.return_value = mock_inst
+            import asyncio
+            result = asyncio.run(lc_mod.call_llm_json("structured_logic", "sys", "user"))
+        assert result == {"ok": True}, \
+            f"TypeError 必须被重试吞掉，实际 {result}"
