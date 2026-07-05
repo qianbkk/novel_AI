@@ -362,6 +362,12 @@ def run_graph_task(
                 from .agents.planner import run_planner as _run_planner
                 with redirect_stdout(capture):
                     _run_planner(args, str(DATA_DIR / "engine" / "output"))
+                # 迭代 #71: planner 写完 setting_package.json 后显式 invalidate
+                # orchestrator 的 _setting_cache（兜底 mtime 检测，1s 精度
+                # 风险 + 跨进程调用场景）。如果同进程里之后要 _setting()，
+                # 这里 invalidate 保证拿最新数据。
+                from .orchestrator import invalidate_setting_cache
+                invalidate_setting_cache()
                 exit_code = 0
             except ImportError:
                 log.warning("planner agent not yet ported (P2)")

@@ -16,6 +16,7 @@ Import graph (all relative; NO sys.path injection):
 """
 from __future__ import annotations
 import json
+import logging
 import os
 import sys
 import time
@@ -70,11 +71,15 @@ BUDGET_HARD  = 1.50   # 150% hard stop (MVP-relaxed per patches/2026-06-28)
 # Module-level cache (avoid re-reading setting per chapter)
 _setting_cache: dict | None = None
 _setting_mtime: float | None = None  # 迭代 #65: 用 mtime 检测文件变化自动 invalidate
+_log = logging.getLogger("novel_ai.engine.orchestrator")  # 迭代 #70: stat 失败可观测性
 
 
 def _setting() -> dict:
     """读 setting_package.json。mtime 变了自动 invalidate cache（同一进程里
     planner 跑完后重新读最新值）。
+
+    迭代 #69: 返回 .copy() 而非内部 cache 引用 — 防止调用方意外修改全局
+    缓存（之前 identity 相等测试鼓励了这种行为，违反直觉）。
     """
     global _setting_cache, _setting_mtime
     if not SETTING_PATH.exists():
@@ -84,15 +89,18 @@ def _setting() -> dict:
         return {}
     try:
         mtime = SETTING_PATH.stat().st_mtime
-    except OSError:
-        # stat 失败（权限 / 文件消失等）→ fall back to cache or empty
-        return _setting_cache if _setting_cache is not None else {}
+    except OSError as e:
+        # 迭代 #70: 之前静默 fallback 到旧 cache —— 在生产环境掩盖真实的
+        # 文件系统问题（权限被改 / 文件被删等）。现在 log.warning 让运维知道。
+        _log.warning("_setting: stat(%s) failed (%s); falling back to cache", SETTING_PATH, e)
+        return dict(_setting_cache) if _setting_cache is not None else {}
     if _setting_cache is None or _setting_mtime != mtime:
         # 文件变了 → 重新 load
         with open(SETTING_PATH, encoding="utf-8") as f:
             _setting_cache = json.load(f)
         _setting_mtime = mtime
-    return _setting_cache
+    # 迭代 #69: 返回 copy 防止外部修改污染 cache
+    return dict(_setting_cache)
 
 
 def invalidate_setting_cache() -> None:

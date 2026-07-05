@@ -4,6 +4,71 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased] — 2026-07-05
+
+### Bug Fix（迭代 #72 — 内部审计 / 严重）
+
+- **`fix(app): get_master_key 同进程稳定（修 in-process key 漂移致命 bug）**
+  - **症状**：dev 模式（`MASTER_KEY` 环境变量未设置）下，`get_master_key()`
+    每次调用都会生成**新的**随机 Fernet key，导致：
+    ```python
+    ciphertext = encrypt_api_key('sk-test')     # 用 key_K1
+    decrypt_api_key(ciphertext)                  # 用 key_K2 ≠ K1
+    # → ValueError "api_key 解密失败（可能是 MASTER_KEY 变了）"
+    ```
+  - 也就是说 **README 承诺的 "dev 模式不设 MASTER_KEY 也能跑（至少同进程内稳定）" 是不成立的**——一走 "写入 Provider→读取/解密" 这条最基本路径就立刻报错。
+  - **祸根**：`get_master_key()` 没有模块级缓存，每次 `encrypt`/`decrypt` 都重新走 "env 没设 → 生成新 key" 分支。`tests/test_invariants.py:1487` 周围甚至留了注释"测试用稳定 key（避免 get_master_key 拿到临时 key）"——写测试的人已经发现这个不稳定性，但选择绕开而非修复，让 bug 一直活到现在。
+  - **修法**：模块级 `_dev_master_key` 缓存 + 新增 `reset_master_key_cache()` 公开 API。dev 分支首次生成后复用；env 路径不走缓存（每次重新读 env，作为 source-of-truth，让测试 monkeypatch 切 env 立刻生效）。
+  - **加 6 个 invariant test 锁死**（`TestMasterKeyStableAcrossCalls`）：含审计报告里那条 **复现脚本** 的反向测试——dev 模式同进程 encrypt→decrypt 必须成功；env 路径切换立刻生效；`reset_master_key_cache()` 公开 API 可调；源码必须有 `_dev_master_key` 缓存标志。
+
+### Bug Fix（迭代 #73 — 内部审计 / 同型扫描补漏）
+
+- **`fix(engine): memory/manager.py 不再静默吞异常**（CHANGELOG 多次"except Exception → log+fail-fast"模式的补漏）
+  - CHANGELOG 里 60+ 次修复都用了同型扫描，但 `engine/memory/manager.py` 被漏扫到——文件里有 **4 处**  `except Exception: continue/pass` 静默吞：
+    1. `_get_internal_samples` 读章节 meta 失败（L246）
+    2. `_get_internal_samples` 读章节正文失败（L258）
+    3. `_get_external_samples` 读风格样本失败（L276）
+    4. `maybe_update_style_samples` 清理旧 auto 文件失败（L301）
+  - **影响**：记忆/风格样本文件损坏时 Writer 上下文**悄悄变少**，无任何信号告诉运维"为什么最近几章好像不太连贯"。同目录下 `writer.py` 的多处同型 except 已经规范化为 `log.exception(...)` + 降级——确认这个文件是被同型扫描漏掉的，不是没扫。
+  - **修法**：模块级 `_log = logging.getLogger("novel_ai.engine.memory.manager")` + 4 处都改成 `_log.exception(...)` 后继续（行为不变，但有诊断信号）。
+  - **加 6 个 invariant test 锁死**（`TestMemoryManagerNoSilentException`）：含**行为测试**——写入坏 meta 文件 + 好 meta+章节，验证 `_get_internal_samples()` 仍返回好样本（continue 行为保留）且 caplog 能抓到坏文件路径的 error 记录（之前是被吞掉的）。
+
+### Bug Fix（迭代 #71 — 内部审计）
+
+- **`fix(engine): graph.planner 写完 setting_package.json 显式 invalidate cache**
+  - 兜底 `_setting()` mtime 检测的 1 秒精度风险（同一秒内多次写文件 mtime 不变 → cache 漏刷新）
+  - `run_graph_task` 里 elif `command == "planner":` 分支写完立刻 `invalidate_setting_cache()`
+  - 1 个 invariant test 锁死 planner 分支必须调此 helper
+
+### Bug Fix（迭代 #70 — 内部审计）
+
+- **`fix(engine): orchestrator._setting stat 失败可观测**
+  - 之前 `try: mtime = ...stat() except OSError: return cache` 静默 fallback
+  - 修法：`log.warning("_setting: stat(%s) failed (%s); falling back")` 让运维知道
+  - 1 个 invariant test 锁死（行为测试 + monkeypatch `Path.stat` 抛 OSError + caplog 抓 WARNING）
+
+### Bug Fix（迭代 #69 — 内部审计）
+
+- **`fix(engine): orchestrator._setting 返回 copy 而非内部 cache 引用**
+  - 之前返回 `_setting_cache` 直接给调用方，调用方修改会**污染全局缓存**
+  - 之前测试用 `assert second is first` 反而**鼓励了**这种危险 identity pattern
+  - 修法：返回 `dict(_setting_cache)` 副本；同时把断言改成 value equality
+  - 1 个 invariant test 锁死（mutation 必须不影响下次读取）
+
+### Bug Fix（迭代 #68 — 内部审计）
+
+- **`fix(engine): save_state 用 timezone.utc 而非 naive datetime**
+  - 之前 `datetime.now()` 没带 timezone → 跨时区/容器部署时 last_updated 时间含义歧义
+  - 修法：`datetime.now(timezone.utc).isoformat()`，顶层 import 复用（去掉函数内冗余 import）
+  - **重复 invariant test 加严**：源码扫描不再写死 `r"datetime\.now\(\)"`（会被注释里"naive datetime.now()"文本误判）——改成先剥离注释+docstring 再匹配 `r"datetime\.now\(\s*\)"`
+
+### Bug Fix（迭代 #67 — 内部审计）
+
+- **`fix(engine): save_state 用 atomic_write_json 替代手写 .tmp + rename**
+  - 跟 state.py 里其他几处（memory/manager.py 等）共用 `utils.atomic_write_json`
+  - 减少重复代码 + 跨平台行为一致
+  - 旧 .lock + placeholder byte hack 保留（Windows msvcrt 短时锁）
+
 ## [Unreleased] — 2026-07-04
 
 ### Bug Fix（迭代 #65 — 内部审计）

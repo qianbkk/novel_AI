@@ -20,6 +20,7 @@ Entity tracker: 人物状态/道具/伏笔/时间线统一通过 L2 子字段表
 from __future__ import annotations
 import glob
 import json
+import logging
 import os
 import time
 from typing import Tuple
@@ -29,6 +30,10 @@ from ..config.paths import (
 )
 from ..config.power_levels import DEFAULT_POWER_LEVEL
 from ..utils import atomic_write_json as _atomic_write_json
+
+# 迭代 #73: module logger 之前缺失 → 4 处 silent `except Exception: continue`
+# 完全没人看得见。Writer 拿到残缺上下文没有任何信号。
+_log = logging.getLogger("novel_ai.engine.memory.manager")
 
 
 # ── Thresholds ──
@@ -243,7 +248,8 @@ def _get_internal_samples() -> list:
                 meta = json.load(f)
             if meta.get("score", 0) >= INTERNAL_MIN_SCORE:
                 scored.append((meta["score"], meta["chapter_number"]))
-        except Exception:
+        except Exception:  # 迭代 #73: 之前静默 continue, 改为 log.exception
+            _log.exception("读取章节 meta 失败: %s", mf)
             continue
     scored.sort(reverse=True)
     result = []
@@ -255,7 +261,8 @@ def _get_internal_samples() -> list:
                     t = f.read()
                 if not t.startswith("[待修订]"):
                     result.append(t[:1500])
-            except Exception:
+            except Exception:  # 迭代 #73
+                _log.exception("读取章节正文失败: %s", p)
                 continue
     return result
 
@@ -273,7 +280,8 @@ def _get_external_samples() -> list:
                 content = f.read()
             lines = [l for l in content.split("\n") if not l.startswith("#")]
             result.append("\n".join(lines).strip()[:1500])
-        except Exception:
+        except Exception:  # 迭代 #73
+            _log.exception("读取外部风格样本失败: %s", fp)
             continue
     return result
 
@@ -298,8 +306,9 @@ def maybe_update_style_samples(current_chapter: int, novel_id: str) -> bool:
             ch_in = int(os.path.basename(fp).split("ch")[1].split("_")[0])
             if ch_in < current_chapter:
                 os.remove(fp)
-        except Exception:
-            pass
+        except Exception:  # 迭代 #73: 之前静默 pass
+            _log.exception("清理旧 auto 风格文件失败: %s", fp)
+            continue
     return True
 
 

@@ -6786,7 +6786,10 @@ class TestOrchestratorSettingCacheInvalidates:
             second = orch_mod._setting()
         assert mock_load.call_count == 0, \
             f"文件没改时 _setting 不应重读盘，但调了 {mock_load.call_count} 次 json.load"
-        assert second is first, "cache 必须返回同一对象（identity）"
+        # 迭代 #69：_setting 现在返回 dict copy（防调用方污染 cache），
+        # 不再保证 identity 相等，但 value 必须一致
+        assert second == first, \
+            f"cache 命中必须返回相同内容（#69 返回 copy，不再是同对象），实际 {second} vs {first}"
 
     def test_invalidate_setting_cache_helper(self, tmp_path, monkeypatch):
         """invalidate_setting_cache() 必须重置 cache + mtime。"""
@@ -6831,3 +6834,380 @@ class TestSaveStateWindowsEmptyFileLock:
             "engine.state.save_state 必须有 win32 平台分支处理空文件 lock 失败"
         assert "placeholder" in code_src or "seek(0)" in code_src, \
             "engine.state.save_state 必须有 placeholder byte / seek(0) workaround"
+
+
+# ───────────────────────────────────────────
+# HHHH: 旧审计报告 review #1 / #2 落地（fix #67-#71）
+# ───────────────────────────────────────────
+class TestAuditReviewFeedbackApplied:
+    """应用参考审计报告里的 actionable items。
+
+    参考 1（commit 33a5c09 — save_state last_updated）：
+      - 冗余 local import datetime（已修：state.py:10 顶层 import 复用）
+      - naive datetime → 改 timezone.utc（#68）
+      - 非原子写：save_state 之前用 raw open(w)+json.dump（iter #67 atomic write）
+      - 测试 state 不完整（稍后改）
+
+    参考 2（commit 4b2bc7e — _setting mtime invalidate）：
+      - stat 失败静默 fallback → 加 log.warning（#70）
+      - 返回内部 cache 引用 → 返回 copy（#69）
+      - planner 不调 invalidate → planner 写完显式调（#71）
+    """
+    def test_save_state_uses_timezone_utc(self, tmp_path):
+        """save_state 必须用 timezone.utc 而非 naive datetime。"""
+        from engine.state import create_initial_state, save_state, load_state
+        import re
+        s = create_initial_state("t", "t", "fanqie", "玄幻", "")
+        path = str(tmp_path / "state.json")
+        save_state(s, path)
+        loaded = load_state(path)
+        ts = loaded["last_updated"]
+        # timezone.utc 生成的 ISO 字符串可能末尾带 +00:00 或 Z
+        # naive datetime 是 "2024-01-01T12:00:00.123456"（无 timezone）
+        assert "+00:00" in ts or ts.endswith("Z") or "+0000" in ts, \
+            f"last_updated 必须带 timezone 信息（UTC），实际 {ts}"
+
+    def test_save_state_source_uses_timezone(self):
+        """源码扫描：save_state 必须 from datetime import datetime, timezone 且用 timezone.utc。"""
+        import inspect
+        from engine import state as state_mod
+        src = inspect.getsource(state_mod.save_state)
+        # 必须 from datetime import datetime, timezone（顶层导入，不再函数内重复）
+        # 或者至少 datetime.now(timezone.utc) 出现
+        assert "datetime.now(timezone.utc)" in src, \
+            "save_state 必须 datetime.now(timezone.utc)（#68）"
+        # 必须没有 naive datetime.now() 调用（无 timezone 参数）
+        import re
+        # 扫描代码本身（剥离注释 + 文档字符串）——否则注释里举例的
+        # "naive datetime.now()" 文本会被误判为代码里的实际调用
+        code_only = "\n".join(
+            l for l in src.split("\n") if not l.lstrip().startswith("#")
+        )
+        # 进一步剥离 docstring（save_state 顶部的 """...""")
+        if '"""' in code_only:
+            parts = code_only.split('"""')
+            if len(parts) >= 3:
+                # docstring 在第 1 和第 2 个 """ 之间（docstring 内容）
+                code_only = parts[0] + parts[2]
+        naive_pattern = re.findall(r"datetime\.now\(\s*\)", code_only)
+        assert not naive_pattern, \
+            f"save_state 不能再有 naive datetime.now()，实际 {len(naive_pattern)} 处"
+
+    def test_save_state_no_redundant_local_datetime_import(self):
+        """源码扫描：save_state 不能有 `from datetime import datetime` 内联 import。"""
+        import inspect
+        from engine import state as state_mod
+        src = inspect.getsource(state_mod.save_state)
+        # 函数体内不应有 from datetime import datetime（顶层已 import）
+        body_lines = src.split('"""')[2] if '"""' in src else src
+        body_lines = [l for l in body_lines.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        body_src = "\n".join(body_lines)
+        assert "from datetime import datetime" not in body_src, \
+            "save_state 函数体不能再 `from datetime import datetime`（顶层已 import）"
+
+    def test_setting_stat_failure_logs_warning(self, tmp_path, monkeypatch, caplog):
+        """_setting stat 失败时必须 log.warning（#70）。"""
+        from pathlib import Path
+        import logging
+        from engine import orchestrator as orch_mod
+        monkeypatch.setattr(orch_mod, "_setting_cache", None)
+        monkeypatch.setattr(orch_mod, "_setting_mtime", None)
+        # 真实存在文件（让 .exists() 走得通），独立 mock stat() 抛 OSError
+        setting_path = Path(tmp_path / "setting.json")
+        setting_path.write_text('{"title": "x"}', encoding="utf-8")
+        monkeypatch.setattr(orch_mod, "SETTING_PATH", setting_path)
+        import unittest.mock
+        # Python 3.12+ Path.stat() 签名带 follow_symlinks kwarg，
+        # mock 函数必须接受任意参数否则 patch 会 TypeError
+        def failing_stat(self, *args, **kwargs):
+            raise OSError("permission denied")
+        # 同时 mock .exists() 让它返回 True（不然会走"文件不存在"分支
+        # 直接返回 {}，不会触发我们要测的 stat() except 分支）
+        with unittest.mock.patch.object(Path, "stat", failing_stat), \
+             unittest.mock.patch.object(Path, "exists", lambda self: True):
+            with caplog.at_level("WARNING", logger="novel_ai.engine.orchestrator"):
+                result = orch_mod._setting()
+            # 必须 log warning（带 stat / OSError 信息）
+            warning_msgs = [r.message for r in caplog.records if r.levelname == "WARNING"]
+            assert any("stat" in m.lower() or "_setting" in m.lower() for m in warning_msgs), \
+                f"_setting stat 失败必须 log.warning，实际 {warning_msgs}"
+            assert result == {}, \
+                f"stat 失败时没 cache 应返回 {{}}，实际 {result}"
+
+    def test_setting_returns_copy_not_internal_reference(self, tmp_path, monkeypatch):
+        """_setting 必须返回 copy（#69）—— 防止调用方修改污染 cache。"""
+        from pathlib import Path
+        from engine import orchestrator as orch_mod
+        import json as _json
+        setting_path = Path(tmp_path / "setting.json")
+        setting_path.write_text(_json.dumps({"title": "original"}), encoding="utf-8")
+        monkeypatch.setattr(orch_mod, "_setting_cache", None)
+        monkeypatch.setattr(orch_mod, "_setting_mtime", None)
+        monkeypatch.setattr(orch_mod, "SETTING_PATH", setting_path)
+
+        result = orch_mod._setting()
+        result["title"] = "mutated"  # 尝试修改返回值
+        # 再次调用必须拿回原值（不是被污染的 cache）
+        result2 = orch_mod._setting()
+        assert result2["title"] == "original", \
+            f"_setting 返回 copy 应该不被外部修改污染，但 cache 已被改：{result2['title']}"
+
+    def test_graph_planner_command_invalidates_setting_cache(self):
+        """graph.py planner command 必须调 invalidate_setting_cache（#71 兜底）。"""
+        import inspect
+        from engine import graph as graph_mod
+        src = inspect.getsource(graph_mod.run_graph_task)
+        # 找 elif command == "planner": 段
+        assert "elif command == \"planner\"" in src, \
+            "graph.run_graph_task 必须有 planner 分支"
+        # planner 分支里必须调 invalidate_setting_cache
+        planner_idx = src.find("elif command == \"planner\":")
+        # 找到下一个 elif（分支结束）
+        next_elif = src.find("elif command ==", planner_idx + 10)
+        planner_branch = src[planner_idx:next_elif if next_elif > 0 else None]
+        assert "invalidate_setting_cache" in planner_branch, \
+            "planner 分支写完 setting_package.json 后必须显式调 invalidate_setting_cache（#71 兜底 mtime 检测的 1s 精度风险）"
+
+
+# ───────────────────────────────────────────
+# IIII: 迭代 #72 — MASTER_KEY 同进程稳定性（修 in-process key 漂移 bug）
+# ───────────────────────────────────────────
+class TestMasterKeyStableAcrossCalls:
+    """迭代 #72（severe bug fix）：
+
+    之前 `get_master_key()` 每次调用在 dev 模式（无 MASTER_KEY env）都会
+    生成新的随机 key，导致：
+      encrypt_api_key('sk-xxx') → encrypt with key_K1
+      decrypt_api_key(cipher) → decrypt with key_K2 ≠ K1
+      → ValueError "MASTER_KEY 变了或数据被损坏"
+
+    文档承诺"dev 模式不设 MASTER_KEY 也能跑（至少同进程内稳定）"完全不成立。
+    测试代码（test_invariants.py:1487 附近）已经知道这个不稳定性，专门
+    注入稳定 key 绕过测试，而不是修根本行为。本次迭代加上根本修复。
+
+    修复：
+      security._dev_master_key 模块级缓存，dev 模式首次生成后复用。
+      env 路径不走缓存（source-of-truth，每次读 env）。
+    """
+    def _clean_dev_state(self, monkeypatch):
+        """清掉 MASTER_KEY env + 模块缓存，强制走到 dev 分支。"""
+        monkeypatch.delenv("MASTER_KEY", raising=False)
+        from app import security
+        monkeypatch.setattr(security, "_dev_master_key", None)
+
+    def test_dev_mode_key_is_stable_across_calls(self, monkeypatch):
+        """Dev 模式（无 MASTER_KEY env）：同进程多次调 get_master_key 必须返回同一个 key。"""
+        self._clean_dev_state(monkeypatch)
+        from app.security import get_master_key
+        k1 = get_master_key()
+        k2 = get_master_key()
+        k3 = get_master_key()
+        assert k1 == k2 == k3, \
+            f"dev 模式同进程必须复用同一 key：k1={k1[:8]}.. k2={k2[:8]}.. k3={k3[:8]}.."
+
+    def test_dev_mode_encrypt_decrypt_roundtrip(self, monkeypatch):
+        """#72 复现测试：dev 模式 encrypt → decrypt 必须成功（同进程）。
+
+        这是审计报告里"严重（已复现）"那条用的脚本——直接跑通才算修好。
+        之前这条会抛 "api_key 解密失败（可能是 MASTER_KEY 变了或数据被损坏）"。
+        """
+        self._clean_dev_state(monkeypatch)
+        from app.security import encrypt_api_key, decrypt_api_key
+        plaintext = "sk-test-my-real-api-key-12345"
+        ciphertext = encrypt_api_key(plaintext)
+        decrypted = decrypt_api_key(ciphertext)
+        assert decrypted == plaintext, (
+            f"dev 模式同进程 encrypt → decrypt 必须拿回原文："
+            f"期望={plaintext}, 实际={decrypted}"
+        )
+
+    def test_env_master_key_is_source_of_truth(self, monkeypatch):
+        """设了 MASTER_KEY env 时，每次调 get_master_key 都读 env（不走缓存）。
+
+        测试通过 monkeypatch 切换 env 来模拟"运维中途改 MASTER_KEY"场景。
+        生产部署理论上不会改，但开发期间切换方便。
+        """
+        import base64, secrets
+        from app import security
+        # 先清掉缓存 + 清掉 env，确保干净起点
+        monkeypatch.setattr(security, "_dev_master_key", None)
+        monkeypatch.delenv("MASTER_KEY", raising=False)
+
+        key_a = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+        key_b = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
+        assert key_a != key_b
+
+        monkeypatch.setenv("MASTER_KEY", key_a)
+        from app.security import get_master_key
+        assert get_master_key().decode() == key_a
+        assert get_master_key().decode() == key_a  # 第二次仍然读 env
+
+        # 切换 env 应立刻生效（不走缓存）
+        monkeypatch.setenv("MASTER_KEY", key_b)
+        assert get_master_key().decode() == key_b, \
+            "env 路径必须是 source-of-truth，切了 env 必须立刻用新 key"
+
+    def test_reset_master_key_cache_helper(self, monkeypatch):
+        """reset_master_key_cache() 后下次 generate 必须拿到新 key（dev 分支）。"""
+        self._clean_dev_state(monkeypatch)
+        from app.security import get_master_key, reset_master_key_cache
+        k1 = get_master_key()
+        reset_master_key_cache()
+        k2 = get_master_key()
+        assert k1 != k2, \
+            f"reset 后必须重新生成：k1={k1[:8]}.. k2={k2[:8]}.."
+
+    def test_source_has_module_level_cache(self):
+        """源码扫描：security.py 必须有 _dev_master_key 模块级缓存（#72 标志）。"""
+        import inspect
+        from app import security
+        src = inspect.getsource(security)
+        assert "_dev_master_key" in src, \
+            "app.security 必须有 _dev_master_key 模块级缓存变量（#72 in-process key 漂移修复）"
+        # 同时 get_master_key 函数体里必须有"先查缓存再生成"的语义
+        func_src = inspect.getsource(security.get_master_key)
+        assert "if _dev_master_key is None" in func_src or \
+               "if _dev_master_key is not None" in func_src, \
+            "get_master_key 必须有 cache hit/miss 分支（#72）"
+
+    def test_reset_master_key_cache_public_api(self):
+        """reset_master_key_cache() 必须存在并是公开 API（运维 / 测试可调）。"""
+        from app.security import reset_master_key_cache
+        # 必须能调用且不抛
+        reset_master_key_cache()
+        # 必须能从同 module 导入（不是 _private）
+        import app.security
+        assert hasattr(app.security, "reset_master_key_cache"), \
+            "app.security.reset_master_key_cache 必须存在"
+        # 公开 API 的 signature 应该没参数
+        import inspect
+        sig = inspect.signature(reset_master_key_cache)
+        assert len(sig.parameters) == 0, \
+            f"reset_master_key_cache 应该无参，actual params: {list(sig.parameters)}"
+
+
+# ───────────────────────────────────────────
+# JJJJ: 迭代 #73 — memory/manager.py 不能静默吞异常（同型扫描补漏）
+# ───────────────────────────────────────────
+class TestMemoryManagerNoSilentException:
+    """迭代 #73（medium bug fix）：
+
+    CHANGELOG 里"发现某处 except Exception: pass → 改 log+fail-fast"
+    模式被多次套用，但 engine/memory/manager.py 漏扫到——这文件里有 4 处
+    `except Exception: continue/pass`，读章节 meta / 章节正文 / 风格样本 /
+    清理旧 auto 文件失败时**完全静默**。影响：损坏文件悄悄导致 Writer
+    上下文不完整，没有 signal 告诉运维为什么。
+
+    审计报告（2026-07-05）确认这是被漏扫的真 bug，不是"测试只验证
+    设置了 MASTER_KEY 的场景"那种测试覆盖盲点。
+
+    修法：module logger + 每处 `except Exception` 都 log.exception 后
+    continue，行为不变（仍 continue）但有诊断信号。
+    """
+    def _function_source(self, func):
+        import inspect
+        return inspect.getsource(func)
+
+    def test_module_has_logger(self):
+        """源码扫描：manager.py 模块级必须定义 logger（#73 标志）。"""
+        import inspect
+        from engine.memory import manager as mgr_mod
+        src = inspect.getsource(mgr_mod)
+        assert "getLogger" in src or "logger" in src.lower(), \
+            "memory/manager.py 必须有 module logger 用于报告被吞掉的异常（#73）"
+
+    def test_no_silent_continue_in_internal_meta_loop(self):
+        """_get_internal_samples 读 meta 失败的 except 必须有 log.* 调用。"""
+        from engine.memory import manager as mgr_mod
+        src = self._function_source(mgr_mod._get_internal_samples)
+        # 找第 1 个 except Exception
+        idx = src.find("except Exception:")
+        assert idx != -1, "_get_internal_samples 必须有 except Exception 段"
+        # 那一段（到下一个 except 或函数结束）必须有 log
+        chunk_end = idx + 200  # 查到下一个 except
+        next_except = src.find("except Exception:", idx + 10)
+        if next_except != -1:
+            chunk_end = next_except
+        chunk = src[idx:chunk_end]
+        assert "log" in chunk.lower(), \
+            f"_get_internal_samples 第 1 处 except 必须 log.exception（#73），chunk:\n{chunk}"
+        assert "continue" in chunk, \
+            f"行为应继续往下（continue）但有日志，chunk:\n{chunk}"
+
+    def test_no_silent_continue_in_chapter_text_loop(self):
+        """_get_internal_samples 读 ch_NNNN.txt 失败的 except 必须有 log。"""
+        from engine.memory import manager as mgr_mod
+        src = self._function_source(mgr_mod._get_internal_samples)
+        # 第 2 个 except
+        first = src.find("except Exception:")
+        second = src.find("except Exception:", first + 10)
+        assert second != -1, \
+            "_get_internal_samples 必须有第 2 处 except（章节正文读取）"
+        chunk = src[second:second + 200]
+        assert "log" in chunk.lower(), \
+            f"_get_internal_samples 第 2 处 except 必须 log.exception（#73），chunk:\n{chunk}"
+
+    def test_no_silent_continue_in_external_samples(self):
+        """_get_external_samples 读风格样本失败的 except 必须有 log。"""
+        from engine.memory import manager as mgr_mod
+        src = self._function_source(mgr_mod._get_external_samples)
+        idx = src.find("except Exception:")
+        assert idx != -1, "_get_external_samples 必须有 except Exception"
+        chunk = src[idx:idx + 200]
+        assert "log" in chunk.lower(), \
+            f"_get_external_samples except 必须 log.exception（#73），chunk:\n{chunk}"
+
+    def test_no_silent_pass_in_cleanup_loop(self):
+        """maybe_update_style_samples 清理旧 auto 文件 except 必须有 log。"""
+        from engine.memory import manager as mgr_mod
+        src = self._function_source(mgr_mod.maybe_update_style_samples)
+        idx = src.find("except Exception:")
+        assert idx != -1, "maybe_update_style_samples 必须有 except Exception"
+        chunk = src[idx:idx + 200]
+        assert "log" in chunk.lower(), \
+            f"maybe_update_style_samples except 必须 log.exception（#73），chunk:\n{chunk}"
+
+    def test_behavioral_broken_meta_logs_and_continues(self, tmp_path, monkeypatch, caplog):
+        """行为测试：meta 文件损坏时 _get_internal_samples 必须 log 但仍返回可用样本。
+
+        之前 bug：静默 continue，外部完全看不到信号。
+        修复后：log.exception 后 continue，caplog 能抓到。
+        """
+        import json
+        import logging
+        from pathlib import Path
+        from engine.config.paths import CHAPTERS_DIR_STR
+        from engine.memory import manager as mgr_mod
+
+        # 重定向 CHAPTERS_DIR_STR 到临时目录
+        monkeypatch.setattr(mgr_mod, "CHAPTERS_DIR_STR", str(tmp_path))
+
+        # 写 1 个坏 meta + 1 个好 meta + 对应章节文件
+        bad_meta = tmp_path / "ch_0001_meta.json"
+        bad_meta.write_text("{ this is not valid json", encoding="utf-8")
+        good_meta = tmp_path / "ch_0002_meta.json"
+        good_meta.write_text(json.dumps({"score": 8.0, "chapter_number": 2}),
+                             encoding="utf-8")
+        # good meta 对应章节文件
+        good_ch = tmp_path / "ch_0002.txt"
+        good_ch.write_text("这是高分章节正文", encoding="utf-8")
+
+        with caplog.at_level(logging.ERROR, logger="novel_ai.engine.memory.manager"):
+            result = mgr_mod._get_internal_samples()
+
+        # 行为：仍返回样本（continue 不抛）
+        assert isinstance(result, list)
+        # 行为：好的那条被收进来了（meta 解析成功 + 分数 ≥ 7.5 + 章节文件存在）
+        assert any("高分章节正文" in s for s in result), \
+            f"好样本应保留，实际 {result}"
+        # 关键：坏 meta 必须产生 log 记录（之前静默 swallowed）
+        err_records = [r for r in caplog.records
+                       if r.levelno >= logging.ERROR
+                       and "memory" in r.name.lower()]
+        assert err_records, (
+            "损坏的 meta 文件必须被 log 记录（之前静默吞掉，#73 修法）"
+            f"实际 caplog records: {[(r.levelname, r.name, r.getMessage()) for r in caplog.records]}"
+        )
+        assert any("ch_0001" in r.getMessage() for r in err_records), \
+            f"log 应包含损坏文件路径 ch_0001，实际 messages: {[r.getMessage() for r in err_records]}"

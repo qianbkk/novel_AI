@@ -7,7 +7,8 @@ helpers. No import from novel_AI/ — completely standalone.
 from __future__ import annotations
 from typing import TypedDict, List, Optional, Dict, Any
 import json
-from datetime import datetime
+# 迭代 #68: 用 timezone.utc 而非 naive datetime（跨时区/容器一致）
+from datetime import datetime, timezone
 
 
 # ─────────────────────────────────────────────
@@ -166,27 +167,29 @@ def create_initial_state(
 def save_state(state: OrchestratorState, path: str) -> None:
     """Serialize state to JSON file (UTF-8, indented for diff-friendliness).
 
-    自动更新 last_updated 为当前时间——之前不更新导致 state 看起来"冻结"
-    （用户视角：bridge/status 显示 last_updated 17 小时前，但实际 engine
-    还在跑）。P5 fix。
+    自动更新 last_updated 为当前时间（带 timezone.utc 避免歧义）—— 之前
+    不更新导致 state 看起来"冻结"（用户视角：bridge/status 显示
+    last_updated 17 小时前，但实际 engine 还在跑）。P5 fix。
+
+    迭代 #67: 用 atomic_write_json 替代手写 .tmp + rename — 复用 utils.py
+    已有的公共 atomic write helper，减少重复代码 + 跨平台行为一致。
 
     并发保护（迭代 #9）：用 fcntl/msvcrt 文件锁，避免两个 engine 进程
     同时写 state.json 互相覆盖（last-write-wins 导致数据丢失）。
     """
-    from datetime import datetime
     import os
-    # 复制一份避免修改入参（TypedDict 实际是 dict）
+    # 复制一份避免修改入参（TypedDict 实际是 dict；浅拷贝顶层安全，
+    # 不要修改嵌套字段——state 里 arc_plans / chapter_task_queue 等是
+    # 共享引用的嵌套对象，调用方可能继续持有）
     payload = dict(state)
-    payload["last_updated"] = datetime.now().isoformat()
+    # 迭代 #68: 用 timezone.utc 而非 naive datetime.now() —— 跨时区/容器
+    # 部署时 naive 时间会歧义；项目里其他地方都用 timezone.utc
+    payload["last_updated"] = datetime.now(timezone.utc).isoformat()
 
-    # atomic write: 先写 .tmp，再 rename（避免半写文件被读）
-    # + 文件锁防并发（Windows 用 msvcrt，POSIX 用 fcntl）
+    # atomic write + file lock（Windows 上需要 placeholder byte hack；
+    # POSIX 用 fcntl 不用）
     tmp_path = path + ".tmp"
     with open(tmp_path, "w", encoding="utf-8") as f:
-        # 迭代 #66: Windows 上 msvcrt.locking(fd, LK_LOCK, 1) 要求 position+1
-        # 字节可访问 —— 空文件（刚 truncate）position=0 时 nbytes=1 失败。
-        # 修法：先写一个 placeholder byte 占位、锁住后写 JSON、写完 truncate 掉
-        # placeholder。POSIX 用 fcntl.flock 不需要这个 hack（lock 整个 fd）。
         import sys as _sys
         if _sys.platform == "win32":
             try:
@@ -197,7 +200,7 @@ def save_state(state: OrchestratorState, path: str) -> None:
         _acquire_lock(f)  # no-op if not supported on platform
         try:
             if _sys.platform == "win32":
-                f.seek(0)  # 重置 position 到 0
+                f.seek(0)
                 f.truncate()
             json.dump(payload, f, ensure_ascii=False, indent=2)
             f.flush()
