@@ -6723,3 +6723,86 @@ class TestOrchestratorSettingLoadError:
         second = orch_mod._setting()
         assert second["title_candidates"] == ["test"], \
             "第二次 _setting 必须从 cache 读，不应重新 load disk"
+
+
+# ───────────────────────────────────────────
+# FFFF: fix #65 — orchestrator._setting 缓存按 mtime invalidate
+# ───────────────────────────────────────────
+class TestOrchestratorSettingCacheInvalidates:
+    """迭代 #65: orchestrator._setting 之前 cache 一旦填就永不刷新 — 同一进程
+    跑完 planner 后 setting_package.json 更新了，orchestrator 还用老值。
+    修法：按 mtime 检测文件变化自动 invalidate。
+    """
+    def test_setting_cache_invalidates_on_file_change(self, tmp_path, monkeypatch):
+        from pathlib import Path
+        import time as _t
+        from engine import orchestrator as orch_mod
+        import json as _json
+
+        monkeypatch.setattr(orch_mod, "_setting_cache", None)
+        monkeypatch.setattr(orch_mod, "_setting_mtime", None)
+        setting_path = Path(tmp_path / "setting.json")
+        monkeypatch.setattr(orch_mod, "SETTING_PATH", setting_path)
+
+        # 第一次写入
+        setting_path.write_text(
+            _json.dumps({"version": 1, "title": "old"}), encoding="utf-8"
+        )
+        first = orch_mod._setting()
+        assert first["version"] == 1
+
+        # 模拟时间过去 + 修改文件
+        _t.sleep(0.05)  # 确保 mtime 不同
+        setting_path.write_text(
+            _json.dumps({"version": 2, "title": "new"}), encoding="utf-8"
+        )
+        second = orch_mod._setting()
+        assert second["version"] == 2, \
+            f"文件改了 _setting 必须 reload（按 mtime invalidate），实际 {second}"
+        assert second["title"] == "new"
+
+    def test_setting_cache_hit_keeps_same_value_no_file_change(self, tmp_path, monkeypatch):
+        """没改文件时 _setting 必须走 cache（不重读盘）。"""
+        from pathlib import Path
+        from engine import orchestrator as orch_mod
+        import json as _json
+
+        monkeypatch.setattr(orch_mod, "_setting_cache", None)
+        monkeypatch.setattr(orch_mod, "_setting_mtime", None)
+        setting_path = Path(tmp_path / "setting.json")
+        monkeypatch.setattr(orch_mod, "SETTING_PATH", setting_path)
+        setting_path.write_text(
+            _json.dumps({"version": 1}), encoding="utf-8"
+        )
+
+        # 第一次读
+        first = orch_mod._setting()
+        assert first["version"] == 1
+
+        # 用 mock 替换 json.load 验证第二次不调
+        from unittest.mock import patch
+        with patch("engine.orchestrator.json.load") as mock_load:
+            second = orch_mod._setting()
+        assert mock_load.call_count == 0, \
+            f"文件没改时 _setting 不应重读盘，但调了 {mock_load.call_count} 次 json.load"
+        assert second is first, "cache 必须返回同一对象（identity）"
+
+    def test_invalidate_setting_cache_helper(self, tmp_path, monkeypatch):
+        """invalidate_setting_cache() 必须重置 cache + mtime。"""
+        from pathlib import Path
+        from engine import orchestrator as orch_mod
+        import json as _json
+
+        monkeypatch.setattr(orch_mod, "_setting_cache", None)
+        monkeypatch.setattr(orch_mod, "_setting_mtime", None)
+        setting_path = Path(tmp_path / "setting.json")
+        monkeypatch.setattr(orch_mod, "SETTING_PATH", setting_path)
+        setting_path.write_text(_json.dumps({"version": 1}), encoding="utf-8")
+        orch_mod._setting()  # populate cache
+
+        # 调用 invalidate
+        orch_mod.invalidate_setting_cache()
+        assert orch_mod._setting_cache is None, \
+            "invalidate_setting_cache 必须重置 _setting_cache 为 None"
+        assert orch_mod._setting_mtime is None, \
+            "invalidate_setting_cache 必须重置 _setting_mtime 为 None"

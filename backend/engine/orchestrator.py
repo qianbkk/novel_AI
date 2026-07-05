@@ -69,16 +69,37 @@ BUDGET_HARD  = 1.50   # 150% hard stop (MVP-relaxed per patches/2026-06-28)
 
 # Module-level cache (avoid re-reading setting per chapter)
 _setting_cache: dict | None = None
+_setting_mtime: float | None = None  # 迭代 #65: 用 mtime 检测文件变化自动 invalidate
 
 
 def _setting() -> dict:
-    global _setting_cache
-    if _setting_cache is None:
-        if not SETTING_PATH.exists():
-            return {}
+    """读 setting_package.json。mtime 变了自动 invalidate cache（同一进程里
+    planner 跑完后重新读最新值）。
+    """
+    global _setting_cache, _setting_mtime
+    if not SETTING_PATH.exists():
+        # 文件不存在 → cache 也不缓存（下次如果文件被创建能立刻读到）
+        _setting_cache = None
+        _setting_mtime = None
+        return {}
+    try:
+        mtime = SETTING_PATH.stat().st_mtime
+    except OSError:
+        # stat 失败（权限 / 文件消失等）→ fall back to cache or empty
+        return _setting_cache if _setting_cache is not None else {}
+    if _setting_cache is None or _setting_mtime != mtime:
+        # 文件变了 → 重新 load
         with open(SETTING_PATH, encoding="utf-8") as f:
             _setting_cache = json.load(f)
+        _setting_mtime = mtime
     return _setting_cache
+
+
+def invalidate_setting_cache() -> None:
+    """强制 invalidate _setting_cache（plan 阶段手动调用，或测试用）。"""
+    global _setting_cache, _setting_mtime
+    _setting_cache = None
+    _setting_mtime = None
 
 
 def _config() -> dict:
