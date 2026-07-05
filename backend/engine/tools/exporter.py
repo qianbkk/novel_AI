@@ -3,15 +3,22 @@
 Migrated from novel_AI/tools/exporter.py. Reads from
 backend/data/engine/output/chapters/ and writes to
 backend/data/engine/output/exports/.
+
+迭代 #78: 5 处 `except Exception: pass/continue` 静默吞，加 log.exception
+让运维能定位损坏的章节 / setting / state 文件（跟 #73/#77 同型扫描）。
 """
 from __future__ import annotations
 import json
+import logging
 import os
 import re
 from datetime import datetime
 
 from ..config.paths import CHAPTERS_DIR_STR, OUTPUT_DIR_STR, SETTING_PATH_STR, STATE_PATH_STR
 
+
+# 迭代 #78: module logger
+_log = logging.getLogger("novel_ai.engine.tools.exporter")
 
 EXPORTS_DIR = os.path.join(OUTPUT_DIR_STR, "exports")
 os.makedirs(EXPORTS_DIR, exist_ok=True)
@@ -33,7 +40,8 @@ def get_chapter_list(start: int = 1, end: int = 9999) -> list[tuple[int, str]]:
         try:
             with open(path, encoding="utf-8") as f:
                 first_line = f.readline().strip()
-        except Exception:
+        except Exception:  # 迭代 #78
+            _log.exception("读取章节首行失败: %s", path)
             continue
         if first_line == "[待修订]":
             continue
@@ -47,7 +55,8 @@ def load_meta(chapter_num: int) -> dict:
         try:
             with open(meta_path, encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
+        except Exception:  # 迭代 #78
+            _log.exception("读取章节 meta 失败: %s", meta_path)
             pass
     return {}
 
@@ -75,7 +84,8 @@ def export_chapters(start: int = 1, end: int = 9999,
         try:
             with open(SETTING_PATH_STR, encoding="utf-8") as f:
                 setting = json.load(f)
-        except Exception:
+        except Exception:  # 迭代 #78
+            _log.exception("读取 setting_package 失败: %s", SETTING_PATH_STR)
             pass
 
     novel_title = setting.get("title_candidates", ["未命名"])[0]
@@ -94,12 +104,8 @@ def export_chapters(start: int = 1, end: int = 9999,
             print(f"  ⚠️  跳过第{ch_num}章（{type(e).__name__}）：{e}")
             continue
 
-        try:
-            meta = load_meta(ch_num)
-        except Exception as e:
-            # meta 损坏不应阻断该章导出
-            print(f"  ⚠️  第{ch_num}章 meta 加载失败（{e}），用空 meta 继续")
-            meta = {}
+        # load_meta 损坏时已 log.exception 并返回 {}，这里不再 try/except（死代码）
+        meta = load_meta(ch_num)
 
         word_count = len(text)
         total_words += word_count
@@ -172,10 +178,8 @@ def print_stats() -> None:
             print(f"  ⚠️  跳过第{ch_num}章（{type(e).__name__}）：{e}")
             continue
         total_words += len(text)
-        try:
-            meta = load_meta(ch_num)
-        except Exception as e:
-            meta = {}
+        # 同上，load_meta 已 log.exception + return {}
+        meta = load_meta(ch_num)
         if meta.get("score"):
             scores.append(meta["score"])
         role = meta.get("chapter_role", "未知")
@@ -186,7 +190,8 @@ def print_stats() -> None:
         try:
             with open(STATE_PATH_STR, encoding="utf-8") as f:
                 state = json.load(f)
-        except Exception:
+        except Exception:  # 迭代 #78
+            _log.exception("读取 orchestrator state 失败: %s", STATE_PATH_STR)
             pass
 
     total_planned = state.get("total_chapters_planned", 157)

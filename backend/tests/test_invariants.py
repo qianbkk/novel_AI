@@ -7632,3 +7632,108 @@ class TestStyleManagerNoSilentException:
         )
         assert any("ch_0001" in r.getMessage() for r in err_records), \
             f"log 应包含坏文件路径 ch_0001，实际 messages: {[r.getMessage() for r in err_records]}"
+
+
+# ───────────────────────────────────────────
+# OOOO: 迭代 #78 — exporter.py / calibrate_checker.py 不再静默吞异常
+# ───────────────────────────────────────────
+class TestExporterAndCalibrateNoSilentException:
+    """迭代 #78：engine/tools/exporter.py 5 处 + calibrate_checker.py 1 处
+    `except Exception: pass/continue` 静默吞，跟 #73/#77 同型扫描结果。
+
+    这两个都是 CLI 工具，但遵循一致的 fail-visible 原则。
+    修法：模块 logger + 每处都加 _log.exception(...) 后 continue/pass。
+    """
+    def test_exporter_has_logger(self):
+        """exporter.py 必须有 module logger（#78）。"""
+        import inspect
+        from engine.tools import exporter as exporter_mod
+        src = inspect.getsource(exporter_mod)
+        assert "_log" in src or "getLogger" in src, (
+            "engine/tools/exporter.py 必须有 module logger（#78）"
+        )
+
+    def test_exporter_no_silent_except_pass(self):
+        """exporter.py 不应有 silent `except Exception: pass`（#78）。"""
+        import re
+        import inspect
+        from engine.tools import exporter as exporter_mod
+        src = inspect.getsource(exporter_mod)
+        # 找 except 之后 \n pass$ 的模式（bare pass）
+        bare_pass = re.findall(r"except\s+Exception\s*:\s*\n\s*pass\b", src)
+        assert not bare_pass, (
+            f"exporter.py 仍有 bare except pass 模式（#78）：{bare_pass}"
+        )
+
+    def test_exporter_every_except_has_log(self):
+        """exporter.py 每处 except Exception 后面必须 log.* 调用。"""
+        import inspect
+        from engine.tools import exporter as exporter_mod
+        src = inspect.getsource(exporter_mod)
+        # 找所有 except 位置
+        except_indices = []
+        pos = 0
+        while True:
+            i = src.find("except Exception", pos)
+            if i == -1:
+                break
+            except_indices.append(i)
+            pos = i + 1
+        assert len(except_indices) >= 4, (
+            f"exporter.py 应至少有 4 处 except（get_chapter_list / load_meta / export_chapters setting / 统计 state）"
+            f"，实际 {len(except_indices)}"
+        )
+        for idx in except_indices:
+            chunk = src[idx:idx + 250]
+            assert "log" in chunk.lower(), \
+                f"exporter.py except @ {idx} 必须 log（#78），chunk:\n{chunk}"
+
+    def test_calibrate_checker_has_logger(self):
+        """calibrate_checker.py 必须有 module logger（#78）。"""
+        import inspect
+        from engine.tools import calibrate_checker as cc_mod
+        src = inspect.getsource(cc_mod)
+        assert "_log" in src or "getLogger" in src, (
+            "engine/tools/calibrate_checker.py 必须有 module logger（#78）"
+        )
+
+    def test_calibrate_checker_load_samples_excepts_have_log(self):
+        """calibrate_checker.py _load_samples 的 except 必须有 log。"""
+        import inspect
+        from engine.tools import calibrate_checker as cc_mod
+        src = inspect.getsource(cc_mod._load_samples)
+        idx = src.find("except Exception")
+        assert idx != -1, "_load_samples 必须有 except Exception"
+        chunk = src[idx:idx + 250]
+        assert "log" in chunk.lower(), \
+            f"_load_samples except 必须 log（#78），chunk:\n{chunk}"
+
+    def test_exporter_load_meta_logs_on_broken_file(self, tmp_path, monkeypatch, caplog):
+        """行为测试：exporter.load_meta 读到坏 meta 文件时必须 log 但返回 {}。
+
+        之前 bug：silent fallback → exporter 拿空 meta 但不知情。
+        修复后：log.exception + 返回 {}，caplog 能抓到。
+        """
+        import json
+        import logging
+        import os
+        from engine.tools import exporter as exporter_mod
+        # 重定向 CHAPTERS_DIR_STR 到临时目录（exporter 用 module-level 全局）
+        monkeypatch.setattr(exporter_mod, "CHAPTERS_DIR_STR", str(tmp_path))
+        # 写一个坏 meta
+        bad_meta = tmp_path / "ch_0042_meta.json"
+        bad_meta.write_text("{ broken json", encoding="utf-8")
+        with caplog.at_level(logging.ERROR, logger="novel_ai.engine.tools.exporter"):
+            result = exporter_mod.load_meta(42)
+        # 行为：返回 {}（fallback）
+        assert result == {}, f"坏 meta 必须返回 {{}}，实际 {result}"
+        # 关键：log 记录
+        err_records = [r for r in caplog.records
+                       if r.levelno >= logging.ERROR
+                       and "exporter" in r.name]
+        assert err_records, (
+            "坏 meta 必须被 log（之前静默吞掉，#78）"
+            f"实际 caplog: {[(r.levelname, r.name, r.getMessage()) for r in caplog.records]}"
+        )
+        assert any("ch_0042" in r.getMessage() for r in err_records), \
+            f"log 应包含坏文件路径 ch_0042，实际 {[r.getMessage() for r in err_records]}"

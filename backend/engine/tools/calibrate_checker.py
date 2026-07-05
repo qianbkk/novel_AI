@@ -6,6 +6,7 @@ checker model.
 """
 from __future__ import annotations
 import json
+import logging
 import os
 import sys
 
@@ -14,6 +15,9 @@ from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
 from ..utils import parse_llm_json_response, atomic_write_json
 
+
+# 迭代 #78: module logger
+_log = logging.getLogger("novel_ai.engine.tools.calibrate_checker")
 
 CALIB_DIR = os.path.join(OUTPUT_DIR_STR, "calibration")
 RESULT_DIR = os.path.join(OUTPUT_DIR_STR, "reports")
@@ -107,7 +111,8 @@ def _load_samples() -> list:
                         samples.extend(data)
                     elif isinstance(data, dict):
                         samples.append(data)
-                except Exception:
+                except Exception:  # 迭代 #78: log.exception
+                    _log.exception("加载校准样本 %s 失败", fname)
                     continue
     if not samples:
         print("  无外部校准样本，使用内置样本（4条）")
