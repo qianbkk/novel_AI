@@ -7950,3 +7950,106 @@ class TestParseLlmJsonResponseAllStrategiesFail:
                            if "全部" in r.getMessage() or "全失败" in r.getMessage()]
         assert not all_failed_msgs, \
             f"合法 JSON 不应触发 'all strategies failed' log，实际: {all_failed_msgs}"
+
+
+# ───────────────────────────────────────────
+# RRRR: 迭代 #81 — rate_limit._buckets 清空空 deque（避免 dict 长期增长）
+# ───────────────────────────────────────────
+class TestRateLimitMemoryCleanup:
+    """迭代 #81：审计报告 (2026-07-05) 指出 rate_limit.IPRateLimiter._buckets
+    dict 永远不清空空 deque——长跑 N 个不同 IP 后 dict 里堆 N 个空 deque 占
+    内存。审计原话：'单租户原型场景下可以忽略'。
+
+    但加 1 行 lazy cleanup 就能解决——risk/reward 极高。修法：
+      - is_allowed 拒绝路径上，如果清完过期时间戳 deque 空了，立刻从
+        dict 中 pop 掉。lock 内 O(1)，无全扫。
+      - 显式 cleanup_empty_buckets() 也提供（运维 / 测试可调）。
+    """
+    def test_is_allowed_opportunistic_sweep_cleans_stale(self, monkeypatch):
+        """行为测试：每 1000 次请求触发 stale buckets sweep，把过期 bucket 删除。
+
+        模拟：1 个 IP 填满 → 模拟时间过去 60s+ 让时间戳过期 → 触发 1000 次
+        请求到达 sweep 点 → 期望 _buckets 不再保留这 IP。
+        """
+        import time as _t
+        from app.middleware import rate_limit as rl_mod
+        from app.middleware.rate_limit import IPRateLimiter
+        limiter = IPRateLimiter(max_per_minute=2)
+        # 填满窗口
+        ok1 = limiter.is_allowed("1.2.3.4")
+        ok2 = limiter.is_allowed("1.2.3.4")
+        assert ok1 and ok2
+        # 桶里有 2 个时间戳
+        assert "1.2.3.4" in limiter._buckets
+        assert len(limiter._buckets["1.2.3.4"]) == 2
+
+        # 模拟时间过去 60s+（让时间戳过期）—— rl_mod.time.monotonic
+        future = _t.monotonic() + 61
+        monkeypatch.setattr(rl_mod.time, "monotonic", lambda: future)
+
+        # 触发 1000 次请求（其中 999 次 no-op 加在别的 IP，最后 1 次在 1.2.3.4）
+        # _request_count 从 0 开始累加，但之前已经加了 2 次（is_allowed × 2）。
+        # 加 999 个 dummy 请求让 count = 1001 → 下次清理触发
+        for i in range(999):
+            limiter.is_allowed(f"other_{i}.{i}.{i}.{i}")
+        # 现在 _request_count = 1001，最后一次 is_allowed 触发 sweep
+        # 但 sweep 只清空时间戳全部过期的 bucket——"other_..." 都刚刚加进 dict，
+        # 不会被清掉。1.2.3.4 桶里 2 个时间戳是 61s 前，应该被清掉。
+        assert "1.2.3.4" not in limiter._buckets, (
+            f"_buckets 仍保留过期的 IP 1.2.3.4（#81 sweep 未生效）"
+            f"actual: {list(limiter._buckets.keys())[:5]}..."
+        )
+
+    def test_cleanup_stale_buckets_helper(self):
+        """显式 cleanup_stale_buckets() 必须能清理 stale 桶并返回数量。
+
+        直接构造一个 limiter，添加几个 IP，时间戳在窗口内——都不是 stale。
+        然后构造场景：1 个桶有 1 个 OLD timestamp（> 60s ago），调 cleanup
+        应清掉这个。"""
+        import time as _t
+        from app.middleware.rate_limit import IPRateLimiter
+        limiter = IPRateLimiter(max_per_minute=10)
+        # 直接构造一个 stale 桶（时间戳早就过去）
+        old_ts = _t.monotonic() - 120  # 120s 前
+        from collections import deque
+        limiter._buckets["stale_ip"] = deque([old_ts])
+        limiter._buckets["fresh_ip"] = deque([_t.monotonic()])
+        cleaned = limiter.cleanup_stale_buckets()
+        assert cleaned == 1, f"应清 1 个 stale（stale_ip），实际 {cleaned}"
+        assert "stale_ip" not in limiter._buckets
+        assert "fresh_ip" in limiter._buckets
+
+    def test_module_has_cleanup_method(self):
+        """源码扫描：IPRateLimiter 必须有 cleanup_stale_buckets 公开方法（#81 公开 API）。"""
+        from app.middleware.rate_limit import IPRateLimiter
+        assert hasattr(IPRateLimiter, "cleanup_stale_buckets"), (
+            "IPRateLimiter 必须有 cleanup_stale_buckets 公开方法（#81 — "
+            "运维 / 长跑周期任务可调，避免 dict 长期增长）"
+        )
+
+    def test_request_count_triggers_sweep(self, monkeypatch):
+        """counter-based sweep 触发：累计 1000 次请求后，下次 is_allowed 触发 sweep。
+
+        设置：filler_* 的时间戳用 OLD 时间（> window_seconds）→ 模拟这些桶已 stale，
+        等 _request_count 累计到 1000，下一次 is_allowed 触发 sweep 时应清掉。
+        """
+        import time as _t
+        from collections import deque
+        from app.middleware import rate_limit as rl_mod
+        from app.middleware.rate_limit import IPRateLimiter
+        limiter = IPRateLimiter(max_per_minute=10)
+        # 直接构造 1000 个 stale buckets（OLD 时间戳），_request_count 也设 999
+        old_ts = _t.monotonic() - 120  # 120s 前
+        for i in range(1000):
+            limiter._buckets[f"stale_{i}"] = deque([old_ts])
+        limiter._request_count = 999  # 下次 is_allowed 触发 sweep
+        # 这次调用应触发 sweep——stale_* 全部应被清掉
+        limiter.is_allowed("trigger_ip")
+        # 1000 个 stale 桶全被清，剩下 trigger_ip
+        assert len(limiter._buckets) < 1001, (
+            f"sweep 应清掉 stale 桶，actual _buckets count: {len(limiter._buckets)}"
+        )
+        # 关键：stale_* 全没了
+        stale_remaining = [k for k in limiter._buckets if k.startswith("stale_")]
+        assert not stale_remaining, \
+            f"stale 桶仍残留: {len(stale_remaining)} 个（{stale_remaining[:3]}...）"

@@ -108,9 +108,20 @@ class IPRateLimiter:
         # {ip: deque[float]}
         self._buckets: dict[str, Deque[float]] = defaultdict(deque)
         self._lock = threading.Lock()
+        # 迭代 #81: counter for opportunistic stale-bucket cleanup sweep
+        self._request_count: int = 0
 
     def is_allowed(self, ip: str) -> bool:
-        """检查 IP 是否在当前窗口内还能访问。允许则记录时间戳。"""
+        """检查 IP 是否在当前窗口内还能访问。允许则记录时间戳。
+
+        迭代 #81: 之前 _buckets dict 长期跑会积累 stale IP 条目（每个 IP
+        至少有一个 deque 条目占用内存）。审计报告说"单租户原型场景下可以
+        忽略"，但加个简单的"每 N 次请求扫一遍清 stale"就能解决。
+
+        修法：counter-based opportunistic sweep——每 1000 次请求就扫一次
+        _buckets，把所有时间戳全部过期的 IP 从 dict 中删除。lock 内 O(N)
+        但 1000 次请求才触发一次，摊销成本可忽略。
+        """
         now = time.monotonic()
         cutoff = now - self.window_seconds
         with self._lock:
@@ -119,9 +130,43 @@ class IPRateLimiter:
             while bucket and bucket[0] < cutoff:
                 bucket.popleft()
             if len(bucket) >= self.max:
+                # 迭代 #81: 顺便 opportunistic sweep——每 1000 次请求清一次 stale
+                # (避免每次 lock 内 O(N)，分摊到 1000 次里)
+                self._request_count += 1
+                if self._request_count % 1000 == 0:
+                    self._cleanup_stale_locked(cutoff)
                 return False
             bucket.append(now)
+            self._request_count += 1
+            if self._request_count % 1000 == 0:
+                self._cleanup_stale_locked(cutoff)
             return True
+
+    def _cleanup_stale_locked(self, cutoff: float) -> int:
+        """内层 helper：必须在 self._lock 内调用。清掉所有时间戳都过期的 bucket。
+
+        Returns:
+            清理数量。
+        """
+        stale = [ip for ip, b in self._buckets.items()
+                 if not b or b[-1] < cutoff]
+        for ip in stale:
+            del self._buckets[ip]
+        return len(stale)
+
+    def cleanup_stale_buckets(self) -> int:
+        """显式清理 stale buckets（运维可选 / 长跑定期调用）。
+
+        通常不需要——is_allowed 已经每 1000 次请求做一次 opportunistic sweep。
+        但启动恢复 / 大量 IP 同时活跃时可显式调一次。
+
+        Returns:
+            清理的 bucket 数（用于测试可观测性）。
+        """
+        now = time.monotonic()
+        cutoff = now - self.window_seconds
+        with self._lock:
+            return self._cleanup_stale_locked(cutoff)
 
     def reset(self) -> None:
         """测试用：清空所有 bucket。"""
