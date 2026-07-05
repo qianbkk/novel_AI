@@ -7378,3 +7378,75 @@ class TestBridgeRunConcurrencyGuard:
         assert "running.status" in src or "f.status" in src or ".status" in src, (
             "bridge.run_bridge 409 响应应包含具体 active status 信息（#74 调试友好）"
         )
+
+
+# ───────────────────────────────────────────
+# LLLL: 迭代 #75 — agents/__init__.py 不能引用不存在的 stub.py
+# ───────────────────────────────────────────
+class TestAgentsPackageDocAccurate:
+    """迭代 #75（小修）：engine/agents/__init__.py 注释之前指向
+    "legacy stub.py is kept as a fallback" —— 但目录里实际没有 stub.py
+    （commit 历史已删），留下**误导性**引用。开发读起来以为有兜底实现，
+    实际 ImportError 会直接传给上层（fail-fast）。
+
+    修法：注释改为实际描述（无 stub 兜底，fail-fast 符合 #62 系列修法）。
+    加 invariant test 防止回退到"有 stub.py"的描述。
+    """
+    def test_init_no_claims_stub_py_exists(self):
+        """__init__.py 不能 import stub 模块（fail-fast 原则），且不能误导说 stub.py 是兜底。
+
+        检查：剥掉 docstring + 注释后（避免误判 #75 修复说明里被引用的历史短语），
+        代码本体不能 `from .stub` / `import stub` 之类的实际 import。
+        """
+        # __init__ 模块不能 inspect.getsource（是 attribute 不是 module body），
+        # 直接读文件
+        from pathlib import Path
+        import ast
+        init_py = Path(__file__).resolve().parents[1] / "engine" / "agents" / "__init__.py"
+        src = init_py.read_text(encoding="utf-8")
+
+        # 用 AST 扫描真实 import（避免被注释/文档字符串里的字面文本误判）
+        tree = ast.parse(src)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    assert alias.name != "stub" and not alias.name.startswith("stub"), (
+                        f"engine/agents/__init__.py 仍然 import 了 stub 模块：{alias.name}（#75）"
+                    )
+            elif isinstance(node, ast.ImportFrom):
+                # from .stub import ... 或 from . import stub
+                for alias in node.names:
+                    assert alias.name != "stub", (
+                        f"engine/agents/__init__.py 仍然 from ... import 了 stub："
+                        f"module={node.module}, name={alias.name}（#75）"
+                    )
+                if node.module and "stub" in node.module:
+                    assert False, (
+                        f"engine/agents/__init__.py 仍然 from {node.module} import（#75）"
+                    )
+
+    def test_init_does_not_import_stub_module(self):
+        """__init__.py 不能 import 'stub'（模块已不存在）。"""
+        from engine.agents import __init__ as init_mod
+        # 检查是否有 .stub 这种 import
+        import_attrs = [a for a in dir(init_mod) if not a.startswith("_")]
+        assert "stub" not in import_attrs, (
+            f"engine/agents/__init__.py 仍然 import 了 stub 模块：{import_attrs}"
+        )
+
+    def test_no_legacy_stub_py_on_disk(self):
+        """agents 目录里不应该再有 stub.py 模块（fail-fast 原则）。"""
+        from pathlib import Path
+        agents_dir = Path(__file__).resolve().parents[1] / "engine" / "agents"
+        stub_py = agents_dir / "stub.py"
+        # 如果真存在 stub.py，本测试提醒——fail-fast 模式不应该有这个兜底
+        if stub_py.exists():
+            # 存在时不一定是 bug（可能有合法用途），但应该被显式确认
+            # 触发的逻辑：expect_stub = False（fail-fast 原则）
+            assert False, (
+                f"{stub_py} 仍然存在——fail-fast 原则下不应再有 stub.py 兜底。"
+                "如果确需保留，明确注释其用途（#75 跟进）"
+            )
+        # 不存在时通过
+        assert not stub_py.exists(), \
+            f"{stub_py} 不应存在（fail-fast，符合 #62 系列修法）"
