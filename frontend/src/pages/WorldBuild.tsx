@@ -259,7 +259,13 @@ export default function WorldBuild() {
               </h3>
               <div className="legislation-grid" style={{ marginBottom: 18 }}>
                 {result.characters.map((c) => (
-                  <div key={c.id} className="legislation-card">
+                  <div
+                    key={c.id}
+                    className="legislation-card"
+                    style={{ cursor: "pointer" }}
+                    onClick={() => navigate(`/projects/${projectId}/characters/${c.id}`)}
+                    title="点开查看完整角色卡"
+                  >
                     <div className="legislation-card__head">
                       <span className="legislation-card__title">{c.name}</span>
                       <span className="life-dot life-dot--alive">存续</span>
@@ -267,6 +273,7 @@ export default function WorldBuild() {
                     <span className="legislation-card__desc">{c.role || "未分配角色"}</span>
                     <div className="legislation-card__chips">
                       <span className="legislation-card__chip">id · {c.id.slice(0, 6)}</span>
+                      <span className="legislation-card__chip">→ 查看详情</span>
                     </div>
                   </div>
                 ))}

@@ -19,6 +19,12 @@ import type {
   PostProcessResult,
   ForeshadowingRow,
   AiAssistLevel,
+  // Phase 4 新增
+  CharacterSummary,
+  CharacterCardOut,
+  CharacterRelation,
+  RelationGraph,
+  WorldviewRichOut,
 } from "../types";
 
 // 后端地址：默认 8132（开发用），部署时改 frontend/.env 里的 VITE_API_BASE
@@ -214,4 +220,20 @@ export const api = {
       method: "PUT",
       body: JSON.stringify({ ai_assist_level: level }),
     }),
+
+  // ─── Phase 4：世界构建板块 5 个新 endpoint ───
+  getWorldviewRich: (projectId: string) =>
+    request<WorldviewRichOut>(`/projects/${projectId}/worldview/rich`),
+
+  listCharacters: (projectId: string) =>
+    request<CharacterSummary[]>(`/projects/${projectId}/characters`),
+
+  getCharacterCard: (projectId: string, characterId: string) =>
+    request<CharacterCardOut>(`/projects/${projectId}/characters/${characterId}`),
+
+  getCharacterRelations: (projectId: string, characterId: string) =>
+    request<CharacterRelation[]>(`/projects/${projectId}/characters/${characterId}/relations`),
+
+  getRelationsGraph: (projectId: string) =>
+    request<RelationGraph>(`/projects/${projectId}/relations/graph`),
 };

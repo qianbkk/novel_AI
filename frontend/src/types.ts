@@ -315,3 +315,136 @@ export interface BridgeBudget {
   }>;
   [key: string]: unknown;
 }
+
+// ════════════════════════════════════════════════════════════════════════════
+// Phase 4：世界构建板块结构化类型
+// ════════════════════════════════════════════════════════════════════════════
+
+// 角色卡 8 段
+export interface CharacterCard {
+  basic?: {
+    gender?: string;
+    age?: string | number;
+    identity?: string;
+    faction_id?: string | null;
+  };
+  appearance?: {
+    height?: string;
+    hair?: string;
+    outfit?: string;
+    distinguishing_feature?: string;
+  };
+  personality?: {
+    tags: string[];
+    summary: string;
+  };
+  background?: {
+    origin?: string;
+    motivation?: string;
+    secret?: string;
+  };
+  abilities?: {
+    power_name?: string;
+    current_tier?: string;
+    growth_potential?: string;
+  } | null;
+  catchphrase?: {
+    lines: string[];
+  };
+  props?: {
+    signature_item?: string;
+    companion?: string;
+  } | null;
+  arc: {
+    start_state: string;
+    catalyst: string;
+    end_state: string;
+  };
+}
+
+// GET /projects/{pid}/characters/{cid} 详情
+export interface CharacterCardOut {
+  id: string;
+  name: string;
+  role: string | null;
+  card: CharacterCard | null;
+  faction?: { id: string; name: string } | null;
+}
+
+// GET /projects/{pid}/characters 列表摘要
+export interface CharacterSummary {
+  id: string;
+  name: string;
+  role: string | null;
+  identity?: string | null;
+  age?: string | number | null;
+  gender?: string | null;
+}
+
+// 关系图谱节点 / 边 / 全图
+export interface GraphNode {
+  id: string;
+  name: string;
+  role: string | null;
+  role_kind: string;
+}
+
+export interface GraphEdge {
+  from_id: string;
+  to_id: string;
+  relation: string;
+  mutual: boolean;
+  intensity: number | null;
+  tags: string[] | null;
+}
+
+export interface RelationGraph {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+// 角色关系边详情
+export interface CharacterRelation {
+  id: string;
+  relation: string;
+  description: string | null;
+  target: { id: string; name: string; role: string | null };
+  mutual: boolean;
+  intensity: number | null;
+  tags: string[] | null;
+  evolution: { phase: string; state: string }[] | null;
+  key_events: { chapter_hint: string; event: string }[] | null;
+}
+
+// 世界观结构化 7 段
+export interface WorldviewRich {
+  cosmos: string;
+  geography: string;
+  history: string;
+  society: string;
+  technology: string;
+  races: string;
+  customs: string;
+}
+
+export interface StoryCoreStruct {
+  goal?: string;
+  conflict?: string;
+  theme?: string;
+  hook?: string;
+}
+
+export interface HistoryTimelineNode {
+  era: string;
+  event: string;
+  impact: string;
+}
+
+// GET /worldview/rich 响应
+export interface WorldviewRichOut {
+  rich: WorldviewRich | null;
+  story_core: StoryCoreStruct | null;
+  history_timeline: HistoryTimelineNode[] | null;
+  fallback_text: string | null;
+  fallback_story_core: string | null;
+}
