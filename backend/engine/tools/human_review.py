@@ -12,6 +12,9 @@ import json
 import os
 
 from ..config.paths import OUTPUT_DIR_STR, STATE_PATH_STR, SETTING_PATH_STR
+# 迭代 #59: load_state 损坏时 raise（不再 silent fallback 到 {}），
+# save_state 改用 atomic_write_json（防止 orchestrator_state.json 半写损坏）。
+from ..utils import atomic_write_json
 
 
 BASE_DIR = OUTPUT_DIR_STR
@@ -25,14 +28,24 @@ def load_state() -> dict:
         try:
             with open(STATE_PATH, encoding="utf-8") as f:
                 return json.load(f)
-        except Exception:
-            pass
+        except Exception as e:
+            # 迭代 #59: 之前 silent pass — state 文件损坏时返回 {} →
+            # 人工审核看到「空 state」却不知道文件坏了 → 用户继续审核 = 假审核
+            # 现在 backup 损坏文件到 .corrupted.{ts}（iter #36/#53 同型）然后 raise
+            try:
+                import time as _t
+                corrupted = STATE_PATH + f".corrupted.{int(_t.time())}"
+                os.replace(STATE_PATH, corrupted)
+                print(f"⚠️  human_review: state 损坏，已备份 {corrupted}: {e}")
+            except Exception:
+                pass
+            raise
     return {}
 
 
 def save_state(state: dict) -> None:
-    with open(STATE_PATH, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
+    # 迭代 #59: 改用 atomic_write_json
+    atomic_write_json(STATE_PATH, state)
 
 
 def clear_screen() -> None:
@@ -180,8 +193,8 @@ def handle_fix_chapter(task: dict) -> str:
                     meta = json.load(f)
                 meta["status"] = "human_accepted"
                 meta["human_note"] = "人工确认接受"
-                with open(meta_path, "w", encoding="utf-8") as f:
-                    json.dump(meta, f, ensure_ascii=False, indent=2)
+                # 迭代 #59: meta.json 也改用 atomic_write_json
+                atomic_write_json(meta_path, meta)
             if os.path.exists(ch_path):
                 with open(ch_path, encoding="utf-8") as f:
                     content = f.read()

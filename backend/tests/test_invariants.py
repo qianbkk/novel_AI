@@ -6378,3 +6378,42 @@ class TestOrchestratorTrackerNotSilent:
             "orchestrator.node_save_and_track 异常路径必须标 _tracker_failed（iter #58）"
         assert "error_log" in code_src, \
             "orchestrator.node_save_and_track 异常路径必须 log error_log"
+
+
+# ───────────────────────────────────────────
+# ZZZ: fix #59 — human_review.py atomic write + load_state silent fallback
+# ───────────────────────────────────────────
+class TestHumanReviewAtomicAndLoadNoSilent:
+    """迭代 #59: engine/tools/human_review.py 两个 bug
+    1. save_state 用 raw open(w) 写 orchestrator_state.json（半写损坏）
+    2. load_state 损坏时 except Exception: pass → 返回 {} →
+       人工审核看到空 state 却不知道文件坏了 → 假审核
+    修法：atomic_write_json + 损坏时 backup 到 .corrupted.{ts} 后 raise。
+    """
+    def test_human_review_load_state_raises_on_corrupt(self, tmp_path, monkeypatch):
+        """损坏 state 文件必须 raise（不能再 silent fallback 到 {}）。"""
+        from engine.tools import human_review as hr_mod
+        corrupt = tmp_path / "state.json"
+        corrupt.write_text("{ not valid", encoding="utf-8")
+        monkeypatch.setattr(hr_mod, "STATE_PATH", str(corrupt))
+        with pytest.raises(Exception):
+            hr_mod.load_state()
+
+    def test_human_review_save_state_uses_atomic(self):
+        import inspect
+        from engine.tools import human_review as hr_mod
+        src = inspect.getsource(hr_mod.save_state)
+        assert "atomic_write_json" in src, \
+            "human_review.save_state 必须用 atomic_write_json"
+        assert "open(STATE_PATH" not in src, \
+            "human_review.save_state 不能再 raw open(STATE_PATH, 'w')"
+
+    def test_human_review_meta_write_uses_atomic(self):
+        import inspect
+        from engine.tools import human_review as hr_mod
+        src = inspect.getsource(hr_mod)
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        assert "atomic_write_json" in code_src, \
+            "human_review meta 写盘也必须用 atomic_write_json"
