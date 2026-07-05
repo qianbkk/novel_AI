@@ -229,6 +229,20 @@ set "TARGET_DIR=%~2"
 set "LOG_PATH=%~3"
 set "CMD_LINE=%~4"
 >  "%LAUNCHER_PATH%" echo @echo off
+>> "%LAUNCHER_PATH%" echo REM ---------- writability self-check (catches orphan processes locking the log) ----------
+>> "%LAUNCHER_PATH%" echo type nul ^>^> "%LOG_PATH%" 2^>^&1
+>> "%LAUNCHER_PATH%" echo if errorlevel 1 ^(
+>> "%LAUNCHER_PATH%" echo     echo [FATAL] Cannot write to log: "%LOG_PATH%"
+>> "%LAUNCHER_PATH%" echo     echo [FATAL] Another process is probably locking it [ERROR_SHARING_VIOLATION].
+>> "%LAUNCHER_PATH%" echo     echo [FATAL] This usually means a previous uvicorn / node worker is still alive.
+>> "%LAUNCHER_PATH%" echo     echo [FATAL]
+>> "%LAUNCHER_PATH%" echo     echo [FATAL] Find and kill the orphan:
+>> "%LAUNCHER_PATH%" echo     echo [FATAL]   powershell -NoProfile -Command "Get-Process python,node -ErrorAction SilentlyContinue ^| Where-Object { $_.StartTime -lt (Get-Date).AddHours(-1) } ^| Format-Table Id,ProcessName,StartTime -AutoSize"
+>> "%LAUNCHER_PATH%" echo     echo [FATAL]   powershell -NoProfile -Command "Stop-Process -Id ^<pid^> -Force"
+>> "%LAUNCHER_PATH%" echo     echo [FATAL]
+>> "%LAUNCHER_PATH%" echo     echo [FATAL] Then re-run dev.bat start-!APP_NAME!.
+>> "%LAUNCHER_PATH%" echo     exit /b 1
+>> "%LAUNCHER_PATH%" echo ^)
 >> "%LAUNCHER_PATH%" echo chcp 65001 ^>nul
 >> "%LAUNCHER_PATH%" echo cd /d "%TARGET_DIR%"
 if "%ADD_BLANK%"=="1" >> "%LAUNCHER_PATH%" echo echo. ^>^> "%LOG_PATH%"
