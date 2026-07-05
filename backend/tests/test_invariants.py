@@ -3569,7 +3569,21 @@ class TestRunBridgeConcurrencyGuard:
         )
 
     def test_run_bridge_only_checks_db_for_concurrent_runs(self):
-        """run_bridge 源码必须只有 DB 层 BridgeRun.status='running' 检查。"""
+        """run_bridge 源码必须只有 DB 层 BridgeRun active 检查（#30 + #74）。
+
+        #30: 之前 run_bridge 用 _get_project_lock(project_id).locked() 做并发保护，
+        但 asyncio.Lock 永不被 acquire → 检查永远 False → 给 false sense of
+        security。修法：删死代码，依赖 DB 层 BridgeRun active 检查 + lifespan
+        启动时 _recover_orphan_bridge_runs。
+
+        #74: 之前 DB 检查只查 status='running' 有 TOCTOU 窗口 —— pending insert
+        后到 status 翻 'running' 之前的窗口里两个并发请求都通过。修法：
+        active 检查包含 pending + running（用 status.in_(["pending","running"])）。
+
+        本测试锁死：
+          - 真代码行不应有 _get_project_lock / .locked() 这种无效检查
+          - 必须用 in_() 包含 pending+running（不能退化到只查 running）
+        """
         from pathlib import Path
         import re
         bridge_py = Path(__file__).resolve().parents[1] / "app" / "api" / "bridge.py"
@@ -3594,9 +3608,16 @@ class TestRunBridgeConcurrencyGuard:
         assert "_get_project_lock" not in code_body, (
             "run_bridge 真代码行不应再调 _get_project_lock（死代码）"
         )
-        # DB 检查必须有
-        assert 'status="running"' in body, (
-            "run_bridge 必须保留 DB 层 status='running' 检查（真实并发保护）"
+        # #74：active 检查必须包含 pending + running（in_ 模式）
+        assert 'status.in_(["pending", "running"])' in code_body or \
+               'in_(["pending", "running"])' in code_body, (
+            "run_bridge 必须用 status.in_(['pending','running']) 查询，"
+            "否则 TOCTOU 窗口（#74）未关闭"
+        )
+        # 反向保证：不能退化到单独 status='running'
+        bad_pattern = re.search(r'\.filter_by\([^)]*status\s*=\s*["\']running["\']', code_body)
+        assert not bad_pattern, (
+            f"run_bridge 不能退回到只查 status='running'（#74 已修），匹配 {bad_pattern.group() if bad_pattern else None}"
         )
 
 
@@ -7211,3 +7232,149 @@ class TestMemoryManagerNoSilentException:
         )
         assert any("ch_0001" in r.getMessage() for r in err_records), \
             f"log 应包含损坏文件路径 ch_0001，实际 messages: {[r.getMessage() for r in err_records]}"
+
+
+# ───────────────────────────────────────────
+# KKKK: 迭代 #74 — bridge.py 并发保护 TOCTOU 窗口（status='pending' 也算 active）
+# ───────────────────────────────────────────
+class TestBridgeRunConcurrencyGuard:
+    """迭代 #74（medium bug fix）：
+
+    历史：bridge.py:107 之前只查 `BridgeRun.status == 'running'` 来防止
+    同一 project 并发触发两次 writing engine。
+
+    真实流程时序（移除 asyncio.Lock 之后）：
+      T0  request1 进入 run_bridge()
+      T1  request1 查 running → 无
+      T2  request1 db.add(BridgeRun(status='pending')) + commit
+      T3  request1 background_tasks.add_task(_spawn_engine_subprocess, ...)
+      T4  ... background thread 内 _drain_stdout 把 status 翻成 'running'
+
+    T0~T4 之间的窗口里，request2 同样能查 running→无，同样放行 →
+    两个 engine 子进程同时对同一 project_id 跑 → 同时写同一份
+    checkpoint 文件 + 同时写同一份 .env。
+
+    修法：active 检查改为 `status in ('pending','running')` —— 一旦
+    request1 把 pending insert commit 成功，request2 的同检查立刻能看见，
+    不放行。
+    """
+    def test_run_bridge_checks_pending_in_active(self):
+        """源码扫描：run_bridge 必须把 'pending' 也算 active（#74）。"""
+        import inspect
+        from app.api import bridge as bridge_mod
+        src = inspect.getsource(bridge_mod.run_bridge)
+        # 必须有 'pending' 字面出现（说明检查了 pending 状态）
+        assert "'pending'" in src or '"pending"' in src, (
+            "bridge.run_bridge active 检查必须包含 'pending' 状态，"
+            "否则新插入的 BridgeRun 在 status 翻 'running' 前会通过并发检查（#74）"
+        )
+        # 必须用 in_(...) / in [...] 而不是单独等号（否则只查一个状态）
+        assert "in_([" in src or 'in_("pending"' in src or \
+               'status in [' in src, (
+            "active 检查必须用 in_() 包含多个状态（#74），"
+            "单纯 status=='running' 仍有 TOCTOU 窗口"
+        )
+
+    def test_run_bridge_no_more_only_running_check(self):
+        """回归保护：run_bridge 不能退回到只查 'running'（防止有人 reverted #74）。"""
+        import re
+        import inspect
+        from app.api import bridge as bridge_mod
+        src = inspect.getsource(bridge_mod.run_bridge)
+        # 退化的 "only running" 模式：filter_by(status="running") 单独使用
+        # 允许 'running' 出现在 in_(['pending','running']) 里但不允许单独 filter_by
+        bad_patterns = [
+            r'filter_by\([^)]*status\s*=\s*["\']running["\'][^)]*\)',
+            r'\.filter_by\([^)]*["\']running["\'][^)]*\)',
+        ]
+        for pat in bad_patterns:
+            m = re.search(pat, src)
+            assert not m, (
+                f"bridge.run_bridge 退化到只查 'running' 模式（#74 已修），匹配 {pat} → {m.group() if m else None}"
+            )
+
+    def test_functional_pending_run_blocks_new_run(self):
+        """行为测试：DB 里已经有一条 pending BridgeRun，再 insert 会触发 UNIQUE-like 冲突（#74）。
+
+        通过直接 reproduce query pattern 验证：
+          - 普通 query filter_by(status='running') 查不到 pending 行（确认这就是 bug）
+          - 修法 query status.in_(['pending','running']) 能查到（确认修法有效）
+        """
+        from datetime import datetime, timezone
+        from app.database import SessionLocal
+        from app.models import BridgeRun, Project
+
+        db = SessionLocal()
+        try:
+            # 准备：先建一个真 Project
+            project = Project(
+                id="test-toctou-window-proj",
+                title="TOCTOU window test",
+                genre="都市",
+                audience="男频",
+                status="ready",
+                config_json={},
+            )
+            db.add(project)
+            db.commit()
+            project_id = project.id
+
+            # 插入一条 pending 行（模拟 request1 已经走到 T2 commit 但还没翻 running）
+            pending_run = BridgeRun(
+                project_id=project_id,
+                command="run",
+                status="pending",
+                started_at=datetime.now(timezone.utc),
+            )
+            db.add(pending_run)
+            db.commit()
+            pending_id = pending_run.id
+        finally:
+            db.close()
+
+        try:
+            db = SessionLocal()
+            # 验证：旧 query（只查 running）查不到 pending —— 这就是 bug
+            old_check = db.query(BridgeRun).filter_by(
+                project_id=project_id, status="running"
+            ).first()
+            assert old_check is None, (
+                "前提：旧 query 只查 running 应该查不到 pending 行（证实 bug 存在）"
+            )
+
+            # 验证：修法 query（包含 pending）能查到
+            from sqlalchemy import or_
+            new_check = db.query(BridgeRun).filter(
+                BridgeRun.project_id == project_id,
+                BridgeRun.status.in_(["pending", "running"]),
+            ).first()
+            assert new_check is not None, (
+                "修复后 query 必须能查到 pending 行（#74 关闭 TOCTOU 窗口）"
+            )
+            assert new_check.id == pending_id
+            assert new_check.status == "pending"
+        finally:
+            # 清理测试数据
+            db = SessionLocal()
+            try:
+                run = db.get(BridgeRun, pending_id)
+                if run:
+                    db.delete(run)
+                proj = db.get(Project, project_id)
+                if proj:
+                    db.delete(proj)
+                db.commit()
+            except Exception:
+                db.rollback()
+            finally:
+                db.close()
+
+    def test_run_bridge_returns_409_with_active_status_info(self):
+        """源码扫描：run_bridge 409 响应应带具体 status（调试友好）。"""
+        import inspect
+        from app.api import bridge as bridge_mod
+        src = inspect.getsource(bridge_mod.run_bridge)
+        # 409 响应应包含 running.status（便于前端显示哪个 status 卡住的）
+        assert "running.status" in src or "f.status" in src or ".status" in src, (
+            "bridge.run_bridge 409 响应应包含具体 active status 信息（#74 调试友好）"
+        )

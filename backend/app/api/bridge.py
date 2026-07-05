@@ -98,15 +98,27 @@ async def run_bridge(
     if command in WRITE_COMMANDS and not _worldbuild_done(project_id, project, db):
         raise HTTPException(400, "worldbuild must be completed before running write commands")
     # 并发保护是双重的：
-    #   1) DB 层：下面的 BridgeRun.status='running' 检查 — 同 project 不能有两个 running 行
+    #   1) DB 层：下面的 BridgeRun status in ('pending','running') 检查 — 同
+    #      project 不能有两个 active 行
     #   2) lifespan 启动时 _recover_orphan_bridge_runs — 进程崩溃遗留的 running 行
     #      启动时被标 failed，避免永久卡住
     # 之前 _get_project_lock(project_id).locked() 是 dead code：
     #   asyncio.Lock 永不被 acquire（grep 证实无 `async with _get_project_lock`），
     #   检查永远 False，给 false sense of security。已删。
-    running = db.query(BridgeRun).filter_by(project_id=project_id, status="running").first()
+    # 迭代 #74: 之前只查 status='running' 有 TOCTOU 窗口 —— 新行插入后 status='pending'，
+    # 翻 'running' 在 background thread 里才开始。两个并发请求都查 'running' 都查不到，
+    # 都放行 + 都创建 pending → 同一 project_id 跑两个 engine 子进程写同一份 checkpoint。
+    # 修法：active 检查包含 pending + running —— 一旦第一个 insert pending 成功并 commit，
+    # 第二个请求的同检查能看到，不放行。
+    running = db.query(BridgeRun).filter(
+        BridgeRun.project_id == project_id,
+        BridgeRun.status.in_(["pending", "running"]),
+    ).first()
     if running:
-        raise HTTPException(409, "bridge run already running for this project")
+        raise HTTPException(
+            409,
+            f"bridge run already active for this project (status={running.status})"
+        )
 
     bridge_run = BridgeRun(
         project_id=project_id,
