@@ -2,8 +2,7 @@
 三道防线 + 集成文风指纹统计检测
 
 Migrated from novel_AI/agents/normalizer_agent.py. Uses backend.engine.llm.router
-(via set_active_router wired by graph.build_project_graph) instead of
-api_client.call_llm.
+(via get_active_router() from engine.llm_router) instead of api_client.call_llm.
 """
 from __future__ import annotations
 import re

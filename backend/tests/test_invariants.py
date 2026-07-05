@@ -6417,3 +6417,23 @@ class TestHumanReviewAtomicAndLoadNoSilent:
         code_src = "\n".join(code_lines)
         assert "atomic_write_json" in code_src, \
             "human_review meta 写盘也必须用 atomic_write_json"
+
+
+# ───────────────────────────────────────────
+# AAAA: fix #60 — orchestrator.run_summarizer 异常不再静默
+# ───────────────────────────────────────────
+class TestOrchestratorSummarizerNotSilent:
+    """迭代 #60: orchestrator.node_save_and_track 弧末 run_summarizer
+    之前 except Exception: cost=0.0 静默 —— 跟 #58 run_tracker 同型。
+    """
+    def test_orchestrator_marks_summarizer_failed(self):
+        import inspect
+        from engine import orchestrator as orch_mod
+        src = inspect.getsource(orch_mod.node_save_and_track)
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        assert "_summarizer_failed" in code_src, \
+            "orchestrator.node_save_and_track summarizer 异常路径必须标 _summarizer_failed（iter #60）"
+        assert "summarizer failed arc" in code_src, \
+            "orchestrator.node_save_and_track summarizer 异常路径必须 log error_log"

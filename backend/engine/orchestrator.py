@@ -491,7 +491,12 @@ def node_save_and_track(state: OrchestratorState) -> OrchestratorState:
             try:
                 _, cost = run_summarizer("arc_end", arc_plans[arc_idx], updated_mem, state.get("novel_id", "default"))
             except Exception as e:
+                # 迭代 #60: 跟 #58 同型 — 之前 silent fallback cost=0.0
+                # 没有 _summarizer_failed 标记，下一弧还是基于老 L5 接着跑。
                 log(f"ERR summarizer failed: {e}", state)
+                state["error_log"] = (state.get("error_log", []) +
+                                      [f"summarizer failed arc{arc_idx+1}: {e}"])
+                arc_plans[arc_idx]["_summarizer_failed"] = True
                 cost = 0.0
             _add_cost(state, cost)
         state["current_arc"] = arc_idx + 1
