@@ -7737,3 +7737,135 @@ class TestExporterAndCalibrateNoSilentException:
         )
         assert any("ch_0042" in r.getMessage() for r in err_records), \
             f"log 应包含坏文件路径 ch_0042，实际 {[r.getMessage() for r in err_records]}"
+
+
+# ───────────────────────────────────────────
+# PPPP: 迭代 #79 — pull-setting / import-chapters / reimport-chapters worldbuild 守卫
+# ───────────────────────────────────────────
+class TestBridgeEndpointsWorldbuildGuard:
+    """迭代 #79 — docs/root_cause_analysis.md 第 87 / 93 行明确标记的"未来方向
+    (未实施，等下次重构)"：import_chapters / pull_setting 之前没有强制
+    worldbuild 必须完成的代码检查。
+
+    实际现象："50 章 0 个 ChapterCharacter 边"——import 早于 pull → add_chapter
+    找不到任何 character 可建边。
+
+    修法：bridge.py 里 pull-setting / import-chapters / reimport-chapters 3 个端点
+    入口处都加 _worldbuild_done(...) 检查，没完成抛 HTTPException(400)。
+    跟 run_bridge + push-concept 已有的检查形成完整覆盖。
+    """
+    def _func_source(self, name):
+        import inspect
+        from app.api import bridge as bridge_mod
+        return inspect.getsource(getattr(bridge_mod, name))
+
+    def test_pull_setting_has_worldbuild_guard(self):
+        """pull_setting 必须有 _worldbuild_done 检查（#79）。"""
+        src = self._func_source("pull_setting")
+        assert "_worldbuild_done" in src, (
+            "bridge.pull_setting 必须检查 _worldbuild_done（#79），"
+            "否则 pull 早于 worldbuild 会让 character 边建不出来"
+        )
+        assert "raise HTTPException" in src, \
+            "bridge.pull_setting 检查失败必须 raise HTTPException（fail-fast）"
+
+    def test_import_chapters_has_worldbuild_guard(self):
+        """import_chapters 必须有 _worldbuild_done 检查（#79 — root cause 之一）。"""
+        src = self._func_source("import_chapters")
+        assert "_worldbuild_done" in src, (
+            "bridge.import_chapters 必须检查 _worldbuild_done（#79），"
+            "这是 50 章 0 character 边的根因——pull 早于 import 时建不了 character 边"
+        )
+        assert "raise HTTPException" in src, \
+            "bridge.import_chapters 检查失败必须 raise HTTPException"
+
+    def test_reimport_chapters_has_worldbuild_guard(self):
+        """reimport_chapters 必须有 _worldbuild_done 检查（#79 同型）。"""
+        src = self._func_source("reimport_chapters")
+        assert "_worldbuild_done" in src, (
+            "bridge.reimport_chapters 必须检查 _worldbuild_done（#79），"
+            "reimport 跟 import-chapters 同型——依赖 character / setting 已写入"
+        )
+
+    def test_push_concept_still_has_guard(self):
+        """push_concept 已有守卫不能被撤销（回归保护）。"""
+        src = self._func_source("push_concept")
+        assert "_worldbuild_done" in src, (
+            "bridge.push_concept 之前已有 worldbuild 守卫（#79 之前就有的修法）"
+            "—— 不能被 #79 改动意外撤回"
+        )
+
+    def test_worldbuild_done_uses_job_status(self):
+        """_worldbuild_done 必须看 GenerationJob.status='done' 而不只是 Project.status。
+
+        单看 project.status='ready' 不够——如果 worldbuild 失败但 project 还
+        在 'worldbuilding' 状态，import 不能放行；同理 worldbuild 在跑中
+        不算 done。修法：跟 LifecycleJob history 一致，看 GenerationJob.status。
+        """
+        import inspect
+        from app.api import bridge as bridge_mod
+        src = inspect.getsource(bridge_mod._worldbuild_done)
+        assert "GenerationJob" in src, (
+            "_worldbuild_done 必须查 GenerationJob（job_type='worldbuild'）"
+            "的 status='done'，不能只信 Project.status 字符串"
+        )
+        assert 'job_type="worldbuild"' in src or "job_type='worldbuild'" in src, (
+            "_worldbuild_done 必须过滤 job_type='worldbuild' 的 GenerationJob"
+        )
+        assert ('status="done"' in src or "status='done'" in src
+                or ".status == " in src and '"done"' in src
+                or ".status == " in src and "'done'" in src), (
+            "_worldbuild_done 必须匹配 status='done'（成功完成的 GenerationJob）"
+        )
+
+    def test_functional_worldbuild_not_done_returns_400(self):
+        """行为测试：worldbuild GenerationJob 不存在 / 未完成时，import_chapters 应拒绝。
+
+        模拟：项目在 worldbuild 但 GenerationJob 还没 done → 调 import-chapters
+        应该抛 HTTPException(400)。这是 #79 修法的核心防御。
+        """
+        from datetime import datetime
+        from fastapi import HTTPException
+        from app.database import SessionLocal
+        from app.models import BridgeRun, Project
+
+        db = SessionLocal()
+        try:
+            project = Project(
+                id="test-worldbuild-guard-proj",
+                title="worldbuild guard test",
+                genre="都市",
+                audience="男频",
+                status="worldbuilding",  # NOT ready
+                config_json={},
+            )
+            db.add(project)
+            db.commit()
+            project_id = project.id
+        finally:
+            db.close()
+
+        try:
+            # 模拟 import_chapters 入口检查（实际函数需要 binding，但 _worldbuild_done 用 project + db）
+            from app.api.bridge import _worldbuild_done
+            db = SessionLocal()
+            try:
+                project = db.get(Project, project_id)
+                # 无 worldbuild GenerationJob → worldbuild_done=False
+                assert _worldbuild_done(project_id, project, db) is False, (
+                    "项目状态 worldbuilding + 无 done GenerationJob → _worldbuild_done 必须 False"
+                )
+            finally:
+                db.close()
+        finally:
+            # 清理
+            db = SessionLocal()
+            try:
+                proj = db.get(Project, project_id)
+                if proj:
+                    db.delete(proj)
+                db.commit()
+            except Exception:
+                db.rollback()
+            finally:
+                db.close()

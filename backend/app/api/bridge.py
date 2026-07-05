@@ -290,13 +290,23 @@ async def push_concept(project_id: str, db: Session = Depends(get_db)):
 
 @router.post("/pull-setting")
 async def pull_setting(project_id: str, db: Session = Depends(get_db)):
-    _, binding = _get_project_and_binding(project_id, db)
+    project, binding = _get_project_and_binding(project_id, db)
+    # 迭代 #79: pull_setting 之前没有 worldbuild 检查——root_cause_analysis.md
+    # 第 87 行明确指出 "50 章 0 个 ChapterCharacter 边" 就是因为 import_chapters 早于
+    # pull 拉的代码路径。现在明确：pull 必须 worldbuild 完成。
+    if not _worldbuild_done(project_id, project, db):
+        raise HTTPException(400, "worldbuild must be completed before pulling setting")
     return await pull_setting_package(project_id, binding.novel_ai_dir, db)
 
 
 @router.post("/import-chapters")
 async def import_chapters(project_id: str, db: Session = Depends(get_db)):
-    _, binding = _get_project_and_binding(project_id, db)
+    project, binding = _get_project_and_binding(project_id, db)
+    # 迭代 #79: import_chapters 之前没有 worldbuild 检查——"50 章 0 character 边"
+    # 根因之一就在这里。import 早于 pull → add_chapter 找不到任何 character 可建边。
+    # 强制：必须 worldbuild 完成（status='ready' 或 worldbuild GenerationJob=done）。
+    if not _worldbuild_done(project_id, project, db):
+        raise HTTPException(400, "worldbuild must be completed before importing chapters")
     return await import_chapters_from_novel_ai(project_id, binding.novel_ai_dir, db)
 
 
@@ -305,7 +315,11 @@ async def reimport_chapters(project_id: str, db: Session = Depends(get_db)):
     """强制重新导入章节：用最新的 txt + meta 覆盖 DB 已有行（修复章节管理显示问题）。
     普通 /import-chapters 是幂等的，会跳过已存在行；
     这个端点专用于修复标题 / 内容 / 摘要。"""
-    _, binding = _get_project_and_binding(project_id, db)
+    project, binding = _get_project_and_binding(project_id, db)
+    # 迭代 #79: reimport 跟 import-chapters 同样的根因——没有 worldbuild guard。
+    # reimport 通常用于修复显示问题，但仍然依赖 character / setting 已写入。
+    if not _worldbuild_done(project_id, project, db):
+        raise HTTPException(400, "worldbuild must be completed before reimporting chapters")
     from ..bridge.chapter_import import _force_reimport
     return await _force_reimport(project_id, binding.novel_ai_dir, db)
 
