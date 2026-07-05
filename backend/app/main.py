@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import Base, SessionLocal, engine
-from .api import bridge, chapters, projects, providers, role_assignments, worldbuild, rules, foreshadowings, ai_assist
+from .api import bridge, chapters, projects, providers, role_assignments, worldbuild, rules, foreshadowings, ai_assist, world
 from .api.role_assignments import seed_role_assignments
 from .logging_setup import configure_root, get_logger
 from .middleware.rate_limit import RateLimitMiddleware
@@ -150,6 +150,7 @@ app.include_router(bridge.router)
 app.include_router(rules.router)
 app.include_router(foreshadowings.router)
 app.include_router(ai_assist.router)
+app.include_router(world.router)  # Phase 3: 5 个新 endpoint（worldview/rich + characters list/card/relations + relations/graph）
 
 
 @app.get("/health")

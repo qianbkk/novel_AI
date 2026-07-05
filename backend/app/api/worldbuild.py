@@ -84,6 +84,11 @@ def get_worldbuild_result(project_id: str, db: Session = Depends(get_db)):
         "currencies": [_serialize(c) for c in db.query(Currency).filter_by(project_id=project_id).all()],
         # 一致性校验清单：交给作者自己判断，不自动拦截——见 stage_consistency_check 的设计说明
         "consistency_warnings": (latest_job.consistency_warnings_json if latest_job else []) or [],
+        # ─── Phase 3：新增结构化字段（前端 WorldBuild UI 用）───
+        # 老项目所有字段都是 None，前端 fallback 到 legacy world_view / story_core
+        "worldview_rich": _serialize_field("world_view_rich_json", db.query(WorldSetting).filter_by(project_id=project_id).first()),
+        "story_core_struct": _serialize_field("story_core_struct_json", db.query(WorldSetting).filter_by(project_id=project_id).first()),
+        "history_timeline": _serialize_field("history_timeline_json", db.query(WorldSetting).filter_by(project_id=project_id).first()),
     }
 
 
@@ -91,3 +96,10 @@ def _serialize(row):
     if row is None:
         return None
     return {c.name: getattr(row, c.name) for c in row.__table__.columns}
+
+
+def _serialize_field(attr_name: str, row):
+    """从 ORM row 抽单个 JSON 字段的值。row=None 时返回 None。"""
+    if row is None:
+        return None
+    return getattr(row, attr_name, None)

@@ -172,6 +172,56 @@ class ChapterCharacterOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+# ─── Phase 3：世界构建板块结构化输出 ───
+class WorldviewRichOut(BaseModel):
+    """GET /projects/{pid}/worldview/rich 的响应"""
+    rich: Optional[dict[str, Any]] = None
+    story_core: Optional[dict[str, Any]] = None
+    history_timeline: Optional[list[dict[str, Any]]] = None
+    # 老项目 fallback（world_view_rich_json=null 时用）
+    fallback_text: Optional[str] = None
+    fallback_story_core: Optional[str] = None
+
+
+class CharacterSummaryOut(BaseModel):
+    """GET /projects/{pid}/characters 列表项"""
+    id: str
+    name: str
+    role: Optional[str] = None
+    # 卡片摘要（从 8 段聚合出 2-3 个字段）
+    identity: Optional[str] = None   # basic.identity
+    age: Optional[str] = None         # basic.age
+    gender: Optional[str] = None       # basic.gender
+
+
+class CharacterCardOut(BaseModel):
+    """GET /projects/{pid}/characters/{cid} 详情"""
+    id: str
+    name: str
+    role: Optional[str] = None
+    card: Optional[dict[str, Any]] = None
+    faction: Optional[dict[str, Any]] = None  # {id, name} 当角色归属势力时
+
+
+class CharacterRelationOut(BaseModel):
+    """GET /projects/{pid}/characters/{cid}/relations 单条边"""
+    id: str
+    relation: str
+    description: Optional[str] = None
+    target: dict[str, Any]             # {id, name, role}
+    mutual: bool = False
+    intensity: Optional[int] = None
+    tags: Optional[list[str]] = None
+    evolution: Optional[list[dict[str, Any]]] = None
+    key_events: Optional[list[dict[str, Any]]] = None
+
+
+class RelationGraphOut(BaseModel):
+    """GET /projects/{pid}/relations/graph"""
+    nodes: list[dict[str, Any]]        # [{id, name, role, role_kind}]
+    edges: list[dict[str, Any]]        # [{from_id, to_id, relation, mutual, intensity, tags}]
+
+
 class ChapterFull(BaseModel):
     id: str
     chapter_no: int
