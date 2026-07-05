@@ -128,8 +128,17 @@ def parse_llm_json_response(resp: str, default):
         except Exception:
             pass
 
-    # 全部失败 → default
+    # 全部失败 → default + log（迭代 #80：fake-pass 同型问题被点出）
+    # 之前 3 个策略失败时静默 return default → caller 拿 default 不知道 LLM
+    # 返回了垃圾。修法：log.warning 带 resp[:200] + strategy count 让运维
+    # 看到「这次 LLM 返回不合法 JSON」的信号，但**仍 return default** 保证
+    # pipeline 继续（行为不变）。
     if parsed is None:
+        log.warning(
+            "parse_llm_json_response: 3 个策略全失败，fallback 到 default "
+            "(LLM 返回可能损坏 / 非 JSON)。resp[:200]=%r",
+            (resp or "")[:200],
+        )
         return default
 
     # 类型保护

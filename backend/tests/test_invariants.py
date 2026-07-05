@@ -7869,3 +7869,84 @@ class TestBridgeEndpointsWorldbuildGuard:
                 db.rollback()
             finally:
                 db.close()
+
+
+# ───────────────────────────────────────────
+# QQQQ: 迭代 #80 — parse_llm_json_response 全部 parse 策略失败必须 log
+# ───────────────────────────────────────────
+class TestParseLlmJsonResponseAllStrategiesFail:
+    """迭代 #80：engine/utils.py.parse_llm_json_response 之前 3 个 JSON parse
+    策略（直接 parse / 平衡 JSON 提取 / 删尾逗号再 parse）全失败时静默
+    return default，无任何日志——caller 拿 default 不知道 LLM 实际返回了
+    什么。fake-pass 同型问题：orchestrator 走「校验 → 标 PASS」流程
+    的某些 agent 可能用 default 假装解析成功。
+
+    修法：3 个策略全失败时 log.warning 带 resp[:200] + strategy 标识
+    让运维看到「LLM 返回了非 JSON」信号，行为仍 return default 不变。
+    """
+    def test_parse_llm_json_response_logs_on_total_failure(self):
+        """源码扫描：parse_llm_json_response 末尾 parsed is None 时必须 log（#80 — fake-pass 反模式）。
+
+        函数里有两个 `if parsed is None:` 块：
+          - 中间段（每个策略失败后判断要不要继续尝试）
+          - **末尾 fallback**（3 个策略全部失败 → log + return default）
+        必须有**末尾**那个 log，中间段不一定需要。
+        """
+        import inspect
+        from engine import utils as engine_utils
+        src = inspect.getsource(engine_utils.parse_llm_json_response)
+        # 找最后一个 `if parsed is None:`（terminal fallback）
+        idx = src.rfind("if parsed is None:")
+        assert idx != -1, "parse_llm_json_response 必须有 `if parsed is None` fallback"
+        chunk = src[idx:idx + 500]
+        assert "log" in chunk.lower(), (
+            f"parse_llm_json_response 末尾 fallback 块必须 log（#80 — fake-pass 反模式）\n"
+            f"chunk:\n{chunk}"
+        )
+        # 也确保有 return default（行为不变）
+        assert "return default" in chunk, \
+            f"fallback 块必须 return default 但 log 同步，chunk:\n{chunk}"
+
+    def test_behavioral_total_failure_returns_default_and_logs(self, caplog):
+        """行为测试：3 个策略全失败时返回 default + 记录 warning。
+
+        模拟 LLM 返回纯文本（不是 JSON）→ parse_llm_json_response 应该
+        log.warning + return default。这正是 audit 担心的 silent fake-pass 场景。
+        """
+        import logging
+        from engine.utils import parse_llm_json_response
+        with caplog.at_level(logging.WARNING, logger="novel_ai.utils"):
+            # 纯文本 "this is not json" 会被 3 个策略全部拒绝
+            result = parse_llm_json_response("this is just plain text, no JSON here", {"expected": "dict"})
+        # 行为：返回 default
+        assert result == {"expected": "dict"}, \
+            f"全部失败应返回 default，实际 {result}"
+        # 关键：log warning 必须有
+        warn_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        assert warn_records, (
+            "全部 parse 策略失败时必须有 log（#80 — 之前静默 fallback）"
+            f"实际 caplog: {[(r.levelname, r.name, r.getMessage()) for r in caplog.records]}"
+        )
+        # log 应包含 resp 前 200 字符（让运维看到 LLM 实际返回了什么）
+        msgs = [r.getMessage() for r in warn_records]
+        assert any("plain text" in m for m in msgs), \
+            f"log 应包含 LLM 返回内容（截断 200 字符），实际 messages: {msgs}"
+
+    def test_behavioral_partial_failure_no_log_when_strategy_works(self, caplog):
+        """行为测试（反向）：某个策略成功时不应该 trigger 全部失败的 log。
+
+        直接的合法 JSON 应该 parse 成功，不走 "all failed" 分支。
+        """
+        import logging
+        from engine.utils import parse_llm_json_response
+        with caplog.at_level(logging.WARNING, logger="novel_ai.utils"):
+            result = parse_llm_json_response('{"title": "good"}', {"expected": "dict"})
+        # 行为：返回 parsed dict
+        assert isinstance(result, dict)
+        assert result.get("title") == "good"
+        # 反向保证：合法 JSON 不触发 "all strategies failed" log
+        warn_records = [r for r in caplog.records if r.levelno >= logging.WARNING]
+        all_failed_msgs = [r.getMessage() for r in warn_records
+                           if "全部" in r.getMessage() or "全失败" in r.getMessage()]
+        assert not all_failed_msgs, \
+            f"合法 JSON 不应触发 'all strategies failed' log，实际: {all_failed_msgs}"
