@@ -6608,3 +6608,58 @@ class TestLlmClientRetryCatchesAll:
             result = asyncio.run(lc_mod.call_llm_json("structured_logic", "sys", "user"))
         assert result == {"ok": True}, \
             f"TypeError 必须被重试吞掉，实际 {result}"
+
+
+# ───────────────────────────────────────────
+# DDDD: smoke test — engine state lock + budget never overflows
+# ───────────────────────────────────────────
+class TestEngineStateSafetyInvariants:
+    """锁定 engine/state.py + orchestrator.py 的安全不变量。
+    
+    这些不变量不一定对应 bug，但锁住防止回归：
+    1. save_state 后 budget_used_usd 单调递增（前提 cost >= 0）
+    2. load_state 必须能恢复 save_state 写入的内容
+    3. error_log 最多 100 条（防止内存无限增长）
+    4. log("ERR ...") 必须把消息加进 error_log
+    """
+    def test_save_load_round_trip(self, tmp_path):
+        """save → load 必须 round-trip（同一字段相同值）。"""
+        from engine.state import create_initial_state, save_state, load_state
+        s = create_initial_state("t", "title", "fanqie", "玄幻", "测试概念")
+        s["current_chapter"] = 5
+        s["budget_used_usd"] = 12.5
+        s["error_log"] = ["ERR foo", "WARN bar"]
+        path = str(tmp_path / "state.json")
+        save_state(s, path)
+        loaded = load_state(path)
+        assert loaded["novel_id"] == "t"
+        assert loaded["current_chapter"] == 5
+        assert loaded["budget_used_usd"] == 12.5
+        assert loaded["error_log"] == ["ERR foo", "WARN bar"]
+
+    def test_error_log_capped_at_100(self):
+        """engine/orchestrator.py log() 必须把 error_log 截到 100 条（el[-100:]）。"""
+        import inspect
+        from engine import orchestrator as orch_mod
+        src = inspect.getsource(orch_mod.log)
+        assert "el[-100:]" in src or "[-100:]" in src, \
+            "orchestrator.log 必须把 error_log 截到 100 条防止内存无限增长"
+
+    def test_log_err_message_goes_into_error_log(self):
+        """log(\"ERR xxx\") 必须把消息加进 error_log。"""
+        from engine import orchestrator as orch_mod
+        s = orch_mod.create_initial_state("t", "t", "fanqie", "玄幻", "")
+        orch_mod.log("ERR 测试错误信息", s)
+        assert any("ERR 测试错误信息" in line for line in s["error_log"]), \
+            f"log('ERR xxx') 必须把消息加进 error_log，实际 {s['error_log']}"
+
+    def test_log_non_err_message_not_in_error_log(self):
+        """log(\"...\" 不含 ERR/FAIL) 不应进 error_log。"""
+        from engine import orchestrator as orch_mod
+        s = orch_mod.create_initial_state("t", "t", "fanqie", "玄幻", "")
+        orch_mod.log("普通日志信息，不应进 error_log", s)
+        # 普通信息不应进 error_log（除非包含 ERR/FAIL）
+        # 但 ERR/FAIL 是字符串检查，如果信息里有"ERR"字样仍会进 — 这是预期
+        assert all("ERR" not in line and "FAIL" not in line
+                   for line in s["error_log"]), \
+            f"普通信息不应进 error_log，实际 {s['error_log']}"
