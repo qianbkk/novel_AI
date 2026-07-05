@@ -6663,3 +6663,63 @@ class TestEngineStateSafetyInvariants:
         assert all("ERR" not in line and "FAIL" not in line
                    for line in s["error_log"]), \
             f"普通信息不应进 error_log，实际 {s['error_log']}"
+
+
+# ───────────────────────────────────────────
+# EEEE: fix #64 — orchestrator._setting 损坏文件不再 crash
+# ───────────────────────────────────────────
+class TestOrchestratorSettingLoadError:
+    """迭代 #64: engine/orchestrator.py:_setting 之前 `json.load(f)`
+    损坏文件时直接抛 — 没有 backup / 没有清晰错误。
+    修法：损坏时 backup 到 .corrupted.{ts}，raise 带可读信息。
+    """
+    def test_setting_load_corrupt_file_raises_with_clear_message(self, tmp_path, monkeypatch):
+        """损坏 setting_package.json 必须 raise 带「文件损坏」可读信息。"""
+        from pathlib import Path
+        from engine import orchestrator as orch_mod
+        # 重置 module-level cache
+        monkeypatch.setattr(orch_mod, "_setting_cache", None)
+        monkeypatch.setattr(orch_mod, "SETTING_PATH", Path(tmp_path / "setting.json"))
+
+        # 写损坏文件
+        (tmp_path / "setting.json").write_text("{ not valid", encoding="utf-8")
+
+        with pytest.raises(Exception) as exc_info:
+            orch_mod._setting()
+        # 必须有可读错误信息（提到损坏 / JSON / 文件名）
+        err_msg = str(exc_info.value)
+        assert "Expecting" in err_msg or "JSON" in err_msg, \
+            f"损坏文件必须 raise JSON 解析错误，实际 {type(exc_info.value).__name__}: {err_msg}"
+
+    def test_setting_load_missing_file_returns_empty_dict(self, tmp_path, monkeypatch):
+        """setting_package.json 不存在时 _setting 必须返回 {}（首次启动）。"""
+        from pathlib import Path
+        from engine import orchestrator as orch_mod
+        monkeypatch.setattr(orch_mod, "_setting_cache", None)
+        monkeypatch.setattr(orch_mod, "SETTING_PATH", Path(tmp_path / "nope.json"))
+        # 文件不存在 → 返回 {}（不抛）
+        result = orch_mod._setting()
+        assert result == {}, \
+            f"setting 文件不存在时必须返回 {{}}，实际 {result}"
+
+    def test_setting_cache_hit_after_first_load(self, tmp_path, monkeypatch):
+        """_setting_cache 第一次加载后必须 cache（不再读盘）。"""
+        from pathlib import Path
+        from engine import orchestrator as orch_mod
+        import json as _json
+        (tmp_path / "setting.json").write_text(
+            _json.dumps({"title_candidates": ["test"], "genre": "玄幻"}),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(orch_mod, "_setting_cache", None)
+        monkeypatch.setattr(orch_mod, "SETTING_PATH", Path(tmp_path / "setting.json"))
+
+        first = orch_mod._setting()
+        assert first["title_candidates"] == ["test"]
+        # 改盘内容（应该不被读到，因为 cache 已填）
+        (tmp_path / "setting.json").write_text(
+            _json.dumps({"title_candidates": ["changed"]}), encoding="utf-8",
+        )
+        second = orch_mod._setting()
+        assert second["title_candidates"] == ["test"], \
+            "第二次 _setting 必须从 cache 读，不应重新 load disk"
