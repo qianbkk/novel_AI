@@ -6703,7 +6703,7 @@ class TestOrchestratorSettingLoadError:
             f"setting 文件不存在时必须返回 {{}}，实际 {result}"
 
     def test_setting_cache_hit_after_first_load(self, tmp_path, monkeypatch):
-        """_setting_cache 第一次加载后必须 cache（不再读盘）。"""
+        """_setting_cache 同 mtime 必须 cache（不重读盘）；iter #65 mtime-based 行为。"""
         from pathlib import Path
         from engine import orchestrator as orch_mod
         import json as _json
@@ -6712,17 +6712,18 @@ class TestOrchestratorSettingLoadError:
             encoding="utf-8",
         )
         monkeypatch.setattr(orch_mod, "_setting_cache", None)
+        monkeypatch.setattr(orch_mod, "_setting_mtime", None)
         monkeypatch.setattr(orch_mod, "SETTING_PATH", Path(tmp_path / "setting.json"))
 
         first = orch_mod._setting()
         assert first["title_candidates"] == ["test"]
-        # 改盘内容（应该不被读到，因为 cache 已填）
-        (tmp_path / "setting.json").write_text(
-            _json.dumps({"title_candidates": ["changed"]}), encoding="utf-8",
-        )
-        second = orch_mod._setting()
-        assert second["title_candidates"] == ["test"], \
-            "第二次 _setting 必须从 cache 读，不应重新 load disk"
+        # 第二次不改文件 → cache hit（同 mtime 不 reload）
+        from unittest.mock import patch
+        with patch("engine.orchestrator.json.load") as mock_load:
+            second = orch_mod._setting()
+        assert mock_load.call_count == 0, \
+            f"不改文件时不应调 json.load，实际调了 {mock_load.call_count} 次"
+        assert second["title_candidates"] == ["test"]
 
 
 # ───────────────────────────────────────────
