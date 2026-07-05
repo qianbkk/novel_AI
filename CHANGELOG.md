@@ -6,6 +6,54 @@
 
 ## [Unreleased] — 2026-07-05
 
+### Bug Fix（迭代 #78 — 内部审计 / CLI 同型扫描）
+
+- **`fix(engine): exporter.py + calibrate_checker.py 不再静默吞异常**（继 #73/#77 之后同型扫描补漏）
+  - `engine/tools/exporter.py` 之前 5 处 `except Exception: pass/continue` + 2 处 dead try/except
+    - 损坏章节 meta / setting_package / orchestrator_state 文件时静默返回默认 `{}`，
+      exporter 拿不到 meta 但不知情
+    - 2 处外层 try/except 因为内层 `load_meta` 已 silent pass 后永不触发 → dead code
+  - `engine/tools/calibrate_checker.py` 之前 1 处 `except Exception: continue`
+    - 校准样本 JSON 损坏时静默跳过
+  - **修法**：两个文件都加 module logger + 全部 6 处 except 加 `_log.exception(...)` +
+    删 exporter.py 2 处 dead try/except（comment 解释 load_meta 已处理）
+  - **加 6 个 invariant test 锁死**（`TestExporterAndCalibrateNoSilentException`）：
+    含 exporter.load_meta 行为测试——坏 meta 文件 → 返回 `{}` + caplog 抓到坏文件路径
+
+### Bug Fix（迭代 #77 — 内部审计 / CLI 同型扫描）
+
+- **`fix(engine): style_manager.py 不再静默吞异常**（继 #73 之后同型扫描补漏）
+  - `engine/tools/style_manager.py` 之前 4 处 `except Exception: continue` 完全静默吞
+    读风格样本 / chapter meta 失败
+  - 跟 #73 memory/manager.py 完全同型，但 CLI 工具 — 被同型扫描漏掉
+  - **修法**：模块级 `_log` + 4 处都加 `_log.exception(...)` 后 continue
+  - **加 5 个 invariant test 锁死**（`TestStyleManagerNoSilentException`）：含行为测试
+    —— 坏 chapter meta + 好 meta+章节，验证好样本被提取 + caplog 抓到坏文件路径
+
+### Bug Fix（迭代 #76 — 内部审计 / 低）
+
+- **`fix(engine): router.py proxy mount 失败时 log.warning 不再静默吞掉**
+  - `engine/llm/router.py._get_proxied_client` 内层 mount proxy 段之前是
+    `except Exception: pass` —— 如果 urlparse 抛异常（畸形 base_url），proxy
+    默默不挂载 → caller 看到 "no proxy" 直连，但 provider_proxy 配置了；
+    运维以为是网络问题实际是代码 bug
+  - **修法**：`log.warning` 带 provider / base_url / exception 类型
+    让运维快速定位。client 仍返回（mount 失败时仍能直连），行为不变但有诊断信号
+  - **加 2 个 invariant test 锁死**（`TestRouterProxyMountNoSilentException`）：
+    源码扫描 except 段必须有 log.* 调用 + 反向保证不能退回 bare pass
+
+### Bug Fix（迭代 #75 — 内部审计 / 文档）
+
+- **`fix(engine): agents/__init__.py 不再误导性引用已删除的 stub.py**
+  - 之前注释 "legacy stub.py is kept as a fallback" 指向一个**已经不存在**的模块
+    （commit 历史删了 stub.py），留下误导性引用
+  - 开发和审计读起来以为有兜底实现，实际 ImportError 直传上层（fail-fast，
+    符合 #62 系列修法）
+  - **修法**：注释改为准确描述（所有 agent 都是真实实现，无 stub 兜底），
+    enumerate planner 和 init_arc 也加上说明
+  - **加 3 个 invariant test 锁死**（`TestAgentsPackageDocAccurate`）：
+    AST 扫描禁止 stub 模块被加回来 + 文件不存在性检查
+
 ### Bug Fix（迭代 #72 — 内部审计 / 严重）
 
 - **`fix(app): get_master_key 同进程稳定（修 in-process key 漂移致命 bug）**
