@@ -11,6 +11,7 @@ provider-specific httpx.Client. This makes region-restricted providers
 (deepseek / anthropic behind GFW) usable through a proxy.
 """
 from __future__ import annotations
+import logging
 import os
 from typing import Optional
 
@@ -100,6 +101,19 @@ class LLMRouter:
 
         Returns the configured engine router so callers can hold a reference.
         """
+        # 迭代 #84 P0 修复：env NOVEL_ENGINE_MOCK=1 → 跳过 DB 加载,
+        # 让 __init__ 在 mock 模式设的全部 routes 保留。
+        # 之前: configure(routes=routes_from_db) 会 routes.update(routes_from_db),
+        # 把 mock 切回 minimax/anthropic,agent 调 LLM 真去发请求 → 在 mock 跑测试时
+        # ValueError('MINIMAX_API_KEY 未设置')。契约:NOVEL_ENGINE_MOCK=1 应当一票否决 DB routes。
+        if os.getenv("NOVEL_ENGINE_MOCK") == "1":
+            logging.getLogger("novel_ai.llm_router").info(
+                "NOVEL_ENGINE_MOCK=1 — 跳过 DB routes 加载,engine router 保持 "
+                "__init__ 设的 mock routes"
+            )
+            set_active_router(self._engine)
+            return self._engine
+
         if self._routes is None:
             self.load_routes()
 

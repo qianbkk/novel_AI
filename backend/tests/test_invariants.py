@@ -8578,3 +8578,257 @@ class TestSchemaLenientOnUnion:
         )
         assert m.rich is None
         assert m.fallback_text == "legacy"
+
+
+# ───────────────────────────────────────────
+# G: engine subprocess 必须继承关键 env（P0 iter #84）
+# ───────────────────────────────────────────
+class TestSubprocessEnvContract:
+    """锁死 _spawn_engine_subprocess → engine subprocess 的 env 契约。
+
+    历史 bug (iter #84)：
+      bridge.run spawn engine subprocess 时只 set 了 NOVEL_OUTLINE_MODE，
+      缺 NOVEL_AI_DIR 和 NOVEL_ENGINE_MOCK 两个 P0 关键变量。
+        - 缺 NOVEL_AI_DIR → engine 写默认 backend/data/engine/output/，
+          bridge.reports 读不到 orchestrator_state.json / setting_package.json
+        - 缺 NOVEL_ENGINE_MOCK=1 → LLMRouter 真去调 API 报
+          ValueError('MINIMAX_API_KEY 未设置')
+    """
+
+    def test_bridge_popen_env_includes_novel_ai_dir(self):
+        """bridge._spawn_engine_subprocess 的 env 字典必须显式含 NOVEL_AI_DIR。"""
+        from app.api.bridge import _spawn_engine_subprocess
+        import inspect
+        src = inspect.getsource(_spawn_engine_subprocess)
+        assert (
+            '"NOVEL_AI_DIR"' in src or "'NOVEL_AI_DIR'" in src
+        ), (
+            "_spawn_engine_subprocess 必须在 env 字典里显式设置 "
+            "NOVEL_AI_DIR，否则 subprocess 写到默认 backend/data/engine/output/"
+        )
+
+    def test_bridge_popen_env_includes_novel_engine_mock(self):
+        """bridge._spawn_engine_subprocess 必须把父进程 NOVEL_ENGINE_MOCK 透传到 subprocess。"""
+        from app.api.bridge import _spawn_engine_subprocess
+        import inspect
+        src = inspect.getsource(_spawn_engine_subprocess)
+        assert "NOVEL_ENGINE_MOCK" in src, (
+            "_spawn_engine_subprocess 必须显式把 NOVEL_ENGINE_MOCK 加到 env；"
+            "父进程设了但 subprocess 看不到会让 LLMRouter 真去调 API 报 MINIMAX_API_KEY 未设置"
+        )
+
+    def test_bridge_env_outline_mode_still_set(self):
+        """回归保护：原有 NOVEL_OUTLINE_MODE 不能因为新增 env 逻辑而被破坏。"""
+        from app.api.bridge import _spawn_engine_subprocess
+        import inspect
+        src = inspect.getsource(_spawn_engine_subprocess)
+        assert (
+            '"NOVEL_OUTLINE_MODE"' in src or "'NOVEL_OUTLINE_MODE'" in src
+        ), "NOVEL_OUTLINE_MODE 必须在 env 字典里强制设值"
+
+    def test_run_bridge_subprocess_documents_env_contract(self):
+        """subprocess 脚本应当文档化 / 承认 env 契约（不是隐式 magic）。"""
+        from pathlib import Path
+        worker = Path(__file__).resolve().parents[1] / "engine" / "workers" / "run_bridge_subprocess.py"
+        src = worker.read_text(encoding="utf-8")
+        # 必须有 NOVEL_AI_DIR 或 NOVEL_ENGINE_MOCK 的明确引用（说明开发者意识到契约）
+        assert "NOVEL_AI_DIR" in src or "NOVEL_ENGINE_MOCK" in src, (
+            "run_bridge_subprocess.py 应当提到 NOVEL_AI_DIR/NOVEL_ENGINE_MOCK "
+            "env 契约，否则将来有人改父进程 env 字典，subprocess 端没人知道"
+        )
+
+
+class TestLLMRouterInstallMockContract:
+    """锁死 engine.llm_router.LLMRouter.install() 在 mock 模式下的行为。
+
+    历史 bug (iter #84)：
+      install() 内部跑 load_routes() + configure(routes=...)，而 configure
+      是 routes.update(...) — 会把 LLMRouter.__init__ 设的 mock routes
+      全部覆盖回 DB RoleAssignment 的真实 provider。
+      后果：NOVEL_ENGINE_MOCK=1 启动时，subprocess 应当全走 mock，但
+      因为 configure.update() 覆盖了 mock，planner 真去调 MiniMax API
+      → ValueError('MINIMAX_API_KEY 未设置')。
+      修法：install() 入口检查 NOVEL_ENGINE_MOCK=1 → 跳过 DB 加载，
+      让 __init__ 设的 mock routes 保留。
+    """
+
+    def test_install_short_circuits_on_mock_env(self):
+        """NOVEL_ENGINE_MOCK=1 时 install() 应跳过 load_routes / configure。"""
+        from engine.llm_router import LLMRouter
+        import inspect
+        src = inspect.getsource(LLMRouter.install)
+        # 必须有早退路径
+        assert "NOVEL_ENGINE_MOCK" in src, (
+            "LLMRouter.install() 必须读 NOVEL_ENGINE_MOCK env；缺失等于让 mock 模式 "
+            "继续调 DB → 真去发请求"
+        )
+
+    def test_engine_router_init_applies_mock(self, monkeypatch):
+        """engine.llm.router.LLMRouter.__init__ 在 NOVEL_ENGINE_MOCK=1 时切 mock routes。
+
+        这是 install() short-circuit 的前置依赖：
+          install() 让 __init__ 设的 routes 留下来, 所以 __init__ 必须真的切。
+        """
+        monkeypatch.setenv("NOVEL_ENGINE_MOCK", "1")
+        from engine.llm.router import LLMRouter as _EngineRouter
+        r = _EngineRouter()
+        # __init__ 在 mock 模式应当把全部 routes 切到 ('mock', 'mock-model')
+        for agent, (provider, _model) in r.routes.items():
+            assert provider == "mock", (
+                f"mock 模式下 agent={agent!r} 的 provider 应当是 'mock', 实际 {provider!r}"
+            )
+
+
+# ───────────────────────────────────────────
+# iter #85：端到端测试发现 3 个 P0 bug，全部修后补 invariant 锁死
+# ───────────────────────────────────────────
+
+class TestGraphPyEnvAwareOutputDir:
+    """P0 修复（iter #85）：graph.py 三处硬编码 DATA_DIR/engine/output，
+    完全忽略 NOVEL_AI_DIR。修：抽 _engine_output_dir() helper 统一 env-aware。
+    之前症状：binding 指向 ../novel_AI 但 planner 写到 backend/data/engine/output/，
+    bridge.reports 读不到，状态错乱。"""
+
+    def test_engine_output_dir_uses_novel_ai_dir_when_set(self):
+        """NOVEL_AI_DIR 设置时，_engine_output_dir 用它"""
+        import os
+        from engine.graph import _engine_output_dir
+        from pathlib import Path
+        old = os.environ.get("NOVEL_AI_DIR")
+        try:
+            os.environ["NOVEL_AI_DIR"] = "/tmp/test_novel_ai_dir"
+            result = _engine_output_dir()
+            assert str(result).replace("\\", "/") == "/tmp/test_novel_ai_dir/output"
+        finally:
+            if old is not None:
+                os.environ["NOVEL_AI_DIR"] = old
+            else:
+                os.environ.pop("NOVEL_AI_DIR", None)
+
+    def test_engine_output_dir_falls_back_to_backend(self):
+        """NOVEL_AI_DIR 未设时，_engine_output_dir 用默认 backend/data/engine/output"""
+        import os
+        from engine.graph import _engine_output_dir
+        old = os.environ.pop("NOVEL_AI_DIR", None)
+        try:
+            result = _engine_output_dir()
+            assert "data/engine/output" in str(result).replace("\\", "/")
+        finally:
+            if old is not None:
+                os.environ["NOVEL_AI_DIR"] = old
+
+    def test_graph_py_no_hardcoded_output_dir(self):
+        """源码扫描：graph.py 不再硬编码 str(DATA_DIR / "engine" / "output")"""
+        import inspect
+        from engine import graph
+        src = inspect.getsource(graph)
+        assert "str(DATA_DIR / \"engine\" / \"output\")" not in src, (
+            "graph.py 仍有 str(DATA_DIR / 'engine' / 'output') 硬编码（iter #85 已修）"
+        )
+
+
+class TestPullSettingFKCascade:
+    """P0 修复（iter #85）：setting_sync.py 删 Character 时没先删子表
+    ChapterCharacter/EntityRelation/Foreshadowing 等 FK 引用，DELETE 报
+    FOREIGN KEY constraint failed。修：调整 7 个 DELETE 顺序。"""
+
+    def test_pull_setting_delete_order_cascades_correctly(self):
+        """源码扫描：setting_sync 的 idempotent clear 必须删全部 8 个相关表，
+        子表先于父表（FK 级联）。
+
+        实现方式：先剥掉所有以 # 开头的整行注释行，避免把 docstring/注释里
+        出现的 ".delete(" 误识别为调用。然后把整段源码按每个 `.delete(`
+        位置切成若干「片段」，每个片段从前一个 `.delete(` 之后开始。
+        片段内找唯一一个 `db.query(<ModelName>)`（如果有）即为该 delete
+        对应的模型。
+
+        这样无论是单行 `query(X).filter(...).delete()` 还是多行
+        `ChapterCharacter` 那种
+        `query(X)\n  .filter(\n    X.id.in_(query(Y).subquery())\n  )\n  .delete()`
+        都能正确识别——因为 `.delete(` 一定在该 statement 的最后一个
+        `db.query(X)` 之后且中间不会再嵌套新 query。
+        """
+        from pathlib import Path
+        from app.bridge import setting_sync
+        src = Path(setting_sync.__file__).read_text(encoding="utf-8")
+
+        import re
+
+        # 1) 剥整行注释
+        cleaned_lines = []
+        for line in src.splitlines(keepends=True):
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                cleaned_lines.append(" " * len(line))
+            else:
+                cleaned_lines.append(line)
+        cleaned = "".join(cleaned_lines)
+
+        # 2) 找每个 .delete( 位置，按这些位置切分源码
+        delete_positions = [m.start() for m in re.finditer(r"\.delete\(", cleaned)]
+        segments: list[str] = []
+        prev = 0
+        for pos in delete_positions:
+            segments.append(cleaned[prev:pos])
+            prev = pos
+        # 最后一段不算（之后没有 delete）
+
+        # 3) 每个 segment 里找 db.query(<ModelName>)
+        delete_calls: list[str] = []
+        for seg in segments:
+            queries = re.findall(r"db\.query\((\w+)\)", seg)
+            if queries:
+                # 取最后一个 query（即最近的、最外层的 statement 起点）
+                delete_calls.append(queries[-1])
+
+        expected_order = [
+            "ChapterCharacter", "EntityRelation", "Foreshadowing",
+            "MapNode", "Currency", "PowerSystem", "Faction", "Character",
+        ]
+        for required in expected_order:
+            assert required in delete_calls, (
+                f"setting_sync 没删 {required}，实际删了 {delete_calls}"
+            )
+        assert delete_calls[-1] == "Character", (
+            f"Character.delete() 必须是最后一个（FK 级联），"
+            f"实际顺序 {delete_calls}"
+        )
+        assert delete_calls[0] == "ChapterCharacter", (
+            f"ChapterCharacter.delete() 必须第一个（最深 FK），"
+            f"实际顺序 {delete_calls}"
+        )
+
+
+class TestPlannerMockPayloadValid:
+    """P0 修复（iter #85）：router._MOCK_RESPONSES["planner"] 之前缺 7 个
+    setting_package required 字段（tagline/protagonist/world_setting/...），
+    mock 模式跑 planner 直接被 schema_validator fail-fast 拦下。
+    修：mock_payload 补齐所有 required 字段，parse 后的 dict 通过 schema。"""
+
+    def test_planner_mock_passes_setting_package_schema(self):
+        """_MOCK_RESPONSES['planner'] parse 后必须过 setting_package schema"""
+        import json
+        from engine.llm.router import _MOCK_RESPONSES
+        from app.schema_validator import validate_setting_package
+        mock = _MOCK_RESPONSES.get("planner")
+        assert mock is not None, "_MOCK_RESPONSES 缺 'planner'"
+        parsed = json.loads(mock)
+        try:
+            validate_setting_package(parsed)
+        except Exception as e:
+            raise AssertionError(
+                f"_MOCK_RESPONSES['planner'] parse 后未通过 schema 校验: {e}\n"
+                f"parsed keys: {list(parsed.keys())}"
+            )
+
+    def test_planner_mock_has_all_required_fields(self):
+        """mock planner 必含 7 个 required 字段"""
+        import json
+        from engine.llm.router import _MOCK_RESPONSES
+        parsed = json.loads(_MOCK_RESPONSES["planner"])
+        for required in ["tagline", "protagonist", "world_setting",
+                          "power_system", "key_characters", "arc_outline",
+                          "foreshadowing_seeds"]:
+            assert required in parsed, (
+                f"_MOCK_RESPONSES['planner'] 缺 required 字段 '{required}'"
+            )

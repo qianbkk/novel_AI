@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 from ..models import (
     Project, WorldSetting, Character, Faction, PowerSystem,
     Currency, MapNode, Foreshadowing, RuleConfig, EntityRelation,
+    Chapter, ChapterCharacter,
 )
 from ..logging_setup import get_logger
 # 迭代 #43: novel_config.json 之前直接 .write_text(json.dumps(...)) —
@@ -185,13 +186,23 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
     }
 
     # 2. 幂等：先清掉旧的关联行（保留 novel_ai_raw_setting_json 已有内容）
-    db.query(Character).filter_by(project_id=project_id).delete()
-    db.query(Faction).filter_by(project_id=project_id).delete()
-    db.query(PowerSystem).filter_by(project_id=project_id).delete()
-    db.query(Currency).filter_by(project_id=project_id).delete()
-    db.query(MapNode).filter_by(project_id=project_id).delete()
-    db.query(Foreshadowing).filter_by(project_id=project_id).delete()
+    # P0 修复（iter #85）：删除顺序必须先删子表再删父表，否则 FK 约束失败：
+    #   - ChapterCharacter → Character（chapter_characters 表存 character_id FK）
+    #   - EntityRelation → Character（from_id/to_id 都可能指向 character）
+    # 之前 7 个 delete 不级联 → 第 1 个 Character.delete() 报
+    #   FOREIGN KEY constraint failed（重 pull setting 时）
+    db.query(ChapterCharacter).filter(
+        ChapterCharacter.chapter_id.in_(
+            db.query(Chapter.id).filter_by(project_id=project_id).subquery()
+        )
+    ).delete(synchronize_session=False)
     db.query(EntityRelation).filter_by(project_id=project_id).delete()
+    db.query(Foreshadowing).filter_by(project_id=project_id).delete()
+    db.query(MapNode).filter_by(project_id=project_id).delete()
+    db.query(Currency).filter_by(project_id=project_id).delete()
+    db.query(PowerSystem).filter_by(project_id=project_id).delete()
+    db.query(Faction).filter_by(project_id=project_id).delete()
+    db.query(Character).filter_by(project_id=project_id).delete()
 
     # 3. 人物：从 key_characters + protagonist
     imported_characters = 0

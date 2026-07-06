@@ -164,8 +164,18 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
         binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
         env = os.environ.copy()
         env["NOVEL_OUTLINE_MODE"] = outline_mode
-        if binding:
-            env["NOVEL_AI_DIR"] = binding.novel_ai_dir
+        # P0 修复 (iter #84)：subprocess 必须继承 NOVEL_AI_DIR + NOVEL_ENGINE_MOCK。
+        # 否则：
+        #   - NOVEL_AI_DIR 缺失 → engine 写到 backend/data/engine/output/，
+        #     bridge.reports 读不到 orchestrator_state.json / setting_package.json，
+        #     size 只有 ~2 字节（空文件）
+        #   - NOVEL_ENGINE_MOCK 缺失 → LLMRouter 不走 mock，真去调 API 报
+        #     "MINIMAX_API_KEY 未设置" ValueError
+        # binding.novel_ai_dir 优先；父进程 env 兜底（兼容 binding 缺失 / 测试场景）
+        env["NOVEL_AI_DIR"] = (
+            binding.novel_ai_dir if binding else os.environ.get("NOVEL_AI_DIR", "")
+        )
+        env["NOVEL_ENGINE_MOCK"] = os.environ.get("NOVEL_ENGINE_MOCK", "")
     finally:
         db.close()
 

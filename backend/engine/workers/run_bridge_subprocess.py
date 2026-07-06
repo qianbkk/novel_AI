@@ -14,6 +14,18 @@ stdout 行为：
   - 任何 print() 都进 stdout
   - 主进程读 stdout → 转 SSE 事件给前端
   - 同时主进程每 50 行 flush 到 BridgeRun.stdout_text 字段
+
+环境变量契约（iter #84 P0 bug 修复后）：
+  父进程（app/api/bridge.py::_spawn_engine_subprocess）通过 Popen 的 env 参数
+  显式传以下关键 env；本脚本继承自 subprocess 进程 os.environ：
+    - NOVEL_OUTLINE_MODE : outline 模式（由父进程强制覆盖）
+    - NOVEL_AI_DIR       : 项目 novel_ai_dir（决定 orchestrator 输出路径，
+                           缺失则写到默认 backend/data/engine/output/，
+                           导致 bridge.reports 读不到最新 checkpoint）
+    - NOVEL_ENGINE_MOCK  : "1" 强制 LLMRouter 走 mock（缺失会让 router
+                           真去调 API 报 "MINIMAX_API_KEY 未设置"）
+  不要在 main() 里清空或覆盖父进程传过来的这些 key —— 本脚本只负责把
+  outline_mode 强制刷一遍，确保父进程的值不会被 stale cache 干扰。
 """
 from __future__ import annotations
 

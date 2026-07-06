@@ -30,6 +30,27 @@ _CHECKPOINTS_PATH = str(DATA_DIR / "checkpoints.sqlite")
 # 优先用 NOVEL_AI_DIR 环境变量（与 binding.novel_ai_dir 一致），fallback backend 路径
 import os as _os_const
 _NOVEL_AI_DIR_CONST = _os_const.environ.get("NOVEL_AI_DIR")
+
+
+def _engine_output_dir() -> Path:
+    """P0 修复（iter #85）：返回 env-aware output 目录。
+    NOVEL_AI_DIR 优先 → 写到 binding.novel_ai_dir/output/；
+    否则 → 默认 backend/data/engine/output/。
+    之前 graph.py:364/523 / _ensure_data_dirs:179 三处硬编码
+    DATA_DIR/engine/output，导致 binding 不指向 backend 的项目
+    engine 数据落到错误位置，bridge.reports 读不到。
+
+    关键：每次调用都重新读 os.environ（而不是用 import-time 缓存的
+    _NOVEL_AI_DIR_CONST）—— subprocess 由父进程 Popen 注入 env，
+    engine 模块在 import 时已经"看见"了正确的 env，但如果测试在
+    import 之后改 env，缓存就过时。runtime 重读保证行为可观察。
+    """
+    val = _os_const.environ.get("NOVEL_AI_DIR")
+    if val:
+        return Path(val) / "output"
+    return DATA_DIR / "engine" / "output"
+
+
 if _NOVEL_AI_DIR_CONST:
     _STATE_PATH = str(Path(_NOVEL_AI_DIR_CONST) / "output" / "orchestrator_state.json")
 else:
@@ -176,8 +197,9 @@ class SSECapture(io.StringIO):
 # ══════════════════════════════════════════
 def _ensure_data_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    (DATA_DIR / "engine" / "output").mkdir(parents=True, exist_ok=True)
-    (DATA_DIR / "engine" / "output" / "chapters").mkdir(parents=True, exist_ok=True)
+    out = _engine_output_dir()
+    (out).mkdir(parents=True, exist_ok=True)
+    (out / "chapters").mkdir(parents=True, exist_ok=True)
     (DATA_DIR / "engine" / "config").mkdir(parents=True, exist_ok=True)
 
 
@@ -361,7 +383,7 @@ def run_graph_task(
             try:
                 from .agents.planner import run_planner as _run_planner
                 with redirect_stdout(capture):
-                    _run_planner(args, str(DATA_DIR / "engine" / "output"))
+                    _run_planner(args, str(_engine_output_dir()))
                 # 迭代 #71: planner 写完 setting_package.json 后显式 invalidate
                 # orchestrator 的 _setting_cache（兜底 mtime 检测，1s 精度
                 # 风险 + 跨进程调用场景）。如果同进程里之后要 _setting()，
@@ -520,7 +542,7 @@ def run_graph_task(
                 exit_code = 1
         elif command == "show":
             n = int(args[0]) if args else 1
-            txt = DATA_DIR / "engine" / "output" / "chapters" / f"ch_{n:04d}.txt"
+            txt = _engine_output_dir() / "chapters" / f"ch_{n:04d}.txt"
             with redirect_stdout(capture):
                 if txt.exists():
                     capture.write(txt.read_text(encoding="utf-8") + "\n")

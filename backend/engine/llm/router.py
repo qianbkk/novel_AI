@@ -665,13 +665,80 @@ def _truncate_at_sentence_boundary(text: str, max_chars: int) -> str:
 
 _MOCK_RESPONSES: dict[str, str] = {
     "planner": json.dumps({
-        "title": "（Mock）未命名设定",
-        "world_view": "（Mock）世界观简述：这是一个由 Mock LLM 生成的测试项目，仅用于验证引擎机制，不产出真实内容。",
-        "story_core": "（Mock）故事核心：主角在测试场景中跑通 schema 校验、字数 budget、orchestrator 编排等所有管线。",
+        # ─── Phase 2 修复（iter #85）：mock_payload 必须满足
+        # backend/schema/setting_package.schema.json 的 7 个 required 字段，
+        # 否则 schema_validator fail-fast 阻止 orchestrator 继续。
+        # 之前 mock 只有 5 个 legacy 字段（title/world_view/...），缺 7 个
+        # required 字段，mock 模式跑 planner 直接报 SchemaError 退出。──
+        "novel_id": "（Mock 由 router 自动注入）",
         "platform": "fanqie",
         "genre": "都市",
-        "setting_concept": "（Mock）长篇网文测试场景",
-        "title_candidates": ["测试标题A", "测试标题B"],
+        "budget_limit_usd": 500.0,
+        "title_candidates": ["（Mock）测试标题A", "（Mock）测试标题B", "（Mock）测试标题C"],
+        "tagline": "（Mock）一句话简介：测试 schema 校验、字数 budget、orchestrator 编排的端到端链路。",
+        "protagonist": {
+            "name": "（Mock）主角",
+            "age": 25,
+            "background": "（Mock）主角背景：测试场景中的验证角色",
+            "personality": "（Mock）克制、谨慎、善于复盘",
+            "speech_quirks": ["（Mock）口癖：先看再说"],
+            "awakening_trigger": "（Mock）觉醒触发：进入测试 pipeline",
+            "initial_power_level": "（Mock）一品",
+        },
+        "world_setting": {
+            "hidden_world_name": "（Mock）九霄",
+            "hidden_world_history": "（Mock）一段至少 50 字符的隐秘世界历史。设定于 1984 年灵气潮汐初现，全球能源结构重塑，修士家族转型为隐性财阀，奠定了网文世界的基础格局。",
+            "surface_world_name": "（Mock）云州",
+            "unique_elements": ["（Mock）灵网与电路耦合", "（Mock）债感能力", "（Mock）九品修炼体系"],
+        },
+        "power_system": {
+            "name": "（Mock）债感修炼体系",
+            "currency": "（Mock）人情点",
+            "description": "（Mock）通过感知、回应、积累他人对你的债来修炼。",
+            "levels": [
+                {"level": 1, "name": "（Mock）感债者", "point_threshold": 0,    "ability": "（Mock）模糊感知周围人的债"},
+                {"level": 2, "name": "（Mock）识债者", "point_threshold": 500,  "ability": "（Mock）精确识别债务人/债权人"},
+                {"level": 3, "name": "（Mock）操债者", "point_threshold": 2000, "ability": "（Mock）主动结债/解债"},
+            ],
+        },
+        "key_characters": [
+            {"name": "（Mock）主角",  "role": "主角",     "speech_quirks": ["（Mock）口癖"], "background": "（Mock）测试用"},
+            {"name": "（Mock）配角A", "role": "重要配角", "speech_quirks": ["（Mock）口癖"], "background": "（Mock）测试用"},
+            {"name": "（Mock）反派B", "role": "反派",     "speech_quirks": ["（Mock）口癖"], "background": "（Mock）测试用"},
+        ],
+        "arc_outline": [
+            {
+                "arc_id": 1, "arc_name": "（Mock）第 1 弧",
+                "arc_goal": "（Mock）弧目标：跑通 orchestrator 7 节点",
+                "estimated_chapters": 10,
+                "arc_climax_description": "（Mock）弧高潮：测试章节峰值",
+                "arc_climax_chapter_offset": 7,
+                "emotion_curve": "低开→持续上升→高潮→收尾",
+                "new_characters_introduced": ["（Mock）配角A", "（Mock）反派B"],
+                "arc_ending_state": "（Mock）弧结束状态",
+                "is_final_arc": False,
+            },
+            {
+                "arc_id": 2, "arc_name": "（Mock）第 2 弧",
+                "arc_goal": "（Mock）弧目标：跑通第二弧",
+                "estimated_chapters": 10,
+                "arc_climax_description": "（Mock）弧高潮",
+                "arc_climax_chapter_offset": 7,
+                "emotion_curve": "低开→持续上升→高潮→收尾",
+                "new_characters_introduced": [],
+                "arc_ending_state": "（Mock）",
+                "is_final_arc": True,
+            },
+        ],
+        "foreshadowing_seeds": [
+            {"content": "（Mock）伏笔种子 1：埋下去等后续章节回收", "target_arc": 2, "linked_character": "（Mock）主角",  "importance": "high"},
+            {"content": "（Mock）伏笔种子 2：早期埋下的钩子",                "target_arc": 2, "linked_character": "（Mock）配角A", "importance": "medium"},
+        ],
+        "golden_chapter_hooks": {
+            "chapter_1_opening":      "（Mock）第 1 章开篇方向：测试场景",
+            "chapter_1_shuang_point": "（Mock）第 1 章爽点：第一次打脸",
+            "chapter_3_cliffhanger":  "（Mock）第 3 章结尾钩子",
+        },
     }, ensure_ascii=False),
 
     "outline": json.dumps({
