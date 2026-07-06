@@ -76,10 +76,11 @@ echo   %GREEN%2)%RESET% start frontend    (vite    :5293)
 echo   %GREEN%3)%RESET% stop backend
 echo   %GREEN%4)%RESET% stop frontend
 echo   %GREEN%5)%RESET% tail logs
+echo   %GREEN%6)%RESET% backup SQLite     (snapshot data/*.db)
 echo   %GREEN%0)%RESET% back to top menu
 echo   %GREEN%9)%RESET% exit
 echo.
-set /p "CHOICE=  Your choice [0-5, 9]: "
+set /p "CHOICE=  Your choice [0-6, 9]: "
 goto :eof
 
 REM ---------- PID lookup by LISTENING port ----------
@@ -429,6 +430,23 @@ goto :eof
 
 REM ==================== LOGS ====================
 
+REM ---------- SQLite snapshot of backend/data/*.db (P1: data-loss mitigation) ----------
+REM Reuses backend/app/backup_db.py — same code path as FastAPI startup, so we
+REM don't drift. NOVEL_AI_SKIP_BACKUP=0 forces it ON even if user set it in env.
+REM We call a small launcher script (scripts/backup_cli.py) because cmd can't
+REM reliably pipe multi-line f-strings through python -c.
+:do_backup
+echo %CYAN%[backup]%RESET% taking snapshots of backend/data/*.db
+cd /d "%BACKEND_DIR%"
+set NOVEL_AI_SKIP_BACKUP=0
+python -m scripts.backup_cli
+if errorlevel 1 (
+    echo %YELLOW%[backup]%RESET% no snapshots written (check warnings above)
+) else (
+    echo %GREEN%[backup done]%RESET%
+)
+goto :eof
+
 :tail_logs
 echo %CYAN%[live log - Ctrl+C to stop]%RESET%
 echo %GRAY%------------------------------------------------------------%RESET%
@@ -460,6 +478,7 @@ if not "%~1"=="" (
     if /I "%~1"=="stop-all"        call :stop_all       & goto :exit_script
     if /I "%~1"=="status"          call :print_banner   & call :print_status   & goto :exit_script
     if /I "%~1"=="restart-all"     call :stop_all & ping -n 3 127.0.0.1 ^>nul & call :start_backend & call :start_frontend & goto :exit_script
+    if /I "%~1"=="backup"          call :do_backup        & goto :exit_script
     if /I "%~1"=="help"            goto :print_help
     echo %RED%[error]%RESET% unknown CLI arg: %~1
     goto :print_help
@@ -481,6 +500,7 @@ echo   dev.bat stop-frontend         kill 5293 listener
 echo   dev.bat stop-all              kill both
 echo   dev.bat restart-all           stop then start both
 echo   dev.bat status                print port / pid / /health
+echo   dev.bat backup                snapshot both SQLite DBs
 echo   dev.bat help                  show this
 goto :exit_script
 
@@ -536,6 +556,7 @@ if "%CHOICE%"=="2" call :start_frontend
 if "%CHOICE%"=="3" call :stop_backend
 if "%CHOICE%"=="4" call :stop_frontend
 if "%CHOICE%"=="5" call :tail_logs
+if "%CHOICE%"=="6" call :do_backup
 if "%CHOICE%"=="0" goto :top_menu
 if "%CHOICE%"=="9" goto :exit_script
 

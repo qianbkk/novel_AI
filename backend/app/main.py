@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .database import Base, SessionLocal, engine
 from .api import bridge, chapters, projects, providers, role_assignments, worldbuild, rules, foreshadowings, ai_assist, world
 from .api.role_assignments import seed_role_assignments
+from .backup_db import take_all_snapshots
 from .logging_setup import configure_root, get_logger
 from .middleware.rate_limit import RateLimitMiddleware
 
@@ -93,13 +94,14 @@ def _recover_orphan_bridge_runs() -> int:
 async def lifespan(app: FastAPI):
     """FastAPI lifespan handler（替代已 deprecated 的 startup/shutdown 装饰器）。
 
-    启动时同时做四件事：
+    启动时同时做五件事：
       0. _check_master_key_in_production — 生产模式强制 MASTER_KEY 已设
       1. run_migrations — 给已存在的表加新列（schema 演进）
       2. seed_role_assignments — 初始化 15 个写作角色
       3. _recover_orphan_bridge_runs — 清理上一轮崩溃遗留的孤儿 running 行
+      4. take_all_snapshots — SQLite 在线备份，最高风险的真实缓解（P1）
     """
-    log.info("startup: master_key_check + migrations + seed_role_assignments + recover_orphan_bridge_runs begin")
+    log.info("startup: master_key_check + migrations + seed_role_assignments + recover_orphan_bridge_runs + backup begin")
     _check_master_key_in_production()  # 生产模式 fail-fast（在 run_migrations 前）
     applied = run_migrations()
     db = SessionLocal()
@@ -108,9 +110,14 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
     recovered = _recover_orphan_bridge_runs()
+    # SQLite 在线备份：必须在种子/迁移完成后做（避免拿到迁移前的快照）。
+    # 故意不 fail-fast：备份写不动也不应阻塞启动，用户可稍后手动 dev.bat backup。
+    backups = take_all_snapshots()
     log.info(
-        "startup: done. routes=%d migrations_applied=%d recovered_orphan_bridge_runs=%d",
+        "startup: done. routes=%d migrations_applied=%d recovered_orphan_bridge_runs=%d "
+        "backup novel_assistant=%s checkpoints=%s",
         len(app.routes), applied, recovered,
+        backups.get("novel_assistant"), backups.get("checkpoints"),
     )
     yield
     log.info("shutdown: complete")
