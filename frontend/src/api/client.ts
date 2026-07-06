@@ -58,7 +58,12 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  listProjects: () => request<Project[]>("/projects"),
+  listProjects: (params?: { q?: string; genre?: string }) => {
+    const search = params ? new URLSearchParams(
+      Object.entries(params).filter(([_, v]) => v != null && v !== "") as [string, string][]
+    ).toString() : "";
+    return request<Project[]>(`/projects${search ? `?${search}` : ""}`);
+  },
 
   getProject: (id: string) => request<Project>(`/projects/${id}`),
 

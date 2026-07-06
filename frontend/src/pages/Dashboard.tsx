@@ -1,8 +1,22 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { ChapterListItem, Project } from "../types";
 import { useReveal } from "../hooks/useReveal";
+
+function chipStyle(active: boolean): React.CSSProperties {
+  return {
+    padding: "5px 12px",
+    borderRadius: 999,
+    border: "1px solid " + (active ? "var(--color-accent-strong)" : "var(--color-border-2)"),
+    background: active ? "var(--color-accent-soft)" : "var(--color-bg-1)",
+    color: active ? "var(--color-accent-strong)" : "var(--color-fg-3)",
+    cursor: "pointer",
+    fontSize: 13,
+    fontWeight: active ? 600 : 400,
+    transition: "all 0.15s",
+  };
+}
 
 function statusBadge(status: Project["status"]) {
   if (status === "ready") return <span className="badge-stamp">已就绪</span>;
@@ -153,6 +167,9 @@ export default function Dashboard() {
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [chapterMap, setChapterMap] = useState<Record<string, ChapterListItem[]>>({});
   const [error, setError] = useState<string | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const [q, setQ] = useState(searchParams.get("q") || "");
+  const [genre, setGenre] = useState(searchParams.get("genre") || "");
   const navigate = useNavigate();
   const rootRef = useRef<HTMLDivElement | null>(null);
   useReveal(rootRef);
@@ -160,7 +177,7 @@ export default function Dashboard() {
   async function loadAll() {
     setError(null);
     try {
-      const ps = await api.listProjects();
+      const ps = await api.listProjects({ q, genre });
       setProjects(ps);
       const entries = await Promise.all(
         ps.map(async (p) => {
@@ -178,9 +195,18 @@ export default function Dashboard() {
     }
   }
 
+  // debounce 300ms：当 q/genre 变化时同步到 URL 并重新拉取
   useEffect(() => {
-    loadAll();
-  }, []);
+    const t = setTimeout(() => {
+      const next = new URLSearchParams();
+      if (q) next.set("q", q);
+      if (genre) next.set("genre", genre);
+      setSearchParams(next, { replace: true });
+      loadAll();
+    }, 300);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [q, genre]);
 
   const totalWords = useMemo(
     () => Object.values(chapterMap).flat().reduce((a, c) => a + c.word_count, 0),
@@ -223,9 +249,66 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* 搜索 + 筛选区 */}
+      <div className="dashboard-toolbar" style={{ display: "flex", gap: 12, alignItems: "center", margin: "16px 0" }}>
+        <input
+          type="text"
+          placeholder="搜索项目名 / 主角名…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          className="dashboard-search-input"
+          style={{
+            flex: 1, padding: "8px 14px", borderRadius: 8,
+            border: "1px solid var(--color-border-2)",
+            background: "var(--color-bg-1)", color: "var(--color-fg-1)",
+            fontSize: 14,
+          }}
+        />
+        <div className="dashboard-genre-chips" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <button
+            className={`genre-chip ${!genre ? "active" : ""}`}
+            onClick={() => setGenre("")}
+            style={chipStyle(!genre)}
+          >
+            全部
+          </button>
+          {Array.from(new Set((projects || []).map((p) => p.genre).filter(Boolean))).map((g) => (
+            <button
+              key={g}
+              className={`genre-chip ${genre === g ? "active" : ""}`}
+              onClick={() => setGenre(g)}
+              style={chipStyle(genre === g)}
+            >
+              {g}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {projects && projects.length > 0 && <ModuleCompass projects={projects} chapterMap={chapterMap} />}
 
-      {projects && projects.length === 0 && (
+      {projects && projects.length === 0 && (q || genre) && (
+        <div className="card">
+          <div className="empty-state">
+            <div className="empty-state__title">没找到匹配的项目</div>
+            <div className="empty-state__hint">
+              {q && <>搜索 "{q}" </>}
+              {genre && <>· 类型 "{genre}" </>}
+              没有结果
+            </div>
+            <div className="empty-state__action">
+              <button
+                className="btn"
+                onClick={() => { setQ(""); setGenre(""); }}
+              >
+                清除筛选
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {projects && projects.length === 0 && !q && !genre && (
         <div className="card">
           <div className="empty-state">
             <div className="empty-state__icon" aria-hidden="true">
