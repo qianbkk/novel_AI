@@ -112,13 +112,15 @@ goto :eof
 
 REM ---------- status panel ----------
 :print_status
+set "BE_PROBE_OK=0"
+set "FE_PROBE_OK=0"
 echo.
 echo %CYAN%[Snapshot]%RESET%
 echo %GRAY%------------------------------------------------------------%RESET%
 
 REM Backend snapshot — three states:
 REM   running : PID file exists AND our recorded PID is still on the port.
-REM   unknown : port is bound but NOT by our recorded PID (foreign process).
+REM   foreign : port is bound but NOT by our recorded PID (foreign process).
 REM   stopped : nothing on the port (PID file cleared if stale).
 call :find_pids_by_port %BACKEND_PORT%
 set "BE_PORT_PIDS=!RESULT_PIDS!"
@@ -138,7 +140,7 @@ if "!BE_UP!"=="1" (
     REM Either no PID file or our PID is gone — clean up stale file if any.
     if exist "%LOG_DIR%\backend.pid" del "%LOG_DIR%\backend.pid" >nul 2>&1
     if defined BE_PORT_PIDS (
-        echo   backend  :%BACKEND_PORT%    %YELLOW%unknown%RESET%   PIDs: !BE_PORT_PIDS!  not started by dev.bat
+        echo   backend  :%BACKEND_PORT%    %YELLOW%foreign%RESET%   PIDs: !BE_PORT_PIDS!  not started by dev.bat
     ) else (
         echo   backend  :%BACKEND_PORT%    %GRAY%stopped%RESET%
     )
@@ -162,7 +164,7 @@ if "!FE_UP!"=="1" (
 ) else (
     if exist "%LOG_DIR%\frontend.pid" del "%LOG_DIR%\frontend.pid" >nul 2>&1
     if defined FE_PORT_PIDS (
-        echo   frontend :%FRONTEND_PORT%    %YELLOW%unknown%RESET%   PIDs: !FE_PORT_PIDS!  not started by dev.bat
+        echo   frontend :%FRONTEND_PORT%    %YELLOW%foreign%RESET%   PIDs: !FE_PORT_PIDS!  not started by dev.bat
     ) else (
         echo   frontend :%FRONTEND_PORT%    %GRAY%stopped%RESET%
     )
@@ -170,54 +172,95 @@ if "!FE_UP!"=="1" (
 )
 echo %GRAY%------------------------------------------------------------%RESET%
 
-REM HTTP /health check (only when the port is listening; otherwise it is
-REM obviously unreachable and we skip the call to avoid a 3s timeout per row).
+REM HTTP /health check (always probe — even a foreign listener deserves verification,
+REM and if the port is dead the probe returns "down" instead of misleading "skipped").
 echo %CYAN%[HTTP probe]%RESET%
-if "%BE_UP%"=="1" goto :_probe_be
-echo   backend /health    %GRAY%skipped (not listening)%RESET%
-goto :_probe_be_end
-:_probe_be
 call :http_probe "backend /health    " "http://%BACKEND_HOST%:%BACKEND_PORT%/health" tri
-:_probe_be_end
-
-if "%FE_UP%"=="1" goto :_probe_fe
-echo   frontend /         %GRAY%skipped (not listening)%RESET%
-goto :_probe_fe_end
-:_probe_fe
+set "BE_PROBE_OK=!PROBE_OK!"
 call :http_probe "frontend /         " "http://%FRONTEND_HOST%:%FRONTEND_PORT%/" bin
-:_probe_fe_end
+set "FE_PROBE_OK=!PROBE_OK!"
 echo %GRAY%------------------------------------------------------------%RESET%
 echo.
 call :_hint
 goto :eof
 
 REM ---------- HTTP probe (tri: backend /health 3-state; bin: frontend / binary) ----------
+REM Sets PROBE_OK=1 if HTTP <400, PROBE_OK=0 otherwise. We use curl.exe because
+REM it sets ERRORLEVEL based on HTTP status, letting us reliably read the result
+REM back into the parent batch (PowerShell $global: in a child process does NOT
+REM propagate back to cmd).
 :http_probe
 set "LABEL=%~1"
 set "URL=%~2"
 set "MODE=%~3"
-if /I "%MODE%"=="tri" (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r=Invoke-WebRequest -Uri '%URL%' -UseBasicParsing -TimeoutSec 3; if ($r.StatusCode -lt 400) { Write-Host ('  %LABEL% %GREEN%ok%RESET%      status=' + $r.StatusCode) } else { Write-Host ('  %LABEL% %YELLOW%http' + $r.StatusCode + '%RESET%') } } catch { Write-Host ('  %LABEL% %RED%fail%RESET%   ' + $_.Exception.Message) }" 2>&1
+set "PROBE_OK=0"
+set "PROBE_CODE="
+if /I "%MODE%"=="tri" goto :_probe_tri
+REM --- bin mode (frontend) ---
+REM Run curl separately so we can read its real exit code (not the for's).
+curl.exe -s -o NUL -w "%%{http_code}" --max-time 3 "%URL%" 1>"%TEMP%\_probe_code.txt" 2>nul
+set "CURL_ERR=!errorlevel!"
+set /p "PROBE_CODE=" < "%TEMP%\_probe_code.txt" 2>nul
+del "%TEMP%\_probe_code.txt" 2>nul
+if !CURL_ERR! NEQ 0 (
+    echo   %LABEL%%YELLOW%n/a%RESET%     connection refused or timeout
+    goto :eof
+)
+if "!PROBE_CODE!"=="" (
+    echo   %LABEL%%YELLOW%n/a%RESET%     no response
+    goto :eof
+)
+set "PROBE_OK=1"
+echo   %LABEL%%GREEN%ok%RESET%      status=!PROBE_CODE!
+goto :eof
+:_probe_tri
+REM --- tri mode (backend /health) ---
+curl.exe -s -o NUL -w "%%{http_code}" --max-time 3 "%URL%" 1>"%TEMP%\_probe_code.txt" 2>nul
+set "CURL_ERR=!errorlevel!"
+set /p "PROBE_CODE=" < "%TEMP%\_probe_code.txt" 2>nul
+del "%TEMP%\_probe_code.txt" 2>nul
+if !CURL_ERR! NEQ 0 (
+    echo   %LABEL%%RED%down%RESET%     connection refused or timeout
+    goto :eof
+)
+if "!PROBE_CODE!"=="" (
+    echo   %LABEL%%RED%down%RESET%     no response
+    goto :eof
+)
+set /a "HTTP_NUM=!PROBE_CODE!" 2>nul
+if !HTTP_NUM! LSS 400 (
+    set "PROBE_OK=1"
+    echo   %LABEL%%GREEN%ok%RESET%      status=!PROBE_CODE!
 ) else (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r=Invoke-WebRequest -Uri '%URL%' -UseBasicParsing -TimeoutSec 3; Write-Host ('  %LABEL% %GREEN%ok%RESET%      status=' + $r.StatusCode) } catch { Write-Host ('  %LABEL% %YELLOW%n/a%RESET%     ' + $_.Exception.Message) }" 2>&1
+    echo   %LABEL%%YELLOW%http!PROBE_CODE!%RESET%
 )
 goto :eof
 
 REM ---------- smart hint (consumes BE_UP/FE_UP set by :print_status) ----------
 :_hint
-if "%BE_UP%%FE_UP%"=="00" (
-    echo %YELLOW%hint%RESET%  both stopped. Press %GREEN%1%RESET% to start both, or run:  dev.bat start-all
-    goto :eof
-)
-if "%BE_UP%"=="0" (
+REM "Both stopped" only when neither is dev-managed AND no foreign listener exists.
+if NOT "%BE_UP%%FE_UP%"=="00" goto :_hint_check_backend
+if defined BE_PORT_PIDS goto :_hint_check_backend
+if defined FE_PORT_PIDS goto :_hint_check_backend
+echo %YELLOW%hint%RESET%  both stopped. Press %GREEN%1%RESET% to start both, or run:  dev.bat start-all
+goto :eof
+:_hint_check_backend
+if NOT "%BE_UP%"=="0" goto :_hint_check_frontend
+REM Port might still have a foreign listener that responded to /health,
+REM in which case BE_PROBE_OK=1 and "backend is down" would be a lie.
+if "%BE_PROBE_OK%"=="1" goto :_hint_check_frontend
+if defined BE_PORT_PIDS (
+    echo %YELLOW%hint%RESET%  backend port :%BACKEND_PORT% has a foreign process (PIDs: !BE_PORT_PIDS!) but /health is NOT responding.
+    echo          dev.bat cannot manage that process. Find and kill it, or change BACKEND_PORT in dev.bat.
+) else (
     echo %YELLOW%hint%RESET%  backend is down but frontend is up. The web UI will not be able to reach the API.
     echo          press %GREEN%x%RESET% then %GREEN%1%RESET% to start backend, or run:  dev.bat start-backend
-    goto :eof
 )
-if "%FE_UP%"=="0" (
-    echo %YELLOW%hint%RESET%  backend is up but frontend is down. You can hit the API directly at http://%BACKEND_HOST%:%BACKEND_PORT%/docs
-    echo          press %GREEN%x%RESET% then %GREEN%2%RESET% to start frontend, or run:  dev.bat start-frontend
-)
+goto :eof
+:_hint_check_frontend
+if NOT "%FE_UP%"=="0" goto :eof
+echo %YELLOW%hint%RESET%  backend is up but frontend is down. You can hit the API directly at http://%BACKEND_HOST%:%BACKEND_PORT%/docs
+echo          press %GREEN%x%RESET% then %GREEN%2%RESET% to start frontend, or run:  dev.bat start-frontend
 goto :eof
 
 REM ==================== START ====================
