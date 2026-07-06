@@ -418,7 +418,18 @@ export default function WorldBuild() {
                             <span className="legislation-card__title">{c.name}</span>
                             <span className="legislation-card__kicker">货币</span>
                           </div>
-                          <span className="legislation-card__desc">{detail || String(dj as any) || "—"}</span>
+                          <span className="legislation-card__desc">{(() => {
+                            if (typeof detail === "string" && detail) return detail;
+                            const psName = typeof dj.power_system_name === "string" ? dj.power_system_name : "";
+                            if (psName) return `来源：${psName}`;
+                            const src = typeof dj.source === "string" ? dj.source : "";
+                            if (src) return `来源：${src}`;
+                            try {
+                              return JSON.stringify(dj) || "—";
+                            } catch {
+                              return "—";
+                            }
+                          })()}</span>
                           {hasRich && (
                             <div className="legislation-card__chips" style={{ marginTop: 8 }}>
                               {exchange && (
@@ -462,7 +473,17 @@ export default function WorldBuild() {
                           <span className="legislation-card__title">{f.name}</span>
                           <span className="legislation-card__kicker">势力</span>
                         </div>
-                        <span className="legislation-card__desc">{String(f.detail_json?.detail ?? "") || "—"}</span>
+                        <span className="legislation-card__desc">{(() => {
+                              const fDetail = typeof f.detail_json?.detail === "string" ? f.detail_json.detail : "";
+                              if (fDetail) return fDetail;
+                              const fRaw = f.detail_json?.raw;
+                              if (fRaw) return String(fRaw);
+                              try {
+                                return JSON.stringify(f.detail_json || {}) || "—";
+                              } catch {
+                                return "—";
+                              }
+                            })() || "—"}</span>
                       </div>
                     ))}
                   </div>

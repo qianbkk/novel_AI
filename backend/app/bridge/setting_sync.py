@@ -256,10 +256,21 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
     ps = raw.get("power_system", {}) or {}
     cur = ps.get("currency")
     if cur:
+        # 优先使用 LLM 直出的结构化 currency_detail，否则回退到旧 shape
+        # 但旧 shape 也补充 detail 字符串字段，保证前端始终有 desc 渲染。
+        cur_detail = ps.get("currency_detail") if isinstance(ps.get("currency_detail"), dict) else None
+        detail_json = cur_detail or {
+            "detail": f"货币：{cur}，所属力量体系：{ps.get('name', '')}",
+            "exchange_rate": ps.get("currency_exchange_rate"),
+            "issuers": ps.get("currency_issuers") if isinstance(ps.get("currency_issuers"), list) else [],
+            "scope": ps.get("currency_scope"),
+            "source": "power_system.currency",
+            "power_system_name": ps.get("name"),
+        }
         db.add(Currency(
             project_id=project_id,
             name=cur,
-            detail_json={"source": "power_system.currency", "power_system_name": ps.get("name")},
+            detail_json=detail_json,
         ))
         imported_currency = True
 
