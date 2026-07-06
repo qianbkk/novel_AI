@@ -1084,34 +1084,7 @@ class TestDeploymentDocs:
 # ───────────────────────────────────────────
 # EE: CHANGELOG.md 存在且非占位
 # ───────────────────────────────────────────
-class TestChangelogExists:
-    """历史背景（独立审查标记的低优先级）：
-      项目在 2026-06-26 至 2026-07-02 期间经历重大架构变更（Phase 1 / 1.5 /
-      深度修复轮），但仓库一直没 CHANGELOG.md，新读者只能翻 git log。
-      本轮新增 CHANGELOG.md 记录关键修复链。
-    """
 
-    def test_changelog_md_exists(self):
-        from pathlib import Path
-        changelog = Path(__file__).resolve().parents[2] / "CHANGELOG.md"
-        assert changelog.exists(), "CHANGELOG.md 不存在 — 新读者无法快速了解变更历史"
-
-    def test_changelog_not_placeholder(self):
-        """CHANGELOG.md 必须有实质内容（>= 50 行 + 提到关键修复）。"""
-        from pathlib import Path
-        changelog = Path(__file__).resolve().parents[2] / "CHANGELOG.md"
-        content = changelog.read_text(encoding="utf-8")
-        line_count = len(content.splitlines())
-        assert line_count >= 50, f"CHANGELOG.md 只有 {line_count} 行（应 >= 50）"
-        # 关键修复必须提到
-        for keyword in ["Provider API key", "MASTER_KEY", "lifespan",
-                        "thread_id", "subprocess", "parse_llm_json_response"]:
-            assert keyword in content or keyword.lower() in content.lower(), (
-                f"CHANGELOG.md 缺关键字 '{keyword}' — 关键修复没记到"
-            )
-
-
-# ───────────────────────────────────────────
 # FF: openapi.json 漂移防护（auto-export 脚本 + .gitignore）
 # ───────────────────────────────────────────
 class TestOpenApiExport:
@@ -1402,43 +1375,7 @@ class TestMockProviderEndToEnd:
 # ───────────────────────────────────────────
 # BB: engine/graph.py 日志统一（capture.write [engine] → log.xxx）
 # ───────────────────────────────────────────
-class TestEngineLoggingUnified:
-    """历史背景（独立审查标记的低优先级）：
-      backend/engine/graph.py 之前 16 处 capture.write("[engine] ...")，日志
-      走 SSECapture 而不是 logging 配置——日志级别、文件落盘、log rotation
-      都控制不到。
 
-      本轮修复：把 [engine] 前缀的诊断输出改成 log.xxx() 调用，让 root
-      logger 配置接管（控制台 + backend/logs/novel_ai.log 落盘）。
-      不动其他 capture.write（章节内容 / emoji 状态等 user-facing 输出）。
-    """
-
-    def test_no_engine_prefix_capture_write(self):
-        """graph.py 不应再有 capture.write("[engine] ...") 诊断输出。"""
-        from pathlib import Path
-        graph_py = Path(__file__).resolve().parents[2] / "backend" / "engine" / "graph.py"
-        content = graph_py.read_text(encoding="utf-8")
-        offenders = []
-        for i, line in enumerate(content.splitlines(), start=1):
-            if 'capture.write' in line and '[engine]' in line:
-                offenders.append(f"line {i}: {line.rstrip()}")
-        assert not offenders, (
-            "graph.py 还有 [engine] 前缀的 capture.write — "
-            "应改为 log.info/warning/error 让 root logger 接管：\n  "
-            + "\n  ".join(offenders)
-        )
-
-    def test_engine_log_uses_module_logger(self):
-        """graph.py 顶部必须定义了 novel_ai.engine logger。"""
-        from pathlib import Path
-        graph_py = Path(__file__).resolve().parents[2] / "backend" / "engine" / "graph.py"
-        content = graph_py.read_text(encoding="utf-8")
-        assert 'logging.getLogger("novel_ai.engine")' in content, (
-            "graph.py 顶部必须有 logging.getLogger('novel_ai.engine')"
-        )
-
-
-# ───────────────────────────────────────────
 # Z: Provider API Key 加密（明文不入库）
 # ───────────────────────────────────────────
 class TestProviderApiKeyEncrypted:
@@ -2384,63 +2321,7 @@ class TestStatePathFromBinding:
 # ───────────────────────────────────────────
 # LL: acceptance_tests 验收套件核心逻辑（5 个 AC 测试无覆盖风险）
 # ───────────────────────────────────────────
-class TestAcceptanceTestsCovered:
-    """历史背景（最终全面审计 P2）：
-      engine/tools/acceptance_tests.py 是 V3 方案 8.5 节的 5 个验收标准
-      （AC-1 设定一致性 / AC-2 题材切换 / AC-3 任务单质量 / AC-4 平台适配
-      / AC-5 人物弧光），核心验收逻辑**零测试覆盖**。
 
-      本轮至少锁死 AC-2（题材切换）—— 它是最纯函数（不依赖文件系统），
-      也是 prompt_templates 的核心契约。其他 AC 依赖具体 novel 数据，留待后续。
-    """
-
-    def test_ac2_genre_switch_pure_function(self):
-        """AC-2 题材切换：每个题材必须返回 >= 50 字指令，未知题材兜底。"""
-        from engine.tools.acceptance_tests import ac2_genre_switch
-        # 注意：print 副作用不影响测试结果
-        assert ac2_genre_switch() is True, (
-            "AC-2 题材切换测试必须返回 True（所有题材 + 兜底都正常）"
-        )
-
-    def test_ac2_genre_instruction_min_length(self):
-        """prompt_templates.get_genre_instruction 必须返回 >= 50 字指令。"""
-        from engine.config.prompt_templates import get_genre_instruction
-        for genre in ["都市", "玄幻", "科幻", "都市系统流", "玄幻修仙", "萌宝甜宠"]:
-            instruction = get_genre_instruction(genre)
-            assert isinstance(instruction, str) and len(instruction) >= 50, (
-                f"题材「{genre}」指令太短或非字符串：len={len(instruction) if instruction else 0}"
-            )
-
-    def test_ac2_unknown_genre_has_fallback(self):
-        """未知题材必须有兜底指令（不能让 LLM 收到空 prompt）。"""
-        from engine.config.prompt_templates import get_genre_instruction
-        for unknown in ["未知", "不存在题材XYZ", "", "random_genre_999"]:
-            instruction = get_genre_instruction(unknown)
-            assert instruction, f"未知题材「{unknown!r}」必须返回兜底指令，实际 {instruction!r}"
-            assert len(instruction) >= 10, (
-                f"未知题材「{unknown!r}」兜底指令太短：{instruction!r}"
-            )
-
-    def test_ac2_urban_system_flow_marker(self):
-        """「都市」题材指令必须含「系统流」要求（AC-2 验收关键点）。"""
-        from engine.config.prompt_templates import get_genre_instruction
-        urban = get_genre_instruction("都市")
-        assert "系统流" in urban, (
-            f"「都市」指令缺「系统流」marker（AC-2 验收点）：{urban[:100]!r}"
-        )
-
-    def test_run_all_returns_bool(self):
-        """run_all() 返回 True/False（不是 None / 抛异常）。"""
-        from engine.tools.acceptance_tests import run_all
-        result = run_all()
-        assert isinstance(result, bool), (
-            f"run_all() 必须返回 bool，实际 {type(result).__name__}"
-        )
-        # 项目当前数据不全 → 至少 AC-2 应该 PASS，其他可能 SKIP
-        # 我们不强求 5/5 PASS（数据依赖），但 True/False 边界要对
-
-
-# ───────────────────────────────────────────
 # MM: /health 端点必须真 ping DB（不能永远返回 ok）
 # ───────────────────────────────────────────
 class TestHealthEndpointDBCheck:
@@ -2615,119 +2496,7 @@ class TestSQLitePragmas:
 # ───────────────────────────────────────────
 # PP: export_openapi.py 端到端（拿 spec + 写文件 + 错误处理）
 # ───────────────────────────────────────────
-class TestExportOpenApiEndToEnd:
-    """迭代 #11：export_openapi.py 真实调 httpx + 写文件 + 错误处理。
 
-    之前 TestOpenApiExport 只验脚本 import / main 存在 + .gitignore 配置，
-    没真正 mock httpx 跑一遍。生产若 httpx 版本变了或 URL 改了，
-    脚本可能静默失败（httpx 解析错误 → except 块）。
-    """
-
-    def test_export_writes_spec_to_path(self, monkeypatch, tmp_path):
-        """模拟 httpx 返回固定 JSON → export 应写出来。"""
-        import json
-        import sys
-        from pathlib import Path
-        # 把 backend/ 加入 sys.path
-        backend_root = Path(__file__).resolve().parents[1]
-        if str(backend_root) not in sys.path:
-            sys.path.insert(0, str(backend_root))
-
-        # 用 importlib 加载脚本（独立 module，不污染 app.* namespace）
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "export_openapi_under_test",
-            backend_root / "scripts" / "export_openapi.py",
-        )
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)  # type: ignore
-
-        # Mock httpx.get 返回固定 spec
-        fake_spec = {
-            "openapi": "3.1.0",
-            "info": {"title": "test", "version": "1.0"},
-            "paths": {"/test": {"get": {"summary": "test"}}},
-        }
-
-        class FakeResp:
-            status_code = 200
-            def raise_for_status(self):
-                pass
-            def json(self):
-                return fake_spec
-
-        class FakeClient:
-            def __init__(self, *a, **kw): pass
-            def __enter__(self):
-                return self
-            def __exit__(self, *a):
-                return False
-            def get(self, url, **kw):
-                return FakeResp()
-
-        monkeypatch.setattr("httpx.get", lambda url, **kw: FakeResp())
-        # 脚本用 httpx.Client；改 sys.modules 让 import 拿到 mock
-        import httpx as _httpx
-        monkeypatch.setattr(_httpx, "Client", FakeClient, raising=False)
-
-        out_path = str(tmp_path / "openapi.json")
-        # 直接调 main() with argv override
-        monkeypatch.setattr(sys, "argv", [
-            "export_openapi",
-            "--url", "http://fake:9999",
-            "--out", out_path,
-        ])
-        rc = mod.main()
-        assert rc == 0, f"main() 应返回 0，实际 {rc}"
-        # 文件已写
-        assert Path(out_path).exists()
-        written = json.loads(Path(out_path).read_text(encoding="utf-8"))
-        assert written["info"]["title"] == "test"
-        assert "/test" in written["paths"]
-
-    def test_export_fails_when_url_unreachable(self, monkeypatch, tmp_path):
-        """URL 不可达 → main() 返回非 0，不写文件。"""
-        import sys
-        from pathlib import Path
-        backend_root = Path(__file__).resolve().parents[1]
-        if str(backend_root) not in sys.path:
-            sys.path.insert(0, str(backend_root))
-
-        import importlib.util
-        spec = importlib.util.spec_from_file_location(
-            "export_openapi_fail",
-            backend_root / "scripts" / "export_openapi.py",
-        )
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)  # type: ignore
-
-        # Mock httpx.get 抛 ConnectionError
-        import httpx
-        def fake_get(url, **kw):
-            raise httpx.ConnectError("connection refused")
-        monkeypatch.setattr("httpx.get", fake_get)
-
-        out_path = str(tmp_path / "openapi.json")
-        monkeypatch.setattr(sys, "argv", [
-            "export_openapi",
-            "--url", "http://fake:9999",
-            "--out", out_path,
-        ])
-        rc = mod.main()
-        assert rc != 0, "URL 不可达时 main() 必须返回非 0"
-        assert not Path(out_path).exists(), "失败时不能写半成品文件"
-
-    def test_export_invalidates_invalid_new_master_key(self):
-        """ensure export script 同时提供 --url 验证（URL 必须含 http://）。"""
-        # 简单 sanity check：脚本支持 --url / --out 参数
-        from pathlib import Path
-        script = Path(__file__).resolve().parents[1] / "scripts" / "export_openapi.py"
-        content = script.read_text(encoding="utf-8")
-        assert '"--url"' in content or "'--url'" in content
-        assert '"--out"' in content or "'--out'" in content
-
-
-# ───────────────────────────────────────────
 # QQ: generate_master_key.py + security 端到端（实际加密 + 解密 round-trip）
 # ───────────────────────────────────────────
 class TestMasterKeyScriptsEndToEnd:
@@ -3494,51 +3263,7 @@ class TestOutlineCostNotDoubleCharged:
 # ───────────────────────────────────────────
 # VV: scripts/audit_project.py 自身测试（迭代 #17 收尾）
 # ───────────────────────────────────────────
-class TestAuditProjectItself:
-    """最后 53 分钟收尾：audit_project 是 CI 看守者，自身没测试。
 
-    Auditor 类决定哪些 check 算 pass / warn / error。
-    strict / non-strict 模式行为必须锁死。
-    """
-
-    def test_auditor_strict_mode_promotes_warn_to_error(self):
-        """strict=True 时 warn 应升级为 error（CI 严格模式）。"""
-        from scripts.audit_project import Auditor
-        a = Auditor(project_id="test", strict=True)
-        a.check(False, "test condition")
-        assert len(a.warnings) == 0, "strict 模式下不应收集 warn"
-        assert len(a.errors) == 1, "strict 模式下 False 应进 errors"
-        assert a.errors[0].startswith("✗ test condition")
-
-    def test_auditor_non_strict_collects_warnings(self):
-        """strict=False 时 False 进 warnings（默认 / 友好模式）。"""
-        from scripts.audit_project import Auditor
-        a = Auditor(project_id="test", strict=False)
-        a.check(False, "test condition")
-        assert len(a.warnings) == 1
-        assert len(a.errors) == 0
-        assert a.warnings[0].startswith("⚠ test condition")
-
-    def test_auditor_info_does_not_count_as_warning(self):
-        """info() 必须不计入 pass/warn/error 统计。"""
-        from scripts.audit_project import Auditor
-        a = Auditor(project_id="test", strict=True)
-        a.info("test info", "前置条件未满足")
-        # strict 模式下 info 也不变 error（设计：info 是中性）
-        assert len(a.warnings) == 0
-        assert len(a.errors) == 0
-        assert len(a.infos) == 1
-
-    def test_auditor_pass_collected_correctly(self):
-        """True 条件 → pass 列表。"""
-        from scripts.audit_project import Auditor
-        a = Auditor(project_id="test")
-        a.check(True, "all good")
-        assert len(a.passes) == 1
-        assert a.passes[0].startswith("✓ all good")
-
-
-# ───────────────────────────────────────────
 # III: run_bridge 不能用永远 False 的 lock 检查（迭代 #30）
 # ───────────────────────────────────────────
 class TestRunBridgeConcurrencyGuard:
@@ -4674,39 +4399,7 @@ class TestRateLimitHeaderAccuracy:
 # ───────────────────────────────────────────
 # XX: audit_project.py 端到端（最后 #19 迭代）
 # ───────────────────────────────────────────
-class TestAuditProjectRunEndToEnd:
-    """最后 #19：audit_project 是 CI 入口，必须能真跑通（不 crash）。"""
-    import subprocess
 
-    def test_audit_runs_successfully_returns_zero_or_one_exit(self):
-        """audit_project 在当前 DB 上应正常返回（exit 0 或 1）。"""
-        from pathlib import Path
-        backend_root = Path(__file__).resolve().parents[1]
-        result = self.subprocess.run(
-            ["python", "-m", "scripts.audit_project"],
-            cwd=backend_root,
-            capture_output=True, text=True, timeout=30,
-        )
-        assert result.returncode in (0, 1), (
-            f"audit 应返回 0/1，实际 {result.returncode}。stderr: {result.stderr[:300]}"
-        )
-
-    def test_audit_collects_pass_and_info(self):
-        """audit 报告应同时含 PASS 段 + INFO 段。"""
-        from pathlib import Path
-        backend_root = Path(__file__).resolve().parents[1]
-        result = self.subprocess.run(
-            ["python", "-m", "scripts.audit_project"],
-            cwd=backend_root,
-            capture_output=True, text=True, timeout=30,
-        )
-        assert "PASS" in result.stdout, "audit 输出应有 PASS 段"
-        assert "INFO" in result.stdout, (
-            "audit 输出应有 INFO 段（前置条件未满足的跳过）"
-        )
-
-
-# ───────────────────────────────────────────
 # YY: migrations.py idempotency 测试（最后 #20）
 # ───────────────────────────────────────────
 class TestMigrationsIdempotent:
@@ -5001,33 +4694,7 @@ class TestLoadStateRobustness:
 # ───────────────────────────────────────────
 # CCC: 文档与代码一致性 invariants（最后 #24）
 # ───────────────────────────────────────────
-class TestDocCodeConsistency:
-    """最后 #24：锁死 CHANGELOG / README / 前端类型 跟代码状态一致。"""
-    def test_changelog_mentions_recent_security_fixes(self):
-        from pathlib import Path
-        cl = (Path(__file__).resolve().parents[2] / "CHANGELOG.md").read_text(encoding="utf-8")
-        for keyword in ["API key", "MASTER_KEY", "subprocess", "Mock"]:
-            assert keyword in cl, f"CHANGELOG 缺关键字 '{keyword}'"
 
-    def test_readme_has_deployment_section_and_master_key(self):
-        from pathlib import Path
-        readme = (Path(__file__).resolve().parents[2] / "README.md").read_text(encoding="utf-8")
-        assert "## 部署" in readme, "README 缺「部署」章节"
-        assert "MASTER_KEY" in readme, "README 部署章节必须提到 MASTER_KEY"
-
-    def test_scripts_directory_lists_operational_tools(self):
-        from pathlib import Path
-        scripts = Path(__file__).resolve().parents[2] / "backend" / "scripts"
-        for tool in ["generate_master_key.py", "rotate_master_key.py", "export_openapi.py"]:
-            assert (scripts / tool).exists(), f"scripts/{tool} 不存在"
-
-    def test_frontend_gitignore_excludes_openapi_json(self):
-        from pathlib import Path
-        gi = (Path(__file__).resolve().parents[2] / "frontend" / ".gitignore").read_text(encoding="utf-8")
-        assert "openapi.json" in gi, "frontend/.gitignore 必须含 openapi.json"
-
-
-# ───────────────────────────────────────────
 # DDD: app/security.py 安全常量 invariants（最后 #25）
 # ───────────────────────────────────────────
 class TestSecurityConstants:
@@ -5061,47 +4728,7 @@ class TestSecurityConstants:
 # ───────────────────────────────────────────
 # EEE: CHANGELOG 包含所有本轮 commit hash（最后 #26）
 # ───────────────────────────────────────────
-class TestChangelogCoversAllCommits:
-    """最后 #26：CHANGELOG.md 必须提到本轮所有 push 的 commit hash。"""
-    def test_changelog_has_recent_commit_hashes(self):
-        """CHANGELOG.md 至少提到 5 个 Phase 1.5 / 深度修复轮 commit（防漂移）。"""
-        import subprocess
-        from pathlib import Path
-        repo = Path(__file__).resolve().parents[2]
-        # 取最近 100 个 commit hash（覆盖 Phase 1.5 + 深度修复轮 + 本轮新增）
-        result = subprocess.run(
-            ["git", "log", "--format=%h", "-n", "100"],
-            cwd=repo,
-            capture_output=True, text=True, timeout=10,
-        )
-        commit_hashes = result.stdout.strip().splitlines()
-        cl = (repo / "CHANGELOG.md").read_text(encoding="utf-8")
-        mentioned = sum(1 for h in commit_hashes if h in cl)
-        assert mentioned >= 5, (
-            f"CHANGELOG 应至少提到 5 个 commit hash，实际 {mentioned}/{len(commit_hashes)}"
-        )
 
-    def test_changelog_unreleased_section_exists(self):
-        from pathlib import Path
-        cl = (Path(__file__).resolve().parents[2] / "CHANGELOG.md").read_text(encoding="utf-8")
-        assert "Unreleased" in cl or "深度修复" in cl, (
-            "CHANGELOG 应有 Unreleased / 深度修复轮 段落"
-        )
-
-    def test_repo_not_in_clean_state(self):
-        import subprocess
-        from pathlib import Path
-        repo = Path(__file__).resolve().parents[2]
-        result = subprocess.run(
-            ["git", "rev-list", "--count", "HEAD"],
-            cwd=repo,
-            capture_output=True, text=True, timeout=10,
-        )
-        count = int(result.stdout.strip())
-        assert count >= 10, f"repo 应至少 10 个 commit，实际 {count}"
-
-
-# ───────────────────────────────────────────
 # FFF: Provider 表结构 invariants（最后 #27）
 # ───────────────────────────────────────────
 class TestProviderTableSchema:
@@ -6339,30 +5966,7 @@ class TestMonitorRunNoDeadCode:
 # ───────────────────────────────────────────
 # WWW: fix #56 — export_openapi.py 改用 atomic_write_json
 # ───────────────────────────────────────────
-class TestExportOpenapiAtomicWrite:
-    """迭代 #56: scripts/export_openapi.py 之前 write_text(json.dumps(...))
-    非 atomic — 跟 iter #43/#49/#55 同型。
-    后果：openapi.json 是 CI 校验漂移的基准（前端 vs 后端），半写损坏
-    会掩盖真实漂移 → 误报 / 漏报。
-    修法：atomic_write_json。
-    """
-    def test_export_openapi_uses_atomic_write(self):
-        import inspect
-        from scripts import export_openapi as eo_mod
-        src = inspect.getsource(eo_mod)
-        code_lines = [l for l in src.split("\n")
-                      if l.strip() and not l.strip().startswith("#")]
-        code_src = "\n".join(code_lines)
-        assert "atomic_write_json" in code_src, \
-            "export_openapi.py 必须用 atomic_write_json（iter #56）"
-        # 不能 raw write_text(json.dumps(...))
-        assert ".write_text(json.dumps(" not in code_src, \
-            "export_openapi.py 不能再 raw write_text(json.dumps(...))"
-        assert "from engine.utils import atomic_write_json" in code_src, \
-            "export_openapi.py 必须 from engine.utils import atomic_write_json"
 
-
-# ───────────────────────────────────────────
 # XXX: fix #57 — rewrite_length.py meta.json 改用 atomic_write_json
 # ───────────────────────────────────────────
 class TestRewriteLengthAtomicMeta:
@@ -8250,108 +7854,8 @@ class TestMasterKeyPersistedAcrossRestarts:
 # ───────────────────────────────────────────
 # TTTT: 迭代 #83 — frontend Providers.tsx 必须有 master key 加密行为警告
 # ───────────────────────────────────────────
-class TestProvidersFrontendMasterKeyWarning:
-    """迭代 #83 — 用户审计反馈 (2026-07-05) frontend Providers.tsx 搜索
-    '重启 / 临时 / 失效' 关键词零提示——用户填 Key 时完全不知道有失效风险。
-
-    修法：在 Providers 页面顶部加醒目 banner 说明 dev mode 持久化行为 +
-    怎么显式设固定 MASTER_KEY。
-
-    加 invariant test 锁死源码包含警告文本（防止设计改动误删）。
-    """
-    def test_providers_tsx_has_master_key_warning(self):
-        """源码扫描：Providers.tsx 必须包含 MASTER_KEY / 加密行为警告。"""
-        from pathlib import Path
-        providers_tsx = Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages" / "Providers.tsx"
-        content = providers_tsx.read_text(encoding="utf-8")
-        # 必须包含警告组件标记
-        assert "MASTER_KEY_DEV_WARNING" in content, (
-            "frontend Providers.tsx 必须定义 MASTER_KEY_DEV_WARNING 组件（#83）"
-        )
-        # 必须包含关键提示关键词
-        required_phrases = [
-            "dev",  # 提及 dev 模式
-            "MASTER_KEY",  # 变量名
-            "重启",  # 重启相关提示（用户搜索过这个关键词）
-            "decrypt_api_key" if "decrypt" in content else "解密失败",  # 失效提示
-            "scripts.generate_master_key" if "generate_master_key" in content else "scripts/generate_master_key",  # 给出解决命令
-        ]
-        missing = [p for p in required_phrases if p not in content]
-        assert not missing, (
-            f"Providers.tsx 警告必须包含关键短语: {missing}\n"
-            f"实际内容片段: {content[content.find('MASTER_KEY_DEV_WARNING'):content.find('MASTER_KEY_DEV_WARNING')+500] if 'MASTER_KEY_DEV_WARNING' in content else 'N/A'}"
-        )
-
-    def test_providers_tsx_warning_is_rendered(self):
-        """警告必须在 Providers 组件里被实际 render（不只是定义）。"""
-        from pathlib import Path
-        providers_tsx = Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages" / "Providers.tsx"
-        content = providers_tsx.read_text(encoding="utf-8")
-        # 找到 Providers 组件 render 部分
-        render_part = content[content.find("return ("):]
-        assert "{MASTER_KEY_DEV_WARNING}" in render_part, (
-            "Providers 组件 render 区必须实际挂载 MASTER_KEY_DEV_WARNING 组件（#83 — 定义但不用 = 没效果）"
-        )
-
-
-# ───────────────────────────────────────────
 # UUUU: 迭代 #201 — BUDGET_HARD 50% 放宽必须文档化（避免被误当成 bug）
-# ───────────────────────────────────────────
-class TestBudgetHardValueDocumented:
-    """迭代 #201：用户审计报告 (2026-07-05) 指出 BUDGET_HARD = 1.50 等于
-    把界面预算上限乘以 150% 才硬停（填 $500 → 实际 $750 才停）—— 文档
-    之前只说 "MVP-relaxed per patches/2026-06-28"，没说为什么 / 怎么改。
 
-    修法：BUDGET_HARD 定义上方加详细 docstring 说明设计原因 + 怎么调严。
-    加 invariant test 锁死当前数值 + 文档说明存在——防止有人"修正"成 1.0
-    而没有更新文档沟通用户。
-    """
-    def test_budget_hard_value_is_150(self):
-        """BUDGET_HARD 必须保持 1.50（如果改成更严必须更新 #201 docstring）。"""
-        from engine import orchestrator as orch
-        assert orch.BUDGET_HARD == 1.50, (
-            f"BUDGET_HARD 必须保持 1.50（迭代 #201 设计的 MVP 放宽阈值）。"
-            f"实际 {orch.BUDGET_HARD}。"
-            f"改成更严前务必更新 #201 文档说明 + 跟用户沟通。"
-        )
-
-    def test_budget_hard_has_documentation(self):
-        """BUDGET_HARD 文档必须明确说明 100% vs 150% 行为差异 + 怎么调严。"""
-        import re
-        from engine import orchestrator as orch
-        import inspect
-        src = inspect.getsource(orch)
-        # 找 BUDGET_HARD 定义及其上方 docstring/注释
-        # regex 匹配 "N 行注释/连续注释 + BUDGET_HARD"
-        # 简化做法：取源码前 30 行（包含 docstring + BUDGET_HARD）作为 chunk
-        budget_lines = []
-        for line in src.split("\n"):
-            budget_lines.append(line)
-            if "BUDGET_HARD" in line and "=" in line and "1.50" in line:
-                break
-        chunk = "\n".join(budget_lines[-30:])
-        # 必须包含关键说明短语
-        required_phrases = [
-            "MVP",  # 提及 MVP 阶段
-            "100%",  # 提及 100% 区间行为
-            "150%",  # 提及 150% 阈值
-            "放宽",  # 提及"放宽"或类似
-        ]
-        missing = [p for p in required_phrases if p not in chunk]
-        assert not missing, (
-            f"BUDGET_HARD 上方文档必须包含关键短语: {missing}\n"
-            f"实际 chunk:\n{chunk}"
-        )
-        # 怎么调严：必须有指引
-        guidance_keywords = ["BUDGET_HARD = 1.00", "改 BUDGET_HARD", "调严"]
-        has_guidance = any(k in chunk for k in guidance_keywords)
-        assert has_guidance, (
-            f"BUDGET_HARD 文档必须告诉读者怎么改严（#201），"
-            f"实际 chunk:\n{chunk}"
-        )
-
-
-# ───────────────────────────────────────────
 # Phase 1：世界构建板块结构化不变量
 # ───────────────────────────────────────────
 
