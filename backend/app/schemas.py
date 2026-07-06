@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional, Any
+from typing import Optional, Any, Union
 from pydantic import BaseModel, ConfigDict
 
 
@@ -189,9 +189,9 @@ class CharacterSummaryOut(BaseModel):
     name: str
     role: Optional[str] = None
     # 卡片摘要（从 8 段聚合出 2-3 个字段）
-    identity: Optional[str] = None   # basic.identity
-    age: Optional[str] = None         # basic.age
-    gender: Optional[str] = None       # basic.gender
+    identity: Optional[str] = None        # basic.identity
+    age: Optional[Union[str, int]] = None  # LLM 实际生成 int（如 32）；mock 也是 int。允许 str 兼容老数据。
+    gender: Optional[str] = None          # basic.gender
 
 
 class CharacterCardOut(BaseModel):

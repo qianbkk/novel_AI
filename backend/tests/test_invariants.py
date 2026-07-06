@@ -8496,3 +8496,85 @@ class TestEntityRelationRichSchema:
         with pytest.raises(SchemaError) as exc:
             validate_entity_relation_rich(bad)
         assert "phase" in str(exc.value)
+
+
+# ───────────────────────────────────────────
+# F: Pydantic 输出 schema 接受 LLM 真实类型（int 替代 str 等）
+# ───────────────────────────────────────────
+class TestSchemaLenientOnUnion:
+    """验证 Phase 3/4 schema 接受 LLM 真实输出（int 替代 str / null 等）。
+
+    历史 bug：CharacterSummaryOut.age 声明为 Optional[str]，但
+    stages.py::_CHARACTERS_MOCK 的 basic.age 是整数（如 32），LLM 实际
+    生成的也是 int。Pydantic v2 strict 模式拒绝 int → str 隐式转换 →
+    GET /projects/{pid}/characters 整接口 500。
+    """
+
+    def test_character_summary_age_accepts_int(self):
+        """LLM mock 给 age=32 (int)，schema 必须接受"""
+        from app.schemas import CharacterSummaryOut
+        m = CharacterSummaryOut(id="x", name="y", age=32)  # 不抛
+        assert m.age == 32
+
+    def test_character_summary_age_accepts_str(self):
+        """老数据 / 文本型 age 也要兼容"""
+        from app.schemas import CharacterSummaryOut
+        m = CharacterSummaryOut(id="x", name="y", age="32 岁")
+        assert m.age == "32 岁"
+
+    def test_character_summary_age_optional(self):
+        """card_basic_json 缺失 / age 不存在时，age 应为 None，不抛"""
+        from app.schemas import CharacterSummaryOut
+        m = CharacterSummaryOut(id="x", name="y")
+        assert m.age is None
+
+    def test_character_summary_full_mock_payload(self):
+        """完整 _CHARACTERS_MOCK 第一条 (basic.age=32) 能通过 Pydantic 校验"""
+        from app.schemas import CharacterSummaryOut
+        # 模拟 api/world.py::list_characters 里的取值
+        m = CharacterSummaryOut(
+            id="abc",
+            name="林渊",
+            role="主角",
+            identity="云州林氏长子",
+            age=32,             # int
+            gender="男",
+        )
+        assert m.age == 32
+        assert m.gender == "男"
+        assert m.identity == "云州林氏长子"
+
+    def test_character_card_out_handles_dict_or_none(self):
+        """card 字段允许 None（老项目 fallback），不应抛"""
+        from app.schemas import CharacterCardOut
+        m1 = CharacterCardOut(id="x", name="y", role="r", card=None)
+        assert m1.card is None
+        m2 = CharacterCardOut(
+            id="x", name="y", role="r",
+            card={"basic": {"age": 32, "gender": "男", "identity": "x"}},
+        )
+        assert m2.card["basic"]["age"] == 32
+
+    def test_character_relation_out_intensity_int(self):
+        """intensity 是 int (0-10)"""
+        from app.schemas import CharacterRelationOut
+        m = CharacterRelationOut(
+            id="r1", relation="宿敌", description="x",
+            target={"id": "t", "name": "T", "role": "配角"},
+            mutual=True, intensity=8,
+            tags=["敌对", "仇恨"],
+            evolution=[{"phase": "开端", "state": "陌生"}],
+            key_events=[{"chapter_hint": "第1章", "event": "相遇"}],
+        )
+        assert m.intensity == 8
+        assert m.tags == ["敌对", "仇恨"]
+
+    def test_worldview_rich_out_minimal(self):
+        """rich 可为 None（老项目 fallback），story_core 可为 None"""
+        from app.schemas import WorldviewRichOut
+        m = WorldviewRichOut(
+            rich=None, story_core=None, history_timeline=None,
+            fallback_text="legacy", fallback_story_core="legacy core",
+        )
+        assert m.rich is None
+        assert m.fallback_text == "legacy"
