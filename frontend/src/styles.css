@@ -1512,6 +1512,29 @@ label {
   color: var(--color-accent-strong);
   font-weight: var(--weight-semibold);
 }
+/* Phase 7: tier hover 详情面板 */
+.tier-rail__detail {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--color-bg-1);
+  border: 1px solid var(--color-border-1);
+  border-radius: var(--radius-md);
+  padding: 8px 12px;
+  min-width: 220px;
+  max-width: 300px;
+  z-index: 10;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  font-size: var(--text-xs);
+  text-align: left;
+  font-weight: normal;
+  color: var(--color-fg-2);
+}
+.tier-rail__step:hover .tier-rail__detail { display: block; }
+.tier-detail-row { margin: 2px 0; }
+.tier-detail-row strong { color: var(--color-accent-strong); }
 
 /* ---- ③ 七要素剧情模型 ---- */
 .plot-wheel {

@@ -344,13 +344,13 @@ export default function WorldBuild() {
                 </div>
               )}
 
-              {/* --- 力量体系：tier rail --- */}
+              {/* --- 力量体系：tier rail（Phase 7: hover 弹详情）--- */}
               {legislationTab === "力量体系" && (
                 <div>
                   <h3 className="module-heading">
                     <span className="module-heading__index">M02.2</span>
                     社会规则 · 力量等级
-                    <span className="module-heading__sub">突破事件触发阶梯同步</span>
+                    <span className="module-heading__sub">突破事件触发阶梯同步 · 鼠标悬停看突破条件</span>
                   </h3>
                   {result.power_systems.map((p) => (
                     <div className="entity-card" key={p.id}>
@@ -361,12 +361,30 @@ export default function WorldBuild() {
                           {p.tiers_json.map((t, i) => {
                             const reached = i < Math.ceil(p.tiers_json!.length / 2);
                             const isCurrent = i === Math.floor(p.tiers_json!.length / 2);
+                            // Phase 7: tier 结构化展示 hover 详情
+                            const summary = (t as any).summary as string | undefined;
+                            const breakCond = (t as any).break_condition as string | undefined;
+                            const cultTime = (t as any).cultivation_time as string | undefined;
+                            const hasDetail = !!(summary || breakCond || cultTime);
                             return (
                               <div
                                 key={t.level}
                                 className={`tier-rail__step ${isCurrent ? "is-current" : reached ? "is-reached" : ""}`}
+                                title={
+                                  hasDetail
+                                    ? `${t.name}\n${summary ? '简介：' + summary : ''}${breakCond ? '\n突破条件：' + breakCond : ''}${cultTime ? '\n修炼时长：' + cultTime : ''}`
+                                    : t.name
+                                }
+                                style={{ cursor: hasDetail ? "help" : "default" }}
                               >
                                 {t.name}
+                                {hasDetail && (
+                                  <div className="tier-rail__detail">
+                                    {summary && <p className="tier-detail-row"><strong>简介：</strong>{summary}</p>}
+                                    {breakCond && <p className="tier-detail-row"><strong>突破：</strong>{breakCond}</p>}
+                                    {cultTime && <p className="tier-detail-row"><strong>时长：</strong>{cultTime}</p>}
+                                  </div>
+                                )}
                               </div>
                             );
                           })}
@@ -377,7 +395,7 @@ export default function WorldBuild() {
                 </div>
               )}
 
-              {/* --- 货币物权 --- */}
+              {/* --- 货币物权（Phase 7: 结构化展示）--- */}
               {legislationTab === "货币物权" && (
                 <div>
                   <h3 className="module-heading">
@@ -386,15 +404,37 @@ export default function WorldBuild() {
                     <span className="module-heading__sub">支持汇率核算 · 物品流转自动同步</span>
                   </h3>
                   <div className="legislation-grid">
-                    {result.currencies.map((c) => (
-                      <div key={c.id} className="legislation-card">
-                        <div className="legislation-card__head">
-                          <span className="legislation-card__title">{c.name}</span>
-                          <span className="legislation-card__kicker">货币</span>
+                    {result.currencies.map((c) => {
+                      // Phase 7: 结构化 detail_json
+                      const dj = (c.detail_json || {}) as Record<string, unknown>;
+                      const detail = dj.detail as string | undefined;
+                      const exchange = dj.exchange_rate as string | undefined;
+                      const issuers = (dj.issuers as string[] | undefined) || [];
+                      const scope = dj.scope as string | undefined;
+                      const hasRich = !!(exchange || issuers.length || scope);
+                      return (
+                        <div key={c.id} className="legislation-card">
+                          <div className="legislation-card__head">
+                            <span className="legislation-card__title">{c.name}</span>
+                            <span className="legislation-card__kicker">货币</span>
+                          </div>
+                          <span className="legislation-card__desc">{detail || String(dj as any) || "—"}</span>
+                          {hasRich && (
+                            <div className="legislation-card__chips" style={{ marginTop: 8 }}>
+                              {exchange && (
+                                <span className="legislation-card__chip">汇率 · {exchange}</span>
+                              )}
+                              {issuers.length > 0 && (
+                                <span className="legislation-card__chip">发行 · {issuers.join(" / ")}</span>
+                              )}
+                              {scope && (
+                                <span className="legislation-card__chip">范围 · {scope}</span>
+                              )}
+                            </div>
+                          )}
                         </div>
-                        <span className="legislation-card__desc">{String(c.detail_json?.detail ?? "") || "—"}</span>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

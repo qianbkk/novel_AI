@@ -214,6 +214,47 @@ def audit_worldbuild_db(a: Auditor, db):
         f"{fs_unlinked}/{fs_total} unlinked"
     )
 
+    # ─── Phase 7: 结构化数据覆盖度 ───
+    # 7 段世界观（Phase 1 加的字段，老项目可能为空）
+    if ws:
+        ws_rich = ws.world_view_rich_json
+        a.check(
+            isinstance(ws_rich, dict) and len(ws_rich) >= 7,
+            "WorldSetting.world_view_rich_json 7 段齐全",
+            f"got: {type(ws_rich).__name__} keys={list(ws_rich.keys()) if isinstance(ws_rich, dict) else 'n/a'}"
+        )
+        a.check(
+            isinstance(ws.history_timeline_json, list) and len(ws.history_timeline_json) >= 3,
+            "WorldSetting.history_timeline_json ≥3 条事件",
+            f"got: {len(ws.history_timeline_json) if isinstance(ws.history_timeline_json, list) else 'n/a'}"
+        )
+
+    # 角色卡 8 段（任意一段非空即视为已升级）
+    chars_list = db.query(Character).filter_by(project_id=pid).all()
+    if chars_list:
+        char_with_card = sum(1 for c in chars_list if c.card_basic_json)
+        a.check(
+            char_with_card == len(chars_list),
+            "全部 Character 有 card_basic_json",
+            f"{char_with_card}/{len(chars_list)}"
+        )
+
+    # 富关系：intensity + tags_json
+    rels_list = db.query(EntityRelation).filter_by(project_id=pid).all()
+    if rels_list:
+        rel_with_intensity = sum(1 for r in rels_list if r.intensity is not None)
+        a.check(
+            rel_with_intensity == len(rels_list),
+            "全部 EntityRelation 有 intensity",
+            f"{rel_with_intensity}/{len(rels_list)}"
+        )
+        rel_with_tags = sum(1 for r in rels_list if r.tags_json)
+        a.check(
+            rel_with_tags == len(rels_list),
+            "全部 EntityRelation 有 tags_json",
+            f"{rel_with_tags}/{len(rels_list)}"
+        )
+
 
 def audit_chapters(a: Auditor, db):
     """B/C/D/E 类的核心：50 章的内容质量 + 关联完整性"""

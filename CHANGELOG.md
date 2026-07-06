@@ -4,6 +4,51 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased] — 2026-07-06
+
+### Feature（世界构建板块根本性改造 — 7 个 phase commit）
+
+用户反馈 WorldBuild 板块 4 个根本性问题（世界观简陋、角色无详情、关系无图、立法国陋），从数据层到 UI 全链路改造：
+
+- **ebe5015** `feat(backend): structured worldview + character card + rich entity relations`
+  - migrations.py 新增 16 列启动时 ALTER TABLE ADD COLUMN（WorldSetting 3 + Character 8 + EntityRelation 5）
+  - models.py 加 Column 声明；schema/ 新增 3 个 JSON Schema；schema_validator.py 加 3 个 validator
+  - test_invariants.py 加 11 个新 Phase 1 invariant test 锁字段漂移
+
+- **bdb76eb** `feat(worldbuild): structured 7-section worldview + 8-section character card + rich relations`
+  - stage_world_basics 输出 7 段世界观 + 故事核心 4 段 + 历史时间线 ≥3 条
+  - stage_characters 输出 4 个角色完整 8 段角色卡（基本/外貌/性格/背景/能力/口癖/道具/成长弧）
+  - stage_relations 输出 5 条富关系（含 mutual/intensity/tags/evolution/key_events）
+  - stage_factions_power 让 tiers 含 summary / break_condition / cultivation_time
+  - stage_currency_special 让 currencies 含 exchange_rate / issuers / scope
+  - stage_consistency_check 追加 3 类新规则（relation_cardinality / factionless_character / power_orphan）
+
+- **ecd77ce** `feat(api): worldview/rich + characters list/card/relations + relations/graph`
+  - 新增 backend/app/api/world.py（独立 router）：5 个 endpoint
+  - GET /worldview/rich、GET /characters、GET /characters/{cid}、GET /characters/{cid}/relations、GET /relations/graph
+  - schemas.py 加 5 个 Pydantic schema；worldbuild/result 端点扩 3 字段
+
+- **aa1bbab** `feat(ui): character card detail page with 8-section breakdown`
+  - 新增 frontend/src/pages/CharacterCard.tsx（独立页面 /projects/{pid}/characters/{cid}）
+  - 8 段结构化展示；老项目 fallback「暂无详情」友好提示
+  - types.ts + api/client.ts + App.tsx 加路由 + 人物阵营 tab 角色卡可点击跳转
+
+- **4a20181** `feat(ui): structured worldview 7 sections + history timeline`
+  - 「世界观 tab」改为 WorldviewTab 组件：故事核心 4 段 + 7 段独立卡片 + 历史时间线
+  - styles.css 加 .history-timeline 系列 5 个类（边线 + 圆点 + 3 段内容）
+
+- **8e9a391** `feat(ui): relation graph with SVG radial layout + role-color edges`
+  - 新增 frontend/src/components/RelationGraph.tsx（纯 SVG，不引 d3）
+  - 中心主角 + 一圈按 role 扇区；关系边按 tags 染色（敌对/师徒/暧昧/盟友）
+  - mutual 标记 + 边粗 = intensity + 图例
+
+- **TBD** `feat(worldbuild): power tier hover details + currency structure + 3 new consistency audit checks`
+  - 力量 tier hover 弹详情面板（summary / 突破条件 / 修炼时长）
+  - 货币卡结构化（detail / exchange_rate / issuers / scope）
+  - audit_project.py 加 5 个新不变量检查（7 段齐全、时间线 ≥3 条、角色卡 / intensity / tags_json 覆盖度）
+
+测试：392 → 392 invariant tests PASS（11 个新 Phase 1 + 381 个原有）。
+
 ## [Unreleased] — 2026-07-05
 
 ### Bug Fix（迭代 #78 — 内部审计 / CLI 同型扫描）
