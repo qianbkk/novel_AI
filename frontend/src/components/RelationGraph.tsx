@@ -106,7 +106,7 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
 
   return (
     <div className="faction-graph" style={{ marginBottom: 18 }}>
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
+      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" style={{ height: "auto", maxHeight: H }}>
         {/* 中心淡光 */}
         <defs>
           <radialGradient id="rg-fade" cx="50%" cy="50%" r="50%">
