@@ -32,6 +32,10 @@ novel_AI/.omc/
 novel_AI/
 novel-assistant/
 
+# Personal tooling scratch dirs (本地自查，不入库)
+.claude-viz/
+.understand-anything/
+
 # OS / editor
 .DS_Store
 Thumbs.db
