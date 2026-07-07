@@ -28,10 +28,15 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!projectId) return;
+    if (!projectId) { setLoading(false); return; }
+    setLoading(true);
+    setError(null);
     api.getRelationsGraph(projectId)
       .then(setData)
-      .catch((e) => setError(String(e)))
+      .catch((e) => {
+        console.error(e);
+        setError("加载失败，请检查后端服务");
+      })
       .finally(() => setLoading(false));
   }, [projectId]);
 
