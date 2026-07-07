@@ -22,6 +22,19 @@ interface Props {
 
 const SECTORS = ["主角", "重要配角", "反派", "其他"];
 
+// 纯函数：边颜色分类（与组件状态无关，提取到模块级避免每次渲染重建）
+function edgeColorClass(rel: string, tags: string[] | null): string {
+  const tagSet = new Set(tags || []);
+  if (tagSet.has("敌对") || tagSet.has("仇恨") || rel.includes("仇") || rel.includes("敌")) {
+    return "fg-edge--hostile";
+  }
+  if (tagSet.has("师徒") || rel.includes("师")) return "fg-edge--mentor";
+  if (tagSet.has("暧昧") || rel.includes("恋") || rel.includes("爱")) {
+    return "fg-edge--ambiguous";
+  }
+  return "fg-edge--ally";
+}
+
 export function RelationGraph({ projectId, onNodeClick }: Props) {
   const [data, setData] = useState<{ nodes: GraphNode[]; edges: GraphEdge[] } | null>(null);
   const [loading, setLoading] = useState(true);
@@ -89,18 +102,7 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
     });
   });
 
-  // 4. 边颜色分类
-  const edgeColorClass = (rel: string, tags: string[] | null): string => {
-    const tagSet = new Set(tags || []);
-    if (tagSet.has("敌对") || tagSet.has("仇恨") || rel.includes("仇") || rel.includes("敌")) {
-      return "fg-edge--hostile";
-    }
-    if (tagSet.has("师徒") || rel.includes("师")) return "fg-edge--mentor";
-    if (tagSet.has("暧昧") || rel.includes("恋") || rel.includes("爱")) {
-      return "fg-edge--ambiguous";
-    }
-    return "fg-edge--ally";
-  };
+  // 4. 边颜色分类（已提取到模块级函数 edgeColorClass）
 
   return (
     <div className="faction-graph" style={{ marginBottom: 18 }}>
@@ -224,7 +226,7 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
         <span><span style={{ display: "inline-block", width: 16, height: 2, background: "var(--color-moss)", verticalAlign: "middle", marginRight: 4 }}/>盟友关系</span>
         <span><span style={{ display: "inline-block", width: 16, height: 2, background: "var(--color-stamp)", verticalAlign: "middle", marginRight: 4 }}/>敌对关系</span>
         <span><span style={{ display: "inline-block", width: 16, height: 2, background: "var(--color-accent)", verticalAlign: "middle", marginRight: 4 }}/>师徒关系</span>
-        <span><span style={{ display: "inline-block", width: 16, height: 2, background: "var(--color-warn)", borderTop: "2px dashed var(--color-warn)", verticalAlign: "middle", marginRight: 4 }}/>暧昧关系</span>
+        <span><span style={{ display: "inline-block", width: 16, borderTop: "2px dashed var(--color-warn)", verticalAlign: "middle", marginRight: 4 }}/>暧昧关系</span>
         <span>边粗 = 强度 0-10</span>
       </div>
     </div>

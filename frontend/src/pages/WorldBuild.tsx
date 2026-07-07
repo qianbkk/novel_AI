@@ -242,7 +242,7 @@ export default function WorldBuild() {
               />
 
               <h3 className="module-heading">
-                <span className="module-heading__index">M04</span>
+                <span className="module-heading__index">M04.1</span>
                 角色动态生命周期
                 <span className="module-heading__sub">{result.characters.length} 名角色 · {result.relations.length} 条关系</span>
               </h3>
@@ -268,7 +268,7 @@ export default function WorldBuild() {
                 ))}
               </div>
               <h3 className="module-heading">
-                <span className="module-heading__index">M04</span>
+                <span className="module-heading__index">M04.2</span>
                 因果关系引擎 · 关系网
                 <span className="module-heading__sub">关系变动触发后续语义同步</span>
               </h3>
