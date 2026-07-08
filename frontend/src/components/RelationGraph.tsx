@@ -11,7 +11,7 @@
  *
  * 不引 d3 / 任何依赖，纯 SVG + 极坐标布局。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import type { GraphNode, GraphEdge } from "../types";
 
@@ -22,17 +22,49 @@ interface Props {
 
 const SECTORS = ["主角", "重要配角", "反派", "其他"];
 
-// 纯函数：边颜色分类（与组件状态无关，提取到模块级避免每次渲染重建）
+// 边分类标签词库：tags 优先精确匹配（结构化，无歧义）；
+// relation 文本仅在 tags 为空时按完整词 fallback（避免子串误判"师"→"律师"/"法师"）。
+// 历史 review 备注：之前 `rel.includes("师")` 会把"军师"/"大师兄"也归为师徒。
+const HOSTILE_TAGS = new Set(["敌对", "仇恨"]);
+const MENTOR_TAGS  = new Set(["师徒"]);
+const AMBIGUOUS_TAGS = new Set(["暧昧"]);
+
+const HOSTILE_REL = new Set(["宿敌", "仇人", "敌人", "敌对", "仇敌"]);
+const MENTOR_REL  = new Set(["师徒", "师父", "师傅", "徒儿", "徒弟"]);
+const AMBIGUOUS_REL = new Set(["暧昧", "恋人", "情人", "爱慕", "暗恋"]);
+
+/**
+ * 纯函数：边颜色分类。
+ * 返回 CSS class 名后缀，匹配 styles.css 里的 .fg-edge--XXX。
+ */
 function edgeColorClass(rel: string, tags: string[] | null): string {
-  const tagSet = new Set(tags || []);
-  if (tagSet.has("敌对") || tagSet.has("仇恨") || rel.includes("仇") || rel.includes("敌")) {
-    return "fg-edge--hostile";
+  // tags 优先
+  if (tags) {
+    for (const t of tags) {
+      if (HOSTILE_TAGS.has(t)) return "fg-edge--hostile";
+      if (MENTOR_TAGS.has(t))  return "fg-edge--mentor";
+      if (AMBIGUOUS_TAGS.has(t)) return "fg-edge--ambiguous";
+    }
   }
-  if (tagSet.has("师徒") || rel.includes("师")) return "fg-edge--mentor";
-  if (tagSet.has("暧昧") || rel.includes("恋") || rel.includes("爱")) {
-    return "fg-edge--ambiguous";
+  // fallback: 完整词匹配（不是子串）
+  if (rel) {
+    if (HOSTILE_REL.has(rel)   || rel.startsWith("宿敌")) return "fg-edge--hostile";
+    if (MENTOR_REL.has(rel))   return "fg-edge--mentor";
+    if (AMBIGUOUS_REL.has(rel)) return "fg-edge--ambiguous";
   }
   return "fg-edge--ally";
+}
+
+/** mutual 边：从边集合里一次扫出所有"被互相关注"的节点 ID。 */
+function collectMutualNodes(edges: GraphEdge[]): Set<string> {
+  const mutual = new Set<string>();
+  for (const e of edges) {
+    if (e.mutual) {
+      mutual.add(e.from_id);
+      mutual.add(e.to_id);
+    }
+  }
+  return mutual;
 }
 
 export function RelationGraph({ projectId, onNodeClick }: Props) {
@@ -70,6 +102,13 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
   const cy = H / 2;
   const r = Math.min(W, H) * 0.34;
 
+  // Mutual 检查：一次性扫出所有 mutual 节点（O(E)），
+  // 渲染时直接 set lookup（O(1)），避免节点×边的嵌套扫。
+  const mutualNodeIds = useMemo(
+    () => collectMutualNodes(data.edges),
+    [data.edges],
+  );
+
   // 1. 找主角（fallback 到第一个节点）
   const protagonist = data.nodes.find(n => n.role === "主角") || data.nodes[0];
   const others = data.nodes.filter(n => n.id !== protagonist.id);
@@ -106,7 +145,13 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
 
   return (
     <div className="faction-graph" style={{ marginBottom: 18 }}>
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet" style={{ height: "auto", maxHeight: H }}>
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        preserveAspectRatio="xMidYMid meet"
+        style={{ height: "auto", maxHeight: H }}
+        role="img"
+        aria-label="角色关系图谱"
+      >
         {/* 中心淡光 */}
         <defs>
           <radialGradient id="rg-fade" cx="50%" cy="50%" r="50%">
@@ -120,7 +165,7 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
         <circle cx={cx} cy={cy} r={r} fill="none" stroke="var(--border-strong)" strokeDasharray="3 6" opacity="0.5" />
 
         {/* 关系边 */}
-        {data.edges.map((e, i) => {
+        {data.edges.map((e) => {
           const from = positions.get(e.from_id);
           const to = positions.get(e.to_id);
           if (!from || !to) return null;
@@ -136,7 +181,7 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
           const cpY = my + ny * 16;
           return (
             <path
-              key={i}
+              key={`${e.from_id}-${e.to_id}`}
               d={`M ${from.x} ${from.y} Q ${cpX} ${cpY} ${to.x} ${to.y}`}
               className={`fg-edge ${edgeColorClass(e.relation, e.tags)}`}
               strokeWidth={Math.max(0.6, (e.intensity || 5) * 0.28)}
@@ -151,11 +196,21 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
           const pos = positions.get(n.id);
           if (!pos) return null;
           const isProtagonist = pos.kind === "protagonist";
+          const onActivate = onNodeClick ? () => onNodeClick(n.id) : undefined;
           return (
             <g
               key={n.id}
               className={`fg-node fg-node--${pos.kind}`}
-              onClick={() => onNodeClick?.(n.id)}
+              onClick={onActivate}
+              onKeyDown={onActivate ? (ev) => {
+                if (ev.key === "Enter" || ev.key === " ") {
+                  ev.preventDefault();
+                  onActivate();
+                }
+              } : undefined}
+              tabIndex={onNodeClick ? 0 : -1}
+              role={onNodeClick ? "button" : "img"}
+              aria-label={onNodeClick ? `查看 ${n.name} 的角色卡` : `${n.name}${n.role ? `（${n.role}）` : ""}`}
               style={{ cursor: onNodeClick ? "pointer" : "default" }}
             >
               <circle
@@ -181,11 +236,8 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
                   {n.role}
                 </text>
               )}
-              {/* mutual 标记（中心点） */}
-              {data.edges.some(e => e.mutual && (
-                (e.from_id === n.id && positions.get(e.to_id)) ||
-                (e.to_id === n.id && positions.get(e.from_id))
-              )) && (
+              {/* mutual 标记（中心点）—— 用预计算的 Set lookup */}
+              {mutualNodeIds.has(n.id) && (
                 <text
                   x={pos.x} y={pos.y + 4}
                   textAnchor="middle"
@@ -214,20 +266,15 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
       </svg>
 
       {/* 图例 */}
-      <div style={{
-        display: "flex", gap: 14, padding: "8px 14px",
-        fontSize: 11, color: "var(--color-fg-3)",
-        borderTop: "1px solid var(--color-border-1)",
-        flexWrap: "wrap",
-      }}>
+      <div className="fg-legend">
         <LegendDot color="var(--color-accent-strong)" label="主角" />
         <LegendDot color="var(--color-moss)" label="盟友" />
         <LegendDot color="var(--color-stamp)" label="敌对" />
-        <span><span style={{ display: "inline-block", width: 16, height: 2, background: "var(--color-moss)", verticalAlign: "middle", marginRight: 4 }}/>盟友关系</span>
-        <span><span style={{ display: "inline-block", width: 16, height: 2, background: "var(--color-stamp)", verticalAlign: "middle", marginRight: 4 }}/>敌对关系</span>
-        <span><span style={{ display: "inline-block", width: 16, height: 2, background: "var(--color-accent)", verticalAlign: "middle", marginRight: 4 }}/>师徒关系</span>
-        <span><span style={{ display: "inline-block", width: 16, borderTop: "2px dashed var(--color-warn)", verticalAlign: "middle", marginRight: 4 }}/>暧昧关系</span>
-        <span>边粗 = 强度 0-10</span>
+        <LegendLine cls="fg-edge--ally"       label="盟友关系" />
+        <LegendLine cls="fg-edge--hostile"    label="敌对关系" />
+        <LegendLine cls="fg-edge--mentor"     label="师徒关系" />
+        <LegendLine cls="fg-edge--ambiguous"  label="暧昧关系" />
+        <span className="fg-legend__hint">边粗 = 强度 0-10</span>
       </div>
     </div>
   );
@@ -235,12 +282,22 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
 
 function LegendDot({ color, label }: { color: string; label: string }) {
   return (
-    <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-      <span style={{
-        display: "inline-block", width: 10, height: 10, borderRadius: "50%",
-        background: color,
-      }}/>
+    <span className="fg-legend__dot">
+      <span className="fg-legend__dot-circle" style={{ background: color }} />
       {label}
     </span>
   );
 }
+
+/** 用现有 fg-edge--XX 类染色（图例与 SVG 边严格一致）。 */
+function LegendLine({ cls, label }: { cls: string; label: string }) {
+  return (
+    <span className="fg-legend__line">
+      <svg width="16" height="6" aria-hidden="true">
+        <line x1="0" y1="3" x2="16" y2="3" className={`fg-edge ${cls}`} strokeWidth="2" />
+      </svg>
+      {label}
+    </span>
+  );
+}
+
