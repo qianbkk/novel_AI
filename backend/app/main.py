@@ -8,6 +8,7 @@ from .database import Base, SessionLocal, engine
 from .api import bridge, chapters, projects, providers, role_assignments, worldbuild, rules, foreshadowings, ai_assist, world
 from .api.role_assignments import seed_role_assignments
 from .backup_db import take_all_snapshots
+from .config import get_allowed_origins_list
 from .logging_setup import configure_root, get_logger
 from .middleware.rate_limit import RateLimitMiddleware
 
@@ -123,21 +124,12 @@ async def lifespan(app: FastAPI):
     log.info("shutdown: complete")
 
 
-app = FastAPI(title="AI小说写作助手 - 原型后端", lifespan=lifespan)
+app = FastAPI(title="NovelAI 后端", lifespan=lifespan)
 
-# CORS: 从 env 读 ALLOWED_ORIGINS（逗号分隔），默认放行前端 dev 端口 5293
-# 部署时设置 ALLOWED_ORIGINS="https://your-frontend.example.com"
-_allowed_origins_env = os.environ.get("ALLOWED_ORIGINS", "").strip()
-if _allowed_origins_env:
-    allow_origins = [o.strip() for o in _allowed_origins_env.split(",") if o.strip()]
-else:
-    allow_origins = [
-        "http://localhost:5293",      # Vite dev server
-        "http://127.0.0.1:5293",
-    ]
-log.info("CORS allow_origins=%s (from %s)",
-         allow_origins,
-         "env ALLOWED_ORIGINS" if _allowed_origins_env else "default")
+# CORS: 配置收口到 app.config.get_allowed_origins_list()，支持 NOVEL_ALLOWED_ORIGINS
+# 或裸 ALLOWED_ORIGINS env（向后兼容）。默认放行前端 dev 端口 5293。
+allow_origins = get_allowed_origins_list()
+log.info("CORS allow_origins=%s (来源 Settings.allowed_origins)", allow_origins)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=allow_origins,
@@ -145,7 +137,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 # 速率限制中间件：仅写端点限速（防刷 /bridge/run 触发昂贵 LLM 调用）
-# 通过 env RATE_LIMIT_PER_MINUTE 调整阈值（默认 60）
+# 阈值收口到 app.config.settings.rate_limit_per_minute（默认 60）。
 app.add_middleware(RateLimitMiddleware)
 
 app.include_router(projects.router)
