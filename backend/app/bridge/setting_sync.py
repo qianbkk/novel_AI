@@ -56,6 +56,12 @@ async def push_setting_concept(project_id: str, novel_ai_dir: str, db: Session) 
     tropes = cfg.get("tropes", [])
     length_range = cfg.get("length_range", "200-400万字（长篇）")
     main_conflict = cfg.get("main_conflict", "")
+    # platform 字段：来自 project.config_json.platform（前端 /api/projects POST 时
+    # 已经支持 config_json.platform）。支持的值：
+    #   fanqie | qidian | qimao —— 走对应平台合规
+    #   personal | none | internal —— 跳过平台合规（个人原型 / 自存档用）
+    # 默认 fanqie 保持向后兼容。
+    platform = cfg.get("platform", "fanqie")
 
     if not world_view_text and not story_core_text:
         concept = "\n".join([
@@ -75,7 +81,7 @@ async def push_setting_concept(project_id: str, novel_ai_dir: str, db: Session) 
         ])
     novel_config = {
         "novel_id": project.id,
-        "platform": "fanqie",
+        "platform": platform,
         "genre": project.genre,
         "setting_concept": concept,
         "budget_limit_usd": project.budget_limit_usd or 500.0,

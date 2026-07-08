@@ -31,6 +31,37 @@ def get_project(project_id: str, db: Session = Depends(get_db)):
     return project
 
 
+@router.put("/{project_id}/platform")
+def set_project_platform(
+    project_id: str,
+    payload: dict,
+    db: Session = Depends(get_db),
+):
+    """设置项目平台。
+
+    支持：
+      fanqie | qidian | qimao —— 走对应平台合规
+      personal | none | internal —— 跳过平台合规（个人原型 / 自存档用）
+
+    写 project.config_json.platform，下次 push-concept → novel_config.json → planner →
+    setting_package.json 都会带过去；engine run 时 compliance agent 读取 platform
+    决定是否跳过。
+    """
+    platform = (payload or {}).get("platform", "").strip()
+    valid = {"fanqie", "qidian", "qimao", "personal", "none", "internal"}
+    if platform not in valid:
+        raise HTTPException(400, f"platform must be one of {sorted(valid)} (got {platform!r})")
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "project not found")
+    cfg = dict(project.config_json or {})
+    cfg["platform"] = platform
+    project.config_json = cfg
+    db.commit()
+    db.refresh(project)
+    return {"project_id": project_id, "platform": platform}
+
+
 @router.get("", response_model=list[ProjectOut])
 def list_projects(
     db: Session = Depends(get_db),
