@@ -259,6 +259,14 @@ def node_load_arc_tasks(state: OrchestratorState) -> OrchestratorState:
     state["chapter_task_queue"]      = tasks
     state["total_chapters_planned"]  = state.get("total_chapters_planned", 0) + len(tasks)
 
+    # 草稿模式 override：NOVEL_AUDIT_MODE=draft 时把所有任务的 audit_mode 改成 "draft"。
+    # 个人试错用：跳过 compliance + checker，每章只跑 writer → normalizer → tracker，
+    # 节省 ~70% LLM 成本。试完方向后设回 NOVEL_AUDIT_MODE=full 走完整 run 定稿。
+    if os.environ.get("NOVEL_AUDIT_MODE", "").lower() == "draft":
+        for t in tasks:
+            t["audit_mode"] = "draft"
+        log(f"  📝 草稿模式覆盖：{len(tasks)} 个任务全部 audit_mode=draft", state)
+
     # Save task sheet
     out_path = OUTPUT_DIR / f"arc_{arc.get('arc_id', arc_idx+1)}_tasks.json"
     # 迭代 #43: arc_N_tasks.json 是 chapter_task_queue 的磁盘镜像，
@@ -342,32 +350,63 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
         clean_text, fmt_issues, cost = raw_text, [], 0.0
     _add_cost(state, cost)
 
-    log("  🛡️  合规检查...", state)
-    try:
-        comp_result, cost = run_compliance(clean_text, state.get("platform", "fanqie"))
-        _add_cost(state, cost)
-    except Exception as e:
-        # 之前：兜底 {"passed": True}，合规失败被静默擦掉——
-        # 跟 writer stub 同型"fake pass"问题。改为：标记 _compliance_check_failed=True
-        # 并给出中性 verdict（待人工 review），route_after_pipeline 路由到 escalate。
-        log(f"ERR compliance failed: {e}", state)
-        state["error_log"] = (state.get("error_log", []) +
-                              [f"compliance failed ch{task['chapter_number']}: {e}"])
-        task["_compliance_check_failed"] = True
-        task["_compliance_feedback"]     = f"compliance check raised: {e}"
-        task["_draft_text"]              = clean_text
-        state["current_task"]            = task
-        return state
-
-    if not comp_result.get("passed", True):
-        log(f"  ❌ 合规失败", state)
-        task["_compliance_failed"]   = True
-        task["_compliance_feedback"] = comp_result.get("suggestion", "")
-        task["_draft_text"]          = clean_text
-        state["current_task"]        = task
-        return state
-
+    # 草稿模式（个人试错）：跳过 compliance + checker，只保留 writer+normalizer+tracker。
+    # 设计动机：用户在试不同开篇 / 调试 prompt 时，不想为每章花 6-9 次 LLM 调用的全
+    # 套质检成本；选定方向后再切回 full 模式走完整流程定稿。
+    # 详见 audit_mode='draft' 文档注释。
     audit_mode = task.get("audit_mode", "full")
+    # personal 平台：跳过平台合规（番茄规则这类硬约束）；checker 仍跑
+    # （结构一致性还是要的）。区别于 draft（草稿全跳）。
+    current_platform = state.get("platform", "fanqie")
+    personal_platform = current_platform in ("personal", "none", "internal")
+    if personal_platform and audit_mode != "draft":
+        log(f"  🌱 personal 平台：跳过平台合规（checker 仍跑）[platform={current_platform}]", state)
+
+    if audit_mode == "draft":
+        log("  📝 草稿模式：跳过合规 + 质检（writer+normalizer+tracker 链路）", state)
+        task["_draft_text"] = clean_text
+        # 合成一个 PASS 占位 _checker_result（save_and_track 不需要真评）
+        task["_checker_result"] = {
+            "score": 6.5,
+            "verdict": "DRAFT",
+            "dimensions": {},
+            "rewrite_level": "none",
+            "feedback": "draft mode 跳过质检",
+            "strongest_point": "",
+            "weakest_point": "",
+        }
+        task["_compliance_failed"] = False
+        state["current_task"] = task
+        qh = state.get("quality_history", [])
+        qh.append(6.5)
+        state["quality_history"] = qh[-100:]
+        return state
+
+    # personal 平台：跳 compliance，但走 checker。
+    log("  🛡️  合规检查...", state)
+    if not personal_platform:
+        try:
+            comp_result, cost = run_compliance(clean_text, state.get("platform", "fanqie"))
+            _add_cost(state, cost)
+        except Exception as e:
+            log(f"ERR compliance failed: {e}", state)
+            state["error_log"] = (state.get("error_log", []) +
+                                  [f"compliance failed ch{task['chapter_number']}: {e}"])
+            task["_compliance_check_failed"] = True
+            task["_draft_text"]              = clean_text
+            state["current_task"]            = task
+            return state
+
+        if not comp_result.get("passed", True):
+            log(f"  ❌ 合规失败", state)
+            task["_compliance_failed"]   = True
+            task["_compliance_feedback"] = comp_result.get("suggestion", "")
+            task["_draft_text"]          = clean_text
+            state["current_task"]        = task
+            return state
+    else:
+        log("  ⏭  跳过合规检查（personal 平台）", state)
+
     log(f"  🔍 质检（{audit_mode}）...", state)
     try:
         checker_result, cost = run_checker(clean_text, task, audit_mode)
@@ -436,29 +475,30 @@ def node_rewrite(state: OrchestratorState) -> OrchestratorState:
         # normalizer 失败但 rewriter 成功 → 退到 raw new_text，不丢重写结果
         clean_text, cost = new_text, 0.0
 
-    # Re-verify compliance
-    try:
-        comp_result, cost = run_compliance(clean_text, state.get("platform", "fanqie"))
-    except Exception as e:
-        # 之前：兜底 {"passed": True}，post-rewrite 合规检查抛异常被静默擦掉——
-        # 跟 node_write_pipeline 里的 compliance fake-pass 同型问题。
-        # 改为：标记 _compliance_check_failed=True，route_after_rewrite 检测到
-        # 没新 _checker_result 时走 escalate（不让未合规检查的章节落盘）。
-        log(f"ERR compliance (post-rewrite) failed: {e}", state)
-        state["error_log"] = (state.get("error_log", []) +
-                              [f"compliance (post-rewrite) failed ch{task['chapter_number']}: {e}"])
-        task["_compliance_check_failed"] = True
-        task["_draft_text"]              = clean_text
-        state["current_task"]            = task
-        return state
-    _add_cost(state, cost)
-    if not comp_result.get("passed", True):
-        log(f"  🛡️  重写后仍违规", state)
-        task["_draft_text"]          = clean_text
-        task["_compliance_failed"]   = True
-        task["_compliance_feedback"] = comp_result.get("reason", "违规内容需重写")
-        state["current_task"]        = task
-        return state
+    # Re-verify compliance — 同 write_pipeline：personal 平台跳过
+    rewrite_platform = state.get("platform", "fanqie")
+    rewrite_personal = rewrite_platform in ("personal", "none", "internal")
+    if not rewrite_personal:
+        try:
+            comp_result, cost = run_compliance(clean_text, rewrite_platform)
+        except Exception as e:
+            log(f"ERR compliance (post-rewrite) failed: {e}", state)
+            state["error_log"] = (state.get("error_log", []) +
+                                  [f"compliance (post-rewrite) failed ch{task['chapter_number']}: {e}"])
+            task["_compliance_check_failed"] = True
+            task["_draft_text"]              = clean_text
+            state["current_task"]            = task
+            return state
+        _add_cost(state, cost)
+        if not comp_result.get("passed", True):
+            log(f"  🛡️  重写后仍违规", state)
+            task["_draft_text"]          = clean_text
+            task["_compliance_failed"]   = True
+            task["_compliance_feedback"] = comp_result.get("reason", "违规内容需重写")
+            state["current_task"]        = task
+            return state
+    else:
+        log("  ⏭  跳过重写后合规检查（personal 平台）", state)
 
     try:
         cr2, cost = run_checker(clean_text, task, "lite")

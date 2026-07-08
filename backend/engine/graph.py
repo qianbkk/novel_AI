@@ -409,6 +409,34 @@ def run_graph_task(
             with redirect_stdout(capture):
                 state = run_orchestrator(state, max_chapters=chapters)
             exit_code = 0
+        elif command == "run_draft":
+            # 草稿模式：跳合规+质检（writer+normalizer+tracker 链路），
+            # 一章 2 次 LLM 调用，等同 chapter_cost 实际为完整流程的 1/3~1/4。
+            # 适合个人试错 / 多开篇试选；选定方向后切回完整 run。
+            chapters = int(args[0]) if args else 10
+            os.environ["NOVEL_AUDIT_MODE"] = "draft"
+            from .orchestrator import run_orchestrator, _setting
+            # 草稿模式把所有任务标 audit_mode='draft'。
+            # 复用 outline 生成的 tasks 但覆盖 audit_mode 字段，
+            # 不重调 outline 以免成本翻倍。
+            import json as _json
+            try:
+                if _engine_output_dir() and (Path(_engine_output_dir()) / "arc_tasks_state.json").exists():
+                    pass
+            except Exception:
+                pass
+            # 上面探针是 no-op；真正的覆盖在 orchestrator 内部：
+            # 已经在 node_load_arc_tasks 之后用 os.environ 读 NOVEL_AUDIT_MODE，
+            # 这边不再做事。orchestrator._load_state_for_project 已带 audit_mode override 钩子。
+            with redirect_stdout(capture):
+                state = run_orchestrator(state, max_chapters=chapters)
+            exit_code = 0
+        elif command == "set_audit_mode":
+            # 支持运行时切换：run D 1 chunk + set_audit_mode draft 一次 → 后续全 draft。
+            mode = (args[0] if args else "full").lower()
+            os.environ["NOVEL_AUDIT_MODE"] = mode
+            capture.write(f"  ✓ set_audit_mode={mode}\n")
+            exit_code = 0
         elif command == "status":
             with redirect_stdout(capture):
                 if state.get("current_phase"):
