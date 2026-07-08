@@ -17,6 +17,11 @@
   - 仅当直接连接 IP 在白名单内才用 X-Forwarded-For 第一段
   - 直接暴露 uvicorn 时不要配 ALLOWED_PROXIES → 自动用 request.client.host
 
+个人使用豁免（2026-07）：
+  单租户本地原型阶段，limit 127.0.0.1 / ::1 默认无限流 —— 在 localhost 上
+  自己刷自己的接口只是摩擦。生产真暴露公网时设 RATE_LIMIT_EXEMPT_LOCALHOST=0
+  关掉此豁免即可。
+
 注意：
   - 中间件用 dict 存每 IP 的窗口，时间复杂度 O(1) 摊销
   - 测试时设 RATE_LIMIT_PER_MINUTE=10000 避免误命中
@@ -179,6 +184,14 @@ _limiter = IPRateLimiter(
     max_per_minute=int(os.environ.get("RATE_LIMIT_PER_MINUTE", "60"))
 )
 
+# 本地回环豁免：默认开（个人使用），生产设 RATE_LIMIT_EXEMPT_LOCALHOST=0 关掉。
+_LOCALHOST_IPS = frozenset({"127.0.0.1", "::1"})
+
+
+def _localhost_exempt() -> bool:
+    """个人使用豁免开关：默认 True（不在限流清单里加 localhost）。"""
+    return os.environ.get("RATE_LIMIT_EXEMPT_LOCALHOST", "1").strip() not in ("0", "false", "False")
+
 
 def configure(per_minute: int) -> None:
     """重新配置限流阈值（测试 / 启动时用）。"""
@@ -224,6 +237,13 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         # - 直接连接 uvicorn：request.client.host 唯一可信源
         # - 反代：request.client.host 是反代 IP，必须在 ALLOWED_PROXIES 才信任 XFF
         direct_ip = request.client.host if request.client else "unknown"
+
+        # 个人使用豁免：本地直连（含 IPv6 ::1）默认不限流（单租户原型阶段
+        # 自己在 localhost 上刷接口是纯摩擦）。生产暴露公网时设
+        # RATE_LIMIT_EXEMPT_LOCALHOST=0 关掉。
+        if _localhost_exempt() and direct_ip in _LOCALHOST_IPS:
+            return await call_next(request)
+
         allowed = self._get_allowed_proxies()
         if allowed and _ip_in_allowed_list(direct_ip, allowed):
             # 反代在白名单内 → 信任 XFF 第一段
