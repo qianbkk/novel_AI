@@ -1,31 +1,69 @@
-"""Phase 1.5 收尾排雷 — 5 项 smoke test.
+"""Phase 1.5 收尾排雷 — pytest-discoverable smoke test.
 
-跑法: cd backend && python -m tests.test_phase1_5_smoke
+覆盖：
+  - 冷启动 + role_assignments 15 行
+  - SSE 端到端（status 命令 + stream + log/done + exit_code）
+  - 并发互斥（DB status='running' → 409）
+  - checkpoints.sqlite 路径
+  - _NodeWrapper happy + exception 路径
+  - run_mvp importable
 
-依赖: TestClient（同步），SQLite DB 落 backend/data/novel.db（项目默认），
-SqliteSaver 落 backend/data/checkpoints.sqlite。无需真 API Key。
+pytest-discoverable 版本：所有函数命名 test_*，由 `pytest tests/` 自动收集。
+
+环境隔离：用临时 SQLite DB 与原版对齐。
 """
-import time
+from __future__ import annotations
+
+import os
+import sys
+import tempfile
+import uuid
 from pathlib import Path
 from queue import Queue
 
+# 把 backend/ 加到 sys.path，方便 import app.*
+_BACKEND = Path(__file__).resolve().parent.parent
+if str(_BACKEND) not in sys.path:
+    sys.path.insert(0, str(_BACKEND))
+
+# 用临时 SQLite DB 避免污染真实数据
+_tmp_db = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
+_tmp_db.close()
+os.environ["DATABASE_URL"] = f"sqlite:///{_tmp_db.name}"
+
+import pytest
 from fastapi.testclient import TestClient
 
-from app.main import app
-from app.database import SessionLocal
-from app.models import RoleAssignment, BridgeRun, Project, NovelAIBinding, WorldSetting
+from app.main import app  # noqa: E402
+from app.database import Base, engine, SessionLocal  # noqa: E402
+from app.models import RoleAssignment, BridgeRun, Project, WorldSetting, NovelAIBinding  # noqa: E402
+
+
+# 一次性建表
+Base.metadata.create_all(bind=engine)
+
+
+@pytest.fixture(scope="module")
+def client():
+    return TestClient(app)
+
+
+@pytest.fixture
+def project_id():
+    """每个测试一个独立 project_id（避免互污染）。"""
+    return f"smoke-{uuid.uuid4().hex[:8]}"
 
 
 def _seed_project_and_binding(db, project_id: str) -> None:
     """建一个 project + NovelAIBinding + 一个空的 WorldSetting，
-    让 POST /bridge/run 能通过 _worldbuild_done / _get_project_and_binding 校验。
+    让 POST /bridge/run 能通过 _worldbuild_done 校验。
     """
     p = Project(
         id=project_id,
         title="smoke-test",
         genre="玄幻",
         config_json={},
-        status="ready",  # 绕过 worldbuild 校验
+        status="ready",
     )
     db.merge(p)
     db.merge(WorldSetting(project_id=project_id))
@@ -37,151 +75,8 @@ def _seed_project_and_binding(db, project_id: str) -> None:
     db.commit()
 
 
-def smoke_1_cold_start() -> None:
-    """1/5: 冷启动 + role_assignments 15 行"""
-    client = TestClient(app)
-    assert client.get("/health").json() == {"status": "ok"}
-    db = SessionLocal()
-    try:
-        n = db.query(RoleAssignment).count()
-    finally:
-        db.close()
-    assert n == 15, f"role_assignments 应恰好 15 行，实际 {n}"
-    print("[1/5] cold-start OK")
-
-
-def smoke_2_sse_end_to_end(project_id: str) -> None:
-    """2/5: SSE 端到端 — 触发 status 命令 + 拉 stream + 验证 log/done + done 带 exit_code
-
-    注: 用 'status' 而非 'test' 命令 — system_test 自身有 3 个 pre-existing 失败
-    (novel_AI/ 源码 bug，本 spec 不动 novel_AI/)，但 status 也能走完完整 SSE 流程。
-    """
-    db = SessionLocal()
-    try:
-        _seed_project_and_binding(db, project_id)
-    finally:
-        db.close()
-
-    client = TestClient(app)
-    r = client.post(
-        f"/projects/{project_id}/bridge/run",
-        json={"command": "status", "args": []},
-    )
-    assert r.status_code == 200, f"POST /bridge/run 返回 {r.status_code}: {r.text}"
-    run = r.json()
-    run_id = run["id"]
-
-    import json
-    events = []
-    with client.stream("GET", f"/projects/{project_id}/bridge/stream?run_id={run_id}") as resp:
-        for line in resp.iter_lines():
-            if line.startswith("data: "):
-                events.append(json.loads(line[6:]))
-            if events and events[-1].get("event") == "done":
-                break
-
-    types = {e.get("event") for e in events}
-    assert "log" in types, f"SSE 流中缺 'log' 事件，实际: {types}"
-    assert "done" in types, f"SSE 流中缺 'done' 事件，实际: {types}"
-    done_evt = [e for e in events if e.get("event") == "done"][-1]
-    assert "exit_code" in done_evt, f"done 事件应透传 exit_code，实际: {done_evt}"
-    assert done_evt["exit_code"] == 0, f"status 命令应 exit 0，实际: {done_evt}"
-    print(f"[2/5] SSE OK (events={len(events)}, types={sorted(types)}, exit_code={done_evt['exit_code']})")
-
-
-def smoke_3_concurrency_mutex(project_id: str) -> None:
-    """3/5: 并发互斥 — DB 层 BridgeRun.status='running' 兜底
-    之前有 asyncio.Lock 但从未被 acquire（dead code，迭代 #30 删除），
-    真实保护只有 DB 兜底 + lifespan 启动时 _recover_orphan_bridge_runs。
-
-    直接插一行 BridgeRun(status='running')，POST 应返 409。
-
-    注: 不测端到端 "POST → 等 running → 再 POST" 因为 TestClient + BackgroundTasks
-    在响应返回前任务就跑完了，BridgeRun 永远不出现 running 状态。uvicorn 模式下
-    这个场景会真的发生（任务异步执行），但用 TestClient 模拟不出来。
-    """
-    # SQL 兜底：插一行 running 的 BridgeRun，POST 应返 409
-    db = SessionLocal()
-    try:
-        _seed_project_and_binding(db, project_id)
-        fake_run = BridgeRun(
-            project_id=project_id,
-            command="test",
-            args_json=[],
-            status="running",
-        )
-        db.add(fake_run)
-        db.commit()
-    finally:
-        db.close()
-
-    client = TestClient(app)
-    r = client.post(
-        f"/projects/{project_id}/bridge/run",
-        json={"command": "status", "args": []},
-    )
-    assert r.status_code == 409, f"有 running BridgeRun 时 POST 应 409，实际 {r.status_code}: {r.text}"
-
-    # 清理
-    db = SessionLocal()
-    try:
-        db.query(BridgeRun).filter_by(project_id=project_id).delete()
-        db.commit()
-    finally:
-        db.close()
-
-    print("[3/5] concurrency OK (DB status='running' 409 fallback — 真实并发保护)")
-
-
-def smoke_4_checkpoints_path() -> None:
-    """4/5: checkpoints.sqlite 落在 backend/data/，不在 cwd"""
-    expected = Path(__file__).resolve().parents[1] / "data" / "checkpoints.sqlite"
-    assert expected.exists(), f"checkpoints.sqlite 应在 {expected}，实际不在"
-    stray = Path("checkpoints.sqlite")
-    assert not stray.exists(), f"cwd 下不应有 stray checkpoints.sqlite ({stray.resolve()})"
-    print(f"[4/5] checkpoints path OK ({expected})")
-
-
-def smoke_5_frontend_build() -> None:
-    """5/5: 前端 build 通过 — 走 subprocess 调 npm run build
-
-    Windows 上 subprocess 找不到 npm 时（PATH 不含 npm 安装目录），用 which 找
-    不到就 hardcode 几个常见路径，最后兜底用 shell=True 让 cmd.exe 解析。
-    """
-    import subprocess, shutil, os
-    frontend_dir = Path(__file__).resolve().parents[2] / "frontend"
-    cmd = ["npm", "run", "build"]
-    npm = shutil.which("npm") or shutil.which("npm.cmd")
-    if npm is None:
-        # 常见 Windows 安装路径兜底
-        for p in (
-            r"D:\AI\Node.js\npm.cmd",
-            r"C:\Program Files\nodejs\npm.cmd",
-            r"C:\Program Files (x86)\nodejs\npm.cmd",
-        ):
-            if os.path.exists(p):
-                npm = p
-                break
-    if npm:
-        cmd[0] = npm
-        r = subprocess.run(cmd, cwd=str(frontend_dir), capture_output=True, text=True, timeout=180)
-    else:
-        # 真的找不到，shell=True 让 cmd.exe 找
-        r = subprocess.run("npm run build", cwd=str(frontend_dir), capture_output=True, text=True,
-                           timeout=180, shell=True)
-    assert r.returncode == 0, f"npm run build 失败 (exit {r.returncode}):\nSTDOUT:\n{r.stdout[-1000:]}\nSTDERR:\n{r.stderr[-1000:]}"
-    dist = frontend_dir / "dist" / "index.html"
-    assert dist.exists(), f"{dist} 应存在"
-    print(f"[5/5] frontend build OK ({dist})")
-
-
-def _run_bridge_command_shared(client: TestClient, project_id: str, command: str, args: list | None = None) -> list[dict]:
-    """内部工具：跑一个非 LLM bridge 命令，捕获全部 SSE 事件。
-
-    注意：必须用 caller 提供的 client，不能自己新建——sse_starlette 的
-    AppStatus 是模块级单例，绑到第一个 event loop；新建 client 会触发
-    'is bound to a different event loop' 错误。
-    """
+def _run_bridge_command(client: TestClient, project_id: str, command: str, args: list | None = None) -> list[dict]:
+    """跑一个非 LLM bridge 命令，捕获全部 SSE 事件。"""
     import json
     db = SessionLocal()
     try:
@@ -204,41 +99,75 @@ def _run_bridge_command_shared(client: TestClient, project_id: str, command: str
     return events
 
 
-def smoke_6_dashboard(shared_client: TestClient) -> None:
-    """6/8: dashboard 命令走通 — novel_AI 自身的实现 bug 不归我们管，
-    只断言事件流通畅 + 我们的桥代码没崩。"""
-    import uuid
-    events = _run_bridge_command_shared(shared_client, f"smoke-dash-{uuid.uuid4().hex[:8]}", "dashboard")
+# ───────── Tests ─────────
+
+def test_cold_start(client):
+    """冷启动 + role_assignments 15 行"""
+    assert client.get("/health").json() == {"status": "ok"}
+    db = SessionLocal()
+    try:
+        n = db.query(RoleAssignment).count()
+    finally:
+        db.close()
+    assert n == 15, f"role_assignments 应恰好 15 行，实际 {n}"
+
+
+def test_sse_end_to_end(client, project_id):
+    """SSE 端到端 — status 命令拉 stream + log/done + done.exit_code=0"""
+    db = SessionLocal()
+    try:
+        _seed_project_and_binding(db, project_id)
+    finally:
+        db.close()
+    r = client.post(f"/projects/{project_id}/bridge/run", json={"command": "status", "args": []})
+    assert r.status_code == 200, f"POST /bridge/run 返回 {r.status_code}: {r.text}"
+    run_id = r.json()["id"]
+    import json
+    events = []
+    with client.stream("GET", f"/projects/{project_id}/bridge/stream?run_id={run_id}") as resp:
+        for line in resp.iter_lines():
+            if line.startswith("data: "):
+                events.append(json.loads(line[6:]))
+            if events and events[-1].get("event") == "done":
+                break
     types = {e.get("event") for e in events}
-    assert "start" in types and "log" in types and "done" in types, f"事件流不完整: {types}"
-    print(f"[6/8] dashboard OK (events={len(events)}, types={sorted(types)})")
+    assert "log" in types, f"SSE 流中缺 'log' 事件: {types}"
+    assert "done" in types, f"SSE 流中缺 'done' 事件: {types}"
+    done_evt = [e for e in events if e.get("event") == "done"][-1]
+    assert "exit_code" in done_evt
+    assert done_evt["exit_code"] == 0
 
 
-def smoke_7_budget(shared_client: TestClient) -> None:
-    """7/8: budget 命令走通（novel_AI 的 generate_report 早返回路径有 KeyError bug，
-    我们只能验证事件流通畅，不能断言 exit_code==0）。"""
-    import uuid
-    events = _run_bridge_command_shared(shared_client, f"smoke-budget-{uuid.uuid4().hex[:8]}", "budget")
-    types = {e.get("event") for e in events}
-    assert "start" in types and "log" in types and "done" in types, f"事件流不完整: {types}"
-    print(f"[7/8] budget OK (events={len(events)}, types={sorted(types)})")
+def test_concurrency_mutex_db(client, project_id):
+    """并发互斥：DB BridgeRun.status='running' 兜底（DB 层 409 fallback）"""
+    db = SessionLocal()
+    try:
+        _seed_project_and_binding(db, project_id)
+        db.add(BridgeRun(project_id=project_id, command="test", args_json=[], status="running"))
+        db.commit()
+    finally:
+        db.close()
+    r = client.post(f"/projects/{project_id}/bridge/run", json={"command": "status", "args": []})
+    assert r.status_code == 409, f"有 running BridgeRun 时 POST 应 409，实际 {r.status_code}: {r.text}"
+    # 清理
+    db = SessionLocal()
+    try:
+        db.query(BridgeRun).filter_by(project_id=project_id).delete()
+        db.commit()
+    finally:
+        db.close()
 
 
-def smoke_8_scan(shared_client: TestClient) -> None:
-    """8/8: scan 命令走通 — 一致性扫描，novel_AI 实现 bug 不归我们管。"""
-    import uuid
-    events = _run_bridge_command_shared(shared_client, f"smoke-scan-{uuid.uuid4().hex[:8]}", "scan")
-    types = {e.get("event") for e in events}
-    assert "start" in types and "log" in types and "done" in types, f"事件流不完整: {types}"
-    print(f"[8/8] scan OK (events={len(events)}, types={sorted(types)})")
+def test_checkpoints_path():
+    """checkpoints.sqlite 落在 backend/data/，不在 cwd（避免运行路径漂移）"""
+    expected = Path(__file__).resolve().parents[1] / "data" / "checkpoints.sqlite"
+    assert expected.exists(), f"checkpoints.sqlite 应在 {expected}，实际不在"
+    stray = Path("checkpoints.sqlite")
+    assert not stray.exists(), f"cwd 下不应有 stray checkpoints.sqlite ({stray.resolve()})"
 
 
-def smoke_9_node_wrapper() -> None:
-    """9/9: _NodeWrapper 单元测试 — 节点进出推 node_start/node_end 到 queue。
-
-    端到端验证需要真 LLM + 跑 graph.invoke (在 TestClient 下会撞 LangGraph 内部
-    event loop 问题)，所以这里只单测 _NodeWrapper 本身。
-    """
+def test_node_wrapper_happy_path():
+    """_NodeWrapper happy path：节点进出 emit node_start / node_end"""
     from engine.graph import _NodeWrapper
     q = Queue()
     entered = []
@@ -253,60 +182,85 @@ def smoke_9_node_wrapper() -> None:
 
     e1 = q.get_nowait()
     e2 = q.get_nowait()
-    assert e1 == {"event": "node_start", "node": "test_node"}, f"e1 错: {e1}"
-    assert e2 == {"event": "node_end", "node": "test_node"}, f"e2 错: {e2}"
-    assert entered == [42], f"entered 错: {entered}"
-    assert q.empty(), "queue 应该空了"
+    assert e1 == {"event": "node_start", "node": "test_node"}
+    assert e2 == {"event": "node_end", "node": "test_node"}
+    assert entered == [42]
+    assert q.empty()
 
-    # 异常路径：node 抛异常时 node_end 仍应 emit（finally 块）
-    q2 = Queue()
+
+def test_node_wrapper_exception_still_emits_end():
+    """_NodeWrapper exception path：node 抛异常时 node_end 仍 emit (finally 块)"""
+    from engine.graph import _NodeWrapper
+    q = Queue()
+
     def _boom(state):
         raise RuntimeError("simulated node failure")
-    wrapped_boom = _NodeWrapper("bad", _boom, q2)
+
+    wrapped = _NodeWrapper("bad", _boom, q)
     try:
-        wrapped_boom({})
+        wrapped({})
     except RuntimeError:
         pass
-    assert q2.get_nowait() == {"event": "node_start", "node": "bad"}
-    assert q2.get_nowait() == {"event": "node_end", "node": "bad"}
-
-    print("[9/9] _NodeWrapper OK (happy + exception paths both emit node_start/node_end)")
+    assert q.get_nowait() == {"event": "node_start", "node": "bad"}
+    assert q.get_nowait() == {"event": "node_end", "node": "bad"}
 
 
-def smoke_10_run_mvp_importable() -> None:
-    """10/10: run_mvp.py 可导入 + 关键函数签名对。完整 E2E 需要真后端+真项目，
-    跑 `cd backend && python -m scripts.run_mvp <project_id>` 验证。"""
+def test_run_mvp_importable():
+    """run_mvp.py 可导入 + 关键函数签名对"""
     import importlib
     mod = importlib.import_module("scripts.run_mvp")
-    assert callable(mod.main), "main 不可调用"
-    assert callable(mod.call_bridge_run), "call_bridge_run 不可调用"
-    assert callable(mod.select_bootstrap_version), "select_bootstrap_version 不可调用"
-    assert callable(mod.stream_sse), "stream_sse 不可调用"
-    print("[10/10] run_mvp importable OK (main/call_bridge_run/select_bootstrap_version/stream_sse)")
+    assert callable(getattr(mod, "main", None))
+    assert callable(getattr(mod, "call_bridge_run", None))
+    assert callable(getattr(mod, "select_bootstrap_version", None))
+    assert callable(getattr(mod, "stream_sse", None))
 
 
-if __name__ == "__main__":
-    import sys
-    import uuid
-    smoke_1_cold_start()
+def test_dashboard_command(client, project_id):
+    """dashboard 命令走通 — novel_AI 实现自身的 bug 不归我们管，只断言事件流完整。
+    TestClient 下 event loop 复用；shared client 保证不会触发
+    'is bound to a different event loop' 错误。
+    """
+    events = _run_bridge_command(client, project_id, "dashboard")
+    types = {e.get("event") for e in events}
+    assert "start" in types and "log" in types and "done" in types, f"事件流不完整: {types}"
 
-    pid_sse = f"smoke-sse-{uuid.uuid4().hex[:8]}"
-    smoke_2_sse_end_to_end(pid_sse)
 
-    pid_mutex = f"smoke-mutex-{uuid.uuid4().hex[:8]}"
-    smoke_3_concurrency_mutex(pid_mutex)
-    smoke_4_checkpoints_path()
-    smoke_5_frontend_build()
+def test_budget_command(client, project_id):
+    """budget 命令走通"""
+    events = _run_bridge_command(client, project_id, "budget")
+    types = {e.get("event") for e in events}
+    assert "start" in types and "log" in types and "done" in types
 
-    # smoke 6/7/8 在 TestClient 下 flaky（sse_starlette AppStatus 绑到第一个
-    # event loop，第二个 stream 撞 'bound to different loop'）。uvicorn 模式下
-    # 没问题（持久 event loop）。opt-in via `--with-deep` flag。
-    if "--with-deep" in sys.argv:
-        shared = TestClient(app)
-        smoke_6_dashboard(shared)
-        smoke_7_budget(shared)
-        smoke_8_scan(shared)
 
-    smoke_9_node_wrapper()
-    smoke_10_run_mvp_importable()
-    print("\nAll 10 smokes passed.")
+def test_scan_command(client, project_id):
+    """scan 命令走通 — 一致性扫描"""
+    events = _run_bridge_command(client, project_id, "scan")
+    types = {e.get("event") for e in events}
+    assert "start" in types and "log" in types and "done" in types
+
+
+@pytest.mark.skip(reason="需要 npm + frontend install；非默认 CI 必跑")
+def test_frontend_build():
+    """前端 build 通过 — 默认 skip（仅在本地手测 / release 前跑）。
+    跑法：移除 skip marker，`pytest tests/test_phase1_5_smoke.py::test_frontend_build -v`
+    """
+    import shutil
+    import subprocess
+    frontend_dir = Path(__file__).resolve().parents[2] / "frontend"
+    cmd = ["npm", "run", "build"]
+    npm = shutil.which("npm") or shutil.which("npm.cmd")
+    if npm is None:
+        for p in (
+            r"D:\AI\Node.js\npm.cmd",
+            r"C:\Program Files\nodejs\npm.cmd",
+            r"C:\Program Files (x86)\nodejs\npm.cmd",
+        ):
+            if os.path.exists(p):
+                npm = p
+                break
+    if not npm:
+        pytest.skip("npm not found on PATH")
+    cmd[0] = npm
+    r = subprocess.run(cmd, cwd=str(frontend_dir), capture_output=True, text=True, timeout=180)
+    assert r.returncode == 0, f"npm run build 失败:\nSTDOUT: {r.stdout[-1000:]}\nSTDERR: {r.stderr[-1000:]}"
+    assert (frontend_dir / "dist" / "index.html").exists()
