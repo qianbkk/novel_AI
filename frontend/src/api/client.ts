@@ -141,6 +141,13 @@ export const api = {
       body: JSON.stringify({ command, args, outline_mode: outlineMode }),
     }),
 
+  /** 切换 audit_mode（草稿 / 完整 / 精简）。下次 run 启动时通过 env 传给 subprocess。 */
+  setAuditMode: (projectId: string, mode: "full" | "lite" | "draft") =>
+    request<{ mode: string }>(`/projects/${projectId}/bridge/set-audit-mode`, {
+      method: "POST",
+      body: JSON.stringify({ mode }),
+    }),
+
   bridgeStreamUrl: (projectId: string, bridgeRunId: string) => {
     const params = new URLSearchParams({ run_id: bridgeRunId });
     return `${API_BASE}/projects/${projectId}/bridge/stream?${params.toString()}`;

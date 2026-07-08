@@ -14,6 +14,7 @@ const RUN_COMMANDS = [
   { label: "生成设定包", command: "planner", args: [] },
   { label: "黄金三章", command: "bootstrap", args: [] },
   { label: "写10章", command: "run", args: ["10"] },
+  { label: "写10章 (草稿)", command: "run_draft", args: ["10"] },
   { label: "质量看板", command: "dashboard", args: [] },
   { label: "一致性扫描", command: "scan", args: [] },
   { label: "文风指纹", command: "fingerprint", args: [] },
