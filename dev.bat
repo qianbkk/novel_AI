@@ -1,6 +1,6 @@
 ﻿@echo off
 REM ============================================================
-REM   Novel AI Fusion - Dev Manager
+REM   NovelAI 后端管理 - 本地启动
 REM   File encoding: UTF-8 with BOM
 REM   Platform: Windows 10/11
 REM   Purpose: start / stop / status / log backend + frontend
@@ -10,7 +10,7 @@ REM 1) Force UTF-8 code page FIRST so cmd can echo CJK correctly.
 chcp 65001 >nul
 
 REM 2) Title (use a CJK-safe string)
-title Novel AI Fusion - Dev Manager
+title NovelAI 后端管理 - 本地启动
 
 REM 3) Enable extensions + delayed expansion
 setlocal EnableExtensions EnableDelayedExpansion
@@ -47,7 +47,7 @@ goto :main_start
 :print_banner
 echo.
 echo %CYAN%============================================================%RESET%
-echo %CYAN%   Novel AI Fusion - Dev Manager%RESET%
+echo %CYAN%   NovelAI 后端管理 - 本地启动%RESET%
 echo %CYAN%============================================================%RESET%
 echo   Backend  : http://%BACKEND_HOST%:%BACKEND_PORT%  (uvicorn)
 echo   Frontend : http://%FRONTEND_HOST%:%FRONTEND_PORT%  (vite)
