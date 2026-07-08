@@ -142,6 +142,7 @@ app.add_middleware(RateLimitMiddleware)
 
 app.include_router(projects.router)
 app.include_router(worldbuild.router)
+app.include_router(worldbuild.meta_router)  # /worldbuild/stages (无 project_id)
 app.include_router(chapters.router)
 app.include_router(providers.router)
 app.include_router(role_assignments.router)

@@ -241,6 +241,16 @@ export interface StageEvent {
   error?: string;
 }
 
+/** 后端 GET /worldbuild/stages 返回的阶段清单（之前 WorldBuild.tsx 硬编码） */
+export interface StageInfo {
+  key: string;
+  label: string;
+}
+
+export interface StageListOut {
+  stages: StageInfo[];
+}
+
 // ─── 规则中心（RuleCenter）───
 export interface RuleConfig {
   project_id: string;

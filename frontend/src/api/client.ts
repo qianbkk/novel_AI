@@ -2,6 +2,7 @@ import type {
   Project,
   JobStatus,
   WorldBuildResult,
+  StageListOut,
   ChapterListItem,
   ChapterFull,
   ChapterCharacter,
@@ -83,6 +84,9 @@ export const api = {
 
   getWorldbuildResult: (projectId: string) =>
     request<WorldBuildResult>(`/projects/${projectId}/worldbuild/result`),
+
+  /** 10 阶段清单：避免前端硬编码跟后端 STAGES 漂移 */
+  listWorldbuildStages: () => request<StageListOut>("/worldbuild/stages"),
 
   /** SSE 流不走 fetch，单独提供一个建好的 EventSource，调用方自己 addEventListener */
   worldbuildStreamUrl: (projectId: string, jobId: string) =>

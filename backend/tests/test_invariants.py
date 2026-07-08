@@ -900,6 +900,48 @@ class TestReportsPathUnified:
             f"_state_path 没走 NOVEL_AI_DIR env：{result}"
         )
 
+
+class TestWorldbuildStagesEndpoint:
+    """锁死 GET /worldbuild/stages 端点存在 + 返回 10 阶段 — 防止前后端 STAGES 漂移。
+
+    之前 WorldBuild.tsx 硬编码 STAGES 数组，改后端 stages.py 忘改前端会导致
+    进度条错位。这一对端点 + invariant 让前端 WorldBuild.tsx 不再需要手动同步。
+    """
+    def test_endpoint_registered_in_app(self):
+        """FastAPI app 必须注册 GET /worldbuild/stages"""
+        from app.main import app
+        paths = {r.path for r in app.routes if hasattr(r, "path")}
+        assert "/worldbuild/stages" in paths, (
+            "GET /worldbuild/stages 未注册 (前端 WorldBuild.tsx 需要它拉 10 阶段)"
+        )
+
+    def test_meta_router_has_no_project_id(self):
+        """meta_router 路径不能含 {project_id} — STAGES 是全局常量"""
+        from app.api.worldbuild import meta_router
+        for r in meta_router.routes:
+            if hasattr(r, "path"):
+                assert "{project_id}" not in r.path, (
+                    f"meta_router 路径含 project_id 占位符：{r.path}"
+                )
+
+    def test_stages_list_matches_known_count(self):
+        """stages.py::STAGES 必须恰好 10 条 — WorldBuild 进度条按 10 等分计算"""
+        from app.worldbuild.stages import STAGES
+        assert len(STAGES) == 10, (
+            f"STAGES 数量变更需同步 WorldBuild.tsx 进度条逻辑，当前 {len(STAGES)}"
+        )
+
+
+# ───────────────────────────────────────────
+# Z: Worldbuild 阶段端点（前端不再硬编码 STAGES）
+
+
+# ───────────────────────────────────────────
+# Y: reports.py 路径统一（与 engine 一致走 NOVEL_AI_DIR env）
+# ───────────────────────────────────────────
+class TestReportsPathUnifiedExtra:
+    """(合并自原 TestReportsPathUnified 的最后一项)"""
+
     def test_reports_state_path_fallback_without_env(self, monkeypatch):
         """NOVEL_AI_DIR 没设置时，_state_path 必须 fallback 到参数。"""
         monkeypatch.delenv("NOVEL_AI_DIR", raising=False)
@@ -909,6 +951,10 @@ class TestReportsPathUnified:
         assert str(result) == expected, (
             f"_state_path fallback 失败：{result}（期望 {expected}）"
         )
+
+
+# ───────────────────────────────────────────
+# Z: Worldbuild 阶段端点（前端不再硬编码 STAGES）
 
 
 # ───────────────────────────────────────────

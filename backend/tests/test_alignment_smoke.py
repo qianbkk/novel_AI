@@ -224,6 +224,29 @@ def test_project_set_platform_invalid(client, _bootstrap):
     assert r.status_code == 400, r.text
 
 
+def test_worldbuild_stages_endpoint(client):
+    """GET /worldbuild/stages 返回 10 阶段清单 — 防止前后端 STAGES 漂移
+
+    这是为了让前端 WorldBuild.tsx 不再硬编码 STAGES 数组。
+    后端返回的 key 必须包含所有 10 个 known stage (防止漏写 / 改名)。
+    """
+    r = client.get("/worldbuild/stages")
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert "stages" in data
+    keys = {s["key"] for s in data["stages"]}
+    expected = {
+        "parse_config", "world_basics", "plot_skeleton", "characters",
+        "relations", "foreshadowing", "map", "factions_power",
+        "currency_special", "consistency_check",
+    }
+    missing = expected - keys
+    assert not missing, f"stages 缺字段: {missing}"
+    # label 不可为空字符串（前端拿这个渲染）
+    for s in data["stages"]:
+        assert s["label"], f"stage {s['key']} label 为空"
+
+
 def test_bridge_run_request_includes_outline_mode():
     """Schema: BridgeRunRequest 含 outline_mode 字段"""
     from app.schemas import BridgeRunRequest

@@ -4,10 +4,10 @@ import { api } from "../api/client";
 import type { Project, WorldBuildResult, StageEvent, MapNode, ForeshadowingRow } from "../types";
 import { RelationGraph } from "../components/RelationGraph";
 
-// 跟后端 worldbuild/stages.py 里的 STAGES 保持一致——原型阶段先手动同步，
-// 更稳妥的做法是让后端在 /worldbuild/start 的响应里把阶段清单带回来，
-// 见 README「已知限制」。
-const STAGES: { key: string; label: string }[] = [
+// 阶段清单从后端 GET /worldbuild/stages 动态拉，避免前后端 STAGES 漂移。
+// 离线/后端不可达时 fallback 到这份内联默认（同时给首屏立即可渲染的骨架），
+// 保证 fetch 失败也不闪屏。
+const FALLBACK_STAGES: { key: string; label: string }[] = [
   { key: "parse_config", label: "分析配置参数" },
   { key: "world_basics", label: "基本信息·世界观" },
   { key: "plot_skeleton", label: "规划情节脉络" },
@@ -35,6 +35,7 @@ export default function WorldBuild() {
   const navigate = useNavigate();
 
   const [project, setProject] = useState<Project | null>(null);
+  const [stages, setStages] = useState<{ key: string; label: string }[]>(FALLBACK_STAGES);
   const [stageStatus, setStageStatus] = useState<Record<string, StageStatus>>({});
   const [progress, setProgress] = useState(0);
   const [building, setBuilding] = useState(false);
@@ -58,12 +59,31 @@ export default function WorldBuild() {
     return () => eventSourceRef.current?.close();
   }, [projectId]);
 
+  // 阶段清单从后端拉（不阻塞首屏 — FALLBACK_STAGES 已就位）
+  useEffect(() => {
+    api.listWorldbuildStages()
+      .then((r) => {
+        if (Array.isArray(r.stages) && r.stages.length > 0) {
+          setStages(r.stages);
+          // 用后端真实清单重置 stageStatus，确保新增 stage 也被覆盖
+          setStageStatus((prev) => {
+            const next: Record<string, StageStatus> = {};
+            for (const s of r.stages) {
+              next[s.key] = prev[s.key] ?? "pending";
+            }
+            return next;
+          });
+        }
+      })
+      .catch(() => {/* 静默用 FALLBACK_STAGES — 已注 */});
+  }, []);
+
   async function handleStart() {
     if (!projectId) return;
     setError(null);
     setBuilding(true);
     setProgress(0);
-    setStageStatus({ [STAGES[0].key]: "active" });
+    setStageStatus({ [stages[0].key]: "active" });
 
     const job = await api.startWorldbuild(projectId);
     const es = new EventSource(api.worldbuildStreamUrl(projectId, job.id));
@@ -185,7 +205,7 @@ export default function WorldBuild() {
                 <div className="progress-fill" style={{ width: `${progress}%` }} />
               </div>
               <ul className="stage-list">
-                {STAGES.map((s) => {
+                {stages.map((s) => {
                   const status = stageStatus[s.key] || "pending";
                   return (
                     <li key={s.key} className={`stage-item ${status}`}>

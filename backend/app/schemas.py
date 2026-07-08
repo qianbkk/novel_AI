@@ -246,3 +246,13 @@ class AiAssistLevelUpdate(BaseModel):
 
 
 # ─── outline_mode 已合并到 BridgeRunRequest ───
+
+
+# ─── Worldbuild 阶段清单（前端 WorldBuild.tsx 不再硬编码）──
+class StageInfo(BaseModel):
+    key: str
+    label: str
+
+
+class StageListOut(BaseModel):
+    stages: list[StageInfo]

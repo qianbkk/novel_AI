@@ -9,10 +9,21 @@ from ..models import (
     Project, GenerationJob, WorldSetting, Character, Faction,
     PowerSystem, MapNode, Foreshadowing, Currency, EntityRelation,
 )
-from ..schemas import JobOut
+from ..schemas import JobOut, StageListOut
 from ..worldbuild.orchestrator import run_worldbuild_job, get_job_queue, cleanup_job_queue
 
 router = APIRouter(prefix="/projects/{project_id}/worldbuild", tags=["worldbuild"])
+# 不带 project_id 前缀 — STAGES 是全局常量，跟具体项目无关
+meta_router = APIRouter(prefix="/worldbuild", tags=["worldbuild"])
+
+
+@meta_router.get("/stages", response_model=StageListOut)
+def list_worldbuild_stages():
+    """暴露 10 阶段清单给前端 WorldBuild.tsx — 之前前端硬编码 STAGES 数组，
+    改一端忘改另一端就会进度条错位。DB-free 端点，前端首次挂载 fetch 一次即可。
+    """
+    from ..worldbuild.stages import STAGES
+    return {"stages": [{"key": k, "label": lbl} for (k, lbl, _fn) in STAGES]}
 
 
 @router.post("/start", response_model=JobOut)
