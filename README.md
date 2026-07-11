@@ -21,6 +21,10 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8132
 ```
 
+> **多用户认证**：v2 起 `register` / `login` 端点可用，但 **dev 模式（默认）仍是单租户**——不登录也能用所有功能，方便本地原型。
+> 真要多用户隔离时设 `NOVEL_PRODUCTION=1` 启动后端（fail-fast 强制鉴权）。
+> 详见 `docs/superpowers/plans/2026-07-11-phase3-launch-trigger.md`。
+
 前端：
 
 ```bash

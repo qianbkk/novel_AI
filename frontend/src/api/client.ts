@@ -26,6 +26,9 @@ import type {
   CharacterRelation,
   RelationGraph,
   WorldviewRichOut,
+  // Phase 4 认证
+  User,
+  TokenResponse,
 } from "../types";
 
 // 后端地址：默认 8132（开发用），部署时改 frontend/.env 里的 VITE_API_BASE
@@ -33,11 +36,59 @@ import type {
 // 强抢会失败。统一走 8132 避免「前端 404、后端没起来」这种误判。
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8132";
 
+// ─── Phase 4：JWT token 管理 ───
+const TOKEN_KEY = "novel_ai_jwt";
+
+export function getStoredToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setStoredToken(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(TOKEN_KEY, token);
+    else localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // localStorage 不可用（隐私模式 / SSR）→ 退化为内存态
+    // 不抛错：组件层 401 仍能提示用户登录
+  }
+}
+
+/** 触发自定义事件，UI 可监听这个决定是否弹出登录对话框。 */
+export function dispatchAuthRequired(): void {
+  try {
+    window.dispatchEvent(new CustomEvent("novel_ai:auth_required"));
+  } catch {
+    // ignore
+  }
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...((options?.headers as Record<string, string>) || {}),
+  };
+  // Phase 4：有 token 就带 Authorization（dev 模式无 token 也允许）
+  const token = getStoredToken();
+  if (token && !headers["Authorization"]) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
   const resp = await fetch(`${API_BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
     ...options,
+    headers,
   });
+
+  if (resp.status === 401) {
+    // 生产模式下后端会拒绝无 token 请求；dev 模式实际不会触发。
+    // 仅清 token（不立即抛）→ 让上层路由用 catch 处理。
+    setStoredToken(null);
+    dispatchAuthRequired();
+  }
+
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
     throw new Error(`请求失败 ${resp.status}: ${path} ${text}`);
@@ -252,4 +303,51 @@ export const api = {
 
   getRelationsGraph: (projectId: string) =>
     request<RelationGraph>(`/projects/${projectId}/relations/graph`),
+
+  // ─── Phase 4：多用户认证 ───
+  // dev 模式（默认）：上面所有端点在没有 token 时仍可访问（兼容旧用户）
+  // production 模式（NOVEL_PRODUCTION=1）：必须先 register / login 才能用
+  register: async (payload: {
+    email: string;
+    password: string;
+    display_name?: string | null;
+  }): Promise<TokenResponse> => {
+    const data = await request<TokenResponse>("/auth/register", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    setStoredToken(data.access_token);
+    return data;
+  },
+
+  login: async (payload: { email: string; password: string }): Promise<TokenResponse> => {
+    const data = await request<TokenResponse>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    setStoredToken(data.access_token);
+    return data;
+  },
+
+  logout: (): void => {
+    setStoredToken(null);
+  },
+
+  /** 带 timeout 守卫的 /auth/me：当后端 fail-fast / 401 时返回 null 而非抛。 */
+  meOrNull: async (): Promise<User | null> => {
+    const token = getStoredToken();
+    if (!token) return null;
+    try {
+      return await request<User>("/auth/me");
+    } catch {
+      setStoredToken(null);
+      return null;
+    }
+  },
+
+  changePassword: (payload: { old_password: string; new_password: string }) =>
+    request<{ ok: boolean }>("/auth/change-password", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 };

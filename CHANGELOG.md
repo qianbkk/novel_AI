@@ -4,6 +4,53 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased] — 2026-07-11
+
+### Phase 4 — 多用户认证 + 上线基础设施（`d91db8d`）
+
+把 Phase 3 备忘录里"只在决定上线时触发"的事项全部预先实现：从单租户本地原型变成"生产-ready 基础设施已就绪"。
+
+- **认证层**
+  - 新增 `User` 表（email unique + bcrypt password_hash + display_name）
+  - `app/auth.py`：bcrypt 哈希 + PyJWT 签发 / 解析 + JWT secret dev 持久化（仿 MASTER_KEY 模式 backend/data/.dev_jwt_secret，gitignored）
+  - `app/api/auth.py`：POST /auth/{register,login,change-password} + GET /auth/me
+  - `get_current_user_optional` / `get_current_user_required` 两个 FastAPI 依赖
+  - `requirements.txt`：bcrypt ≥ 4.0、PyJWT ≥ 2.8
+
+- **数据隔离（`app/auth_scope.py`）**
+  - `require_owned_project` / `owner_filter_clause` 两个 helper
+  - 路由层接入：projects.py 创建项目自动 stamp owner_id；bridge.py 全 13 个端点加 owner 校验
+  - dev 模式兼容：无 token 仍可访问（兼容旧 client）；生产模式（NOVEL_PRODUCTION=1）强制鉴权
+
+- **生产模式启动校验（`app/main.py`）**
+  - `_check_production_hardening`：NOVEL_PRODUCTION=1 时 fail-fast 拦截
+  - 检查：ALLOWED_ORIGINS 含 localhost / \* / RATE_LIMIT_EXEMPT_LOCALHOST 未设 0 / JWT_SECRET 未设
+
+- **Alembic 迁移基础设施**
+  - 新增 alembic/ 目录：env.py（动态从 env 读 DATABASE_URL + render_as_batch）+ 2 个 revision
+  - 0001_baseline：空 upgrade，仅为 `alembic stamp head` baseline 已存在 DB
+  - 0002_phase4_users：建 users 表
+  - 与 app/migrations.py 并存：migrations.py 仍跑 idempotent ALTER；alembic 处理显式版本化变更
+
+- **前端联调**
+  - api/client.ts：token 存 localStorage + 自动附 Authorization + 401 触发登录 dialog
+  - components/LoginDialog.tsx：register / login 切换 + 错误友好提示
+  - App.tsx：侧栏账号区块（未登录显示"登录/注册"，登录后显示 email + 登出）
+
+- **测试拆分（Stage 3.1）**
+  - `test_invariants.py` 8500 行 / 110 类拆 14 个文件（tests/invariants/test_<domain>.py）
+  - 原 test_invariants.py 改成 ~10 行 re-export shim，向后兼容
+
+- **回归**：34 个新测试全 pass
+  - `test_auth.py`（13）：register / login / me / change-password / 重复 email / 弱密码 / 哈希非明文
+  - `test_auth_isolation.py`（8）：跨用户 403 + 首次注册 backfill + 伪造签名等同未登录 + legacy NULL 共享
+  - `test_production_hardening.py`（7）：dev 通过 + 4 类 prod fail + 多 issue 合并
+  - `test_alembic.py`（6）：env.py / versions 列出 / clean DB upgrade / existing DB stamp / revision 源码结构
+
+- **设计文档**
+  - `docs/superpowers/plans/2026-07-11-phase4-queue-migration.md`：将来何时 / 如何从 subprocess 迁到任务队列（trigger + 选项 + 步骤）
+  - `docs/superpowers/plans/2026-07-11-phase3-launch-trigger.md`：上线决策 6 个判断信号
+
 ## [Unreleased] — 2026-07-06
 
 ### Feature（世界构建板块根本性改造 — 7 个 phase commit）

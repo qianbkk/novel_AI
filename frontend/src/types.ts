@@ -458,3 +458,23 @@ export interface WorldviewRichOut {
   fallback_text: string | null;
   fallback_story_core: string | null;
 }
+
+// ─── Phase 4：多用户认证类型 ───
+export interface User {
+  id: string;
+  email: string;
+  display_name: string | null;
+  created_at: string;
+}
+
+export interface TokenResponse {
+  access_token: string;
+  token_type: "bearer";
+  expires_in: number;
+  user: User;
+}
+
+export interface AuthErrorEvent {
+  /** CustomEvent detail for "auth required" signals from api client. */
+  reason: "missing" | "expired";
+}

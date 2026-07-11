@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Routes, Route, NavLink, useLocation } from "react-router-dom";
 import Dashboard from "./pages/Dashboard";
 import NewProject from "./pages/NewProject";
@@ -8,6 +9,8 @@ import RoleAssignments from "./pages/RoleAssignments";
 import BridgeConsole from "./pages/BridgeConsole";
 import RuleCenter from "./pages/RuleCenter";
 import CharacterCard from "./pages/CharacterCard";
+import { LoginDialog } from "./components/LoginDialog";
+import { api, getStoredToken } from "./api/client";
 
 const GLOBAL_LINKS = [
   { to: "/", label: "项目" },
@@ -20,6 +23,27 @@ export default function App() {
   // Detect "in a project" route for sub-nav
   const projectMatch = location.pathname.match(/^\/projects\/([^/]+)/);
   const projectId = projectMatch?.[1];
+
+  // ─── Phase 4：登录态管理 ───
+  // 优先从 localStorage 恢复；没有 token 时显示"匿名"。
+  // 暴露 meOrNull 检查真有效性（token 存在但失效会清掉并显示"匿名"）。
+  const [authEmail, setAuthEmail] = useState<string | null>(null);
+  const [authDialogOpen, setAuthDialogOpen] = useState(false);
+
+  useEffect(() => {
+    // mount 时：若 localStorage 有 token 就静默验签 (/auth/me)。
+    // 失败则清掉；成功则把 email 显示在侧栏。
+    if (!getStoredToken()) {
+      setAuthEmail(null);
+      return;
+    }
+    api.meOrNull().then((u) => setAuthEmail(u?.email ?? null));
+
+    // 监听后端 401 事件（仅 production 模式会真正发）
+    const onAuthRequired = () => setAuthDialogOpen(true);
+    window.addEventListener("novel_ai:auth_required", onAuthRequired);
+    return () => window.removeEventListener("novel_ai:auth_required", onAuthRequired);
+  }, []);
 
   return (
     <div className="app-shell">
@@ -66,6 +90,50 @@ export default function App() {
               {l.label}
             </NavLink>
           ))}
+        </div>
+
+        {/* 登录态指示器（Phase 4） — 用户主动登录 / 匿名标记 */}
+        <div className="sidebar-section">
+          <div className="sidebar-section__label">账号</div>
+          {authEmail ? (
+            <>
+              <div
+                title={authEmail}
+                style={{
+                  padding: "4px 0",
+                  fontSize: 13,
+                  color: "var(--fg, #000)",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {authEmail}
+              </div>
+              <a
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault();
+                  api.logout();
+                  setAuthEmail(null);
+                }}
+                className="sidebar-link"
+                style={{ fontSize: 12, opacity: 0.7 }}
+              >
+                <span className="sidebar-link__dot" />
+                登出
+              </a>
+            </>
+          ) : (
+            <a
+              href="#"
+              onClick={(e) => { e.preventDefault(); setAuthDialogOpen(true); }}
+              className="sidebar-link"
+            >
+              <span className="sidebar-link__dot" />
+              登录 / 注册
+            </a>
+          )}
         </div>
 
         {projectId && (
@@ -132,6 +200,12 @@ export default function App() {
         </Routes>
         </div>
       </main>
+
+      <LoginDialog
+        open={authDialogOpen}
+        onClose={() => setAuthDialogOpen(false)}
+        onAuthed={(email) => setAuthEmail(email)}
+      />
     </div>
   );
 }
