@@ -35,51 +35,10 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
     """拆解一弧为章节任务清单。
     memory 为 L2 hot layer dict（或完整 memory，自动取 hot）。
     """
-    mc      = setting.get("protagonist", {}) or {}
-    chars   = setting.get("key_characters", [])
-    levels  = setting.get("power_system", {}).get("levels", [])
-    hot     = memory.get("hot", memory)  # 兼容新旧 schema
-
-    char_list  = "\n".join(f"  {c['name']}（{c['role']}）" for c in chars)
-    level_str  = " | ".join(f"Lv{l['level']}:{l['name']}" for l in levels)
-    threads    = hot.get("active_threads", [])
-    threads_str = "\n".join(f"  - {t}" for t in threads) or "  无"
-
     print(f"📋 [Outline] 拆解弧{arc.get('arc_id', '?')}「{arc.get('arc_name','?')}」"
           f"（{arc.get('estimated_chapters', '?')}章，起始Ch{start_chapter}）")
 
-    user_prompt = f"""【弧信息】
-弧{arc.get('arc_id', '?')}「{arc.get('arc_name','?')}」
-目标：{arc.get('arc_goal','')}
-预计章节：{arc.get('estimated_chapters','?')}章（起始：第{start_chapter}章）
-高潮：{arc.get('arc_climax_description','')}
-情绪曲线：{arc.get('emotion_curve','')}
-本弧引入角色：{', '.join(arc.get('new_characters_introduced', []))}
-弧结束状态：{arc.get('arc_ending_state','')}
-
-【主角】{mc.get('name','陆承')} | 当前等级：{hot.get('protagonist_level','感债者')} | 点数：{hot.get('protagonist_points',0)}
-【力量层级】{level_str}
-【可用角色】
-{char_list}
-【活跃剧情线（需在本弧推进或收尾）】
-{threads_str}
-
-输出JSON数组（{arc.get('estimated_chapters','?')}个任务）：
-[{{
-  "chapter_number": {start_chapter},
-  "chapter_role": "铺垫|发展|爽点|弧高潮|过渡",
-  "chapter_goal": "本章核心任务（一句话）",
-  "main_characters": ["角色名"],
-  "shuang_type": "{SHUANG_LIST}中之一，或null",
-  "shuang_description": "爽感场景具体描述，无爽点则空字符串",
-  "ending_hook_type": "{HOOK_LIST}中之一",
-  "ending_hook_description": "结尾钩子具体方向",
-  "setting_constraints": ["约束1"],
-  "forbidden_actions": ["禁止事项1"],
-  "target_length": "2000-2200",
-  "audit_mode": "full",
-  "is_arc_climax": false
-}}]"""
+    user_prompt = _build_user_prompt(arc, start_chapter, setting, memory)
 
     router: LLMRouter | None = get_active_router()
     if router is None:
@@ -91,15 +50,7 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
         max_tokens=8000,
         temperature=0.75,
     )
-    resp = resp.strip()
-    if resp.startswith("```"):
-        lines = resp.split("\n")
-        resp = "\n".join(lines[1:])
-        if resp.strip().endswith("```"):
-            resp = resp.strip()[:-3].strip()
-    start = resp.find('['); end = resp.rfind(']') + 1
-    if start >= 0 and end > start:
-        resp = resp[start:end]
+    resp = _extract_json_array(resp)
     try:
         tasks = json.loads(resp)
     except json.JSONDecodeError:
@@ -107,13 +58,7 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
         resp2 = re.sub(r',\s*]', ']', resp2)
         tasks = json.loads(resp2)
 
-    # 标记弧高潮
-    if tasks:
-        climax_idx = min(arc.get("arc_climax_chapter_offset", len(tasks) - 3), len(tasks) - 1)
-        tasks[climax_idx]["is_arc_climax"]  = True
-        tasks[climax_idx]["target_length"]  = "3000-3300"
-        tasks[climax_idx]["audit_mode"]     = "full"
-        tasks[climax_idx]["chapter_role"]   = "弧高潮"
+    _mark_arc_climax(tasks, arc)
 
     # 校验钩子类型合法性
     valid_hooks = set(HOOK_TYPES.keys())
@@ -155,31 +100,149 @@ def run_outline_card(arc: dict, start_chapter: int, setting: dict,
                      memory: dict) -> tuple[list, float]:
     """抽卡探索模式：生成 3 个候选分支，每个分支是一组完整的 chapter tasks。
 
-    P3 阶段：调一次 LLM 拿到 3 个候选；第一个候选的 tasks 被默认采纳进
-    chapter_task_queue，另外 2 个作为 outline_candidates 留给前端三选一。
+    实现：3 次实际 LLM 调用，每次用不同的 flavor 加权（爽点密集 / 悬疑反转 /
+    情感共鸣）。3 个候选的 tasks 必须**真实不同**——审计师曾在 P3 阶段发现
+    B/C 分支直接 reuse A 的 batch_tasks（同一个任务清单假装 3 个候选），
+    导致前端用户选 B/C 拿到的内容跟 A 完全一样，看起来在跑实则静默假功能。
+
+    A 分支仍然复用 run_outline() 的 batch 任务（保证跟非抽卡模式一致），
+    B/C 分支走独立 LLM 调用，复用 OUTLINE_SYSTEM 但加一段 flavor 指导。
     """
-    # 复用 batch 模式作为 A 分支（保证一致性），另外 B/C 用 LLM 生成不同 flavor
+    # A = 完整 batch 的爽点密集版（与 run_outline 同源）
     batch_tasks, batch_cost = run_outline(arc, start_chapter, setting, memory)
 
-    # P3 stub：实际实现需要给 LLM 发 3 次不同 prompt。这里 mock 出 3 个分支
-    candidates = [
-        {
-            "branch": "A",
-            "flavor": "爽点密集",
-            "tasks": batch_tasks,
-        },
-        {
-            "branch": "B",
-            "flavor": "悬疑反转",
-            "tasks": batch_tasks,  # P3 stub: 实际应该是 LLM 重新生成的悬念版
-        },
-        {
-            "branch": "C",
-            "flavor": "情感共鸣",
-            "tasks": batch_tasks,  # P3 stub: 实际应该是 LLM 重新生成的情感版
-        },
+    router: LLMRouter | None = get_active_router()
+    if router is None:
+        router = LLMRouter()
+
+    # B/C 各自独立 prompt 走 LLM，每次拿独立 cost 累加
+    candidates: list[dict] = [
+        {"branch": "A", "flavor": "爽点密集", "tasks": batch_tasks},
     ]
-    return candidates, batch_cost
+    total_cost = batch_cost
+
+    branch_definitions = [
+        ("B", "悬疑反转",
+         "本分支强调悬疑与反转。每 7 章安排一个反转点（剧情/身份/立场反转）；"
+         "钩子类型优先「悬念钩」「反转钩」「信息钩」；少用爽点章。"),
+        ("C", "情感共鸣",
+         "本分支强调角色互动与情感曲线。爽点不密集，但每个章节都有一对角色"
+         "产生重要对话或冲突；钩子类型优先「情感钩」「危机钩」；可减少纯动作章。"),
+    ]
+
+    for branch, flavor, flavor_directive in branch_definitions:
+        # 复用 OUTLINE_SYSTEM 但 user_prompt 末尾加 flavor 指导
+        flavored_user = (
+            _build_user_prompt(arc, start_chapter, setting, memory)
+            + f"\n\n【{flavor}专属约束】\n{flavor_directive}"
+        )
+        try:
+            resp, branch_cost = router.call(
+                agent_name="outline",
+                system_prompt=OUTLINE_SYSTEM,
+                user_prompt=flavored_user,
+                max_tokens=8000,
+                temperature=0.75,
+            )
+            resp = _extract_json_array(resp)
+            branch_tasks = json.loads(resp)
+        except Exception:
+            # 单个分支失败不应让整次抽卡崩掉 —— fallback 复用 A 任务，
+            # log warning 让用户/审计能看到
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "outline_card branch %s (%s) LLM call failed, "
+                "fallback to branch A tasks", branch, flavor,
+            )
+            branch_tasks = list(batch_tasks)  # 深拷贝避免下游改 A 时串改
+            branch_cost = 0.0
+        total_cost += branch_cost
+        candidates.append({
+            "branch": branch,
+            "flavor": flavor,
+            "tasks": branch_tasks,
+        })
+
+    return candidates, total_cost
+
+
+def _build_user_prompt(arc: dict, start_chapter: int, setting: dict,
+                       memory: dict) -> str:
+    """复用 run_outline 内部的 user_prompt 构造逻辑 — 抽卡模式要拼同一份
+    上下文，后面再 append flavor 指导。
+
+    注意：抽卡函数之前是直接复用 run_outline 返回的 prompt 太长懒得再拼
+    → 用这个 helper 抽出供 run_outline 和 run_outline_card 共享。
+    """
+    mc      = setting.get("protagonist", {}) or {}
+    chars   = setting.get("key_characters", [])
+    levels  = setting.get("power_system", {}).get("levels", [])
+    hot     = memory.get("hot", memory)
+
+    char_list  = "\n".join(f"  {c['name']}（{c['role']}）" for c in chars)
+    level_str  = " | ".join(f"Lv{l['level']}:{l['name']}" for l in levels)
+    threads    = hot.get("active_threads", [])
+    threads_str = "\n".join(f"  - {t}" for t in threads) or "  无"
+
+    return f"""【弧信息】
+弧{arc.get('arc_id', '?')}「{arc.get('arc_name','?')}」
+目标：{arc.get('arc_goal','')}
+预计章节：{arc.get('estimated_chapters','?')}章（起始：第{start_chapter}章）
+高潮：{arc.get('arc_climax_description','')}
+情绪曲线：{arc.get('emotion_curve','')}
+本弧引入角色：{', '.join(arc.get('new_characters_introduced', []))}
+弧结束状态：{arc.get('arc_ending_state','')}
+
+【主角】{mc.get('name','陆承')} | 当前等级：{hot.get('protagonist_level','感债者')} | 点数：{hot.get('protagonist_points',0)}
+【力量层级】{level_str}
+【可用角色】
+{char_list}
+【活跃剧情线（需在本弧推进或收尾）】
+{threads_str}
+
+输出JSON数组（{arc.get('estimated_chapters','?')}个任务）：
+[{{
+  "chapter_number": {start_chapter},
+  "chapter_role": "铺垫|发展|爽点|弧高潮|过渡",
+  "chapter_goal": "本章核心任务（一句话）",
+  "main_characters": ["角色名"],
+  "shuang_type": "{SHUANG_LIST}中之一，或null",
+  "shuang_description": "爽感场景具体描述，无爽点则空字符串",
+  "ending_hook_type": "{HOOK_LIST}中之一",
+  "ending_hook_description": "结尾钩子具体方向",
+  "setting_constraints": ["约束1"],
+  "forbidden_actions": ["禁止事项1"],
+  "target_length": "2000-2200",
+  "audit_mode": "full",
+  "is_arc_climax": false
+}}]"""
+
+
+def _extract_json_array(resp: str) -> str:
+    """剥 markdown fence + extract [...] JSON array。
+    复用 run_outline 里的逻辑（避免重复）。
+    """
+    resp = resp.strip()
+    if resp.startswith("```"):
+        lines = resp.split("\n")
+        resp = "\n".join(lines[1:])
+        if resp.strip().endswith("```"):
+            resp = resp.strip()[:-3].strip()
+    start = resp.find('['); end = resp.rfind(']') + 1
+    if start >= 0 and end > start:
+        return resp[start:end]
+    return resp
+
+
+def _mark_arc_climax(tasks: list, arc: dict) -> None:
+    """弧高潮标记：原 run_outline 内部逻辑，提到模块级方便 card 模式复用。"""
+    if not tasks:
+        return
+    climax_idx = min(arc.get("arc_climax_chapter_offset", len(tasks) - 3), len(tasks) - 1)
+    tasks[climax_idx]["is_arc_climax"]  = True
+    tasks[climax_idx]["target_length"]  = "3000-3300"
+    tasks[climax_idx]["audit_mode"]     = "full"
+    tasks[climax_idx]["chapter_role"]   = "弧高潮"
 
 
 # ══════════════════════════════════════════

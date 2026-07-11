@@ -32,3 +32,9 @@ langgraph-checkpoint-sqlite>=3.0
 # (Writer / Checker / etc. all call anthropic; jieba is used for cn tokenization).
 anthropic>=0.40
 jieba>=0.42
+
+# Phase 4 migration infrastructure（alembic scaffold 在 backend/alembic/）。
+# 启动时 run_migrations() 仍走 app/migrations.py（idempotent ALTER）；
+# alembic 是给"显式版本化的结构变更"用，新机器 CI 跑 `alembic upgrade head`
+# 才会用到。Pin 跟本地装的一致。
+alembic>=1.13
