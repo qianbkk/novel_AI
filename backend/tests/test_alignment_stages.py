@@ -186,3 +186,32 @@ def test_route_response_count_matches_stages_constant():
     assert len(r.json()["stages"]) == len(STAGES), (
         f"路由返 {len(r.json()['stages'])} 项但 STAGES 有 {len(STAGES)} 项"
     )
+
+
+def test_route_response_has_cache_control_header():
+    """/worldbuild/stages 应带 Cache-Control 头 — STAGES 是不可变常量。
+
+    auditor 🟢-4 建议：让浏览器/CDN 缓存 1 小时，减少每个组件挂载都重拉的
+    浪费。STAGES 是发布期常量，max-age=3600 是合理折衷。
+    """
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    client = TestClient(app)
+    try:
+        r = client.get("/worldbuild/stages")
+    finally:
+        client.close()
+
+    assert r.status_code == 200
+    cache_control = r.headers.get("Cache-Control", "")
+    assert "max-age=" in cache_control, (
+        f"应带 max-age=... 缓存头，实际 Cache-Control={cache_control!r}"
+    )
+    # 解析最大 max-age（可能有多个）
+    import re
+    max_ages = re.findall(r"max-age=(\d+)", cache_control)
+    assert max_ages, f"未找到 max-age=... 值：{cache_control!r}"
+    assert int(max_ages[0]) >= 3600, (
+        f"max-age 应 ≥ 3600（1 小时），实际={max_ages[0]}"
+    )

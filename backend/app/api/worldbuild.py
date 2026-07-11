@@ -1,6 +1,7 @@
 import asyncio
 import json
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
@@ -41,10 +42,19 @@ def list_worldbuild_stages():
 
     注意：meta 路由（不带 project_id），NOT project-scoped，**不挂 owner 校验**——
     STAGES 是全应用一致的 10 阶段常量，任何 user 看都一样。
+
+    Cache-Control：STAGES 是发布期常量，部署后内容永远不会变（除非新版本重启后端）。
+    加 `public, max-age=3600` 让浏览器/CDN 缓存 1 小时，前端刷新页面
+    不会重发请求；同时 versioning 不依赖 query string（前端硬编码 URL，
+    后端重启天然 cache-bust —— 部署后 StageListOut 内容变了，命中失效是 OK 的，
+    因为前端 useEffect 在组件 mount 时会拉一次）。
     """
     # Phase 7：从模块顶层 import（auditor 🟢-1 建议）。原本 defer 是误以为能避免
     # 循环导入，但 orchestrator.py 必然 import stages.py，启动时早已加载。
-    return {"stages": [{"key": k, "label": lbl} for (k, lbl, _fn) in STAGES]}
+    return JSONResponse(
+        content={"stages": [{"key": k, "label": lbl} for (k, lbl, _fn) in STAGES]},
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @router.post("/start", response_model=JobOut)
