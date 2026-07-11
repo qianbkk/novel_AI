@@ -18,9 +18,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from ..auth_scope import require_owned_project
 from ..database import get_db
 from ..models import Chapter, Project, RuleConfig
 from ..schemas import (
@@ -35,6 +36,17 @@ router = APIRouter(prefix="/projects/{project_id}", tags=["rules"])
 
 VALID_TOOLS = {"logic", "venom", "deai"}
 VALID_STYLES = {"webnovel", "literary", "wuxia"}
+
+
+def _owner_check(request: Request, project_id: str, db: Session = Depends(get_db)):
+    """Phase 4：规则中心跨项目读=文风/禁忌词泄漏，必加 owner 校验。"""
+    from ..auth import get_current_user_optional
+    from ..auth_scope import is_production_mode
+    user = get_current_user_optional(request)
+    if user is None and is_production_mode():
+        raise HTTPException(401, "authentication required")
+    require_owned_project(db, project_id, user)
+    return user
 
 
 def _ensure_config(db: Session, project_id: str) -> RuleConfig:
@@ -62,14 +74,24 @@ def _serialize(cfg: RuleConfig) -> RuleConfigOut:
 
 
 @router.get("/rules", response_model=RuleConfigOut)
-def get_rules(project_id: str, db: Session = Depends(get_db)):
+def get_rules(
+    project_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
     cfg = _ensure_config(db, project_id)
     return _serialize(cfg)
 
 
 @router.put("/rules", response_model=RuleConfigOut)
-def put_rules(project_id: str, payload: RuleConfigUpsert,
-              db: Session = Depends(get_db)):
+def put_rules(
+    project_id: str,
+    payload: RuleConfigUpsert,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
     cfg = _ensure_config(db, project_id)
     if payload.style is not None:
         if payload.style not in VALID_STYLES:
@@ -228,8 +250,13 @@ def _extract_score(raw: str) -> Optional[float]:
 
 
 @router.post("/rules/post-process", response_model=PostProcessResult)
-def post_process(project_id: str, payload: PostProcessRequest,
-                 db: Session = Depends(get_db)):
+def post_process(
+    project_id: str,
+    payload: PostProcessRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
     if payload.tool not in VALID_TOOLS:
         raise HTTPException(400, f"tool must be one of {sorted(VALID_TOOLS)}")
 

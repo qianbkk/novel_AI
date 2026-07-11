@@ -1,9 +1,10 @@
 import asyncio
 import json
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
+from ..auth_scope import require_owned_project
 from ..database import get_db, SessionLocal
 from ..models import (
     Project, GenerationJob, WorldSetting, Character, Faction,
@@ -13,21 +14,45 @@ from ..schemas import JobOut, StageListOut
 from ..worldbuild.orchestrator import run_worldbuild_job, get_job_queue, cleanup_job_queue
 
 router = APIRouter(prefix="/projects/{project_id}/worldbuild", tags=["worldbuild"])
-# 不带 project_id 前缀 — STAGES 是全局常量，跟具体项目无关
+# 不带 project_id 前缀 — STAGES 是全局常量，跟具体项目无关（meta 路由不挂 owner）
 meta_router = APIRouter(prefix="/worldbuild", tags=["worldbuild"])
+
+
+def _owner_check(request: Request, project_id: str, db: Session = Depends(get_db)):
+    """Phase 4：所有 project-scoped 路由统一 owner 校验。
+
+    worldbuild.* 路由（start / stream / result）连到 GenerationJob 表，
+    跨用户读到任务进度 / 启动任务 = 项目元数据泄漏，同样要 403。
+    """
+    from ..auth import get_current_user_optional
+    from ..auth_scope import is_production_mode
+    user = get_current_user_optional(request)
+    if user is None and is_production_mode():
+        raise HTTPException(401, "authentication required")
+    require_owned_project(db, project_id, user)
+    return user
 
 
 @meta_router.get("/stages", response_model=StageListOut)
 def list_worldbuild_stages():
     """暴露 10 阶段清单给前端 WorldBuild.tsx — 之前前端硬编码 STAGES 数组，
     改一端忘改另一端就会进度条错位。DB-free 端点，前端首次挂载 fetch 一次即可。
+
+    注意：meta 路由（不带 project_id），NOT project-scoped，**不挂 owner 校验**——
+    STAGES 是全应用一致的 10 阶段常量，任何 user 看都一样。
     """
     from ..worldbuild.stages import STAGES
     return {"stages": [{"key": k, "label": lbl} for (k, lbl, _fn) in STAGES]}
 
 
 @router.post("/start", response_model=JobOut)
-def start_worldbuild(project_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def start_worldbuild(
+    project_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "project not found")
@@ -50,10 +75,18 @@ def start_worldbuild(project_id: str, background_tasks: BackgroundTasks, db: Ses
 
 
 @router.get("/stream")
-async def stream_worldbuild(project_id: str, job_id: str):
+async def stream_worldbuild(
+    project_id: str,
+    job_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
     """
     前端订阅这个 SSE 端点，事件结构对应截图里"分析配置参数完成 / 设计主要人物完成..."
     这种逐步勾选的 UI：{event: stage_done, stage, label, progress_percent}
+
+    Phase 4：跨项目读取 SSE 流也能泄漏进度，必加 owner 校验。
     """
     queue = get_job_queue(job_id)
 
@@ -76,8 +109,16 @@ async def stream_worldbuild(project_id: str, job_id: str):
 
 
 @router.get("/result")
-def get_worldbuild_result(project_id: str, db: Session = Depends(get_db)):
-    """构建完成后，前端用这个接口一次性拉取所有世界设定实体，渲染成截图(图4)那种 Tab 页面"""
+def get_worldbuild_result(
+    project_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
+    """构建完成后，前端用这个接口一次性拉取所有世界设定实体，渲染成截图(图4)那种 Tab 页面。
+
+    Phase 4：这接口内含全量世界观+角色+关系，跨用户读到=创意外泄，必加 owner 校验。
+    """
     latest_job = (
         db.query(GenerationJob)
         .filter_by(project_id=project_id, job_type="worldbuild")

@@ -9,9 +9,10 @@ Phase 3：世界构建板块结构化数据的 5 个新 endpoint。
 
 老数据 fallback：所有 rich/card 字段 nullable，前端读不到时回退到 legacy 字段。
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
+from ..auth_scope import require_owned_project
 from ..database import get_db
 from ..models import WorldSetting, Character, EntityRelation, Faction
 from ..schemas import (
@@ -20,6 +21,21 @@ from ..schemas import (
 )
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["world"])
+
+
+def _owner_check(request: Request, project_id: str, db: Session = Depends(get_db)):
+    """Phase 4：所有 project-scoped 路由统一 owner 校验。
+
+    角色卡、世界观、关系图谱都是真正敏感的内容（创作笔记、人物设定），
+    这些资源也是泄漏重灾区。
+    """
+    from ..auth import get_current_user_optional
+    from ..auth_scope import is_production_mode
+    user = get_current_user_optional(request)
+    if user is None and is_production_mode():
+        raise HTTPException(401, "authentication required")
+    require_owned_project(db, project_id, user)
+    return user
 
 
 def _build_card_dict(c: Character) -> dict | None:
@@ -43,7 +59,12 @@ def _build_card_dict(c: Character) -> dict | None:
 
 
 @router.get("/worldview/rich", response_model=WorldviewRichOut)
-def get_worldview_rich(project_id: str, db: Session = Depends(get_db)):
+def get_worldview_rich(
+    project_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
     """返回 7 段结构化世界观 + 故事核心 4 段 + 历史时间线。
     老项目（world_view_rich_json=null）回退到 legacy 字段。"""
     ws = db.query(WorldSetting).filter_by(project_id=project_id).first()
@@ -60,7 +81,12 @@ def get_worldview_rich(project_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/characters", response_model=list[CharacterSummaryOut])
-def list_characters(project_id: str, db: Session = Depends(get_db)):
+def list_characters(
+    project_id: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
     """角色列表（之前缺失）。返回 name/role + 卡片摘要。"""
     rows = db.query(Character).filter_by(project_id=project_id).order_by(Character.name).all()
     out = []
@@ -81,7 +107,9 @@ def list_characters(project_id: str, db: Session = Depends(get_db)):
 def get_character_card(
     project_id: str,
     character_id: str,
+    request: Request,
     db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
 ):
     """角色卡详情（8 段）。老项目（card=null）回退到 detail_json 摘要。"""
     c = db.get(Character, character_id)
@@ -114,7 +142,9 @@ def get_character_card(
 def get_character_relations(
     project_id: str,
     character_id: str,
+    request: Request,
     db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
 ):
     """角色相关的所有关系边（含出向 + 入向）。"""
     rels = db.query(EntityRelation).filter(
@@ -157,7 +187,9 @@ def get_character_relations(
 @router.get("/relations/graph", response_model=RelationGraphOut)
 def get_relations_graph(
     project_id: str,
+    request: Request,
     db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
 ):
     """完整关系图谱数据（供前端 SVG 渲染）。"""
     chars = db.query(Character).filter_by(project_id=project_id).all()
