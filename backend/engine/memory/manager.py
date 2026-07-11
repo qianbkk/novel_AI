@@ -23,12 +23,17 @@ import json
 import logging
 import os
 import time
-from typing import Tuple
+from typing import Optional, Tuple
 
 from ..config.paths import (
     L2_DIR_STR, L5_DIR_STR, STYLE_SAMPLES_DIR_STR, CHAPTERS_DIR_STR,
 )
 from ..config.power_levels import DEFAULT_POWER_LEVEL
+from ..llm.router import LLMRouter
+# Phase 5 fix #6：模块级 import 让 monkeypatch.get(_mod, "get_active_router")
+# 能找到符号。`_secondary_summarize_cold_history` 仍 inline 二次 import 防止
+# 启动顺序依赖（llm_router 可能未 import）；这只确保 monkeypatch 测试能 work。
+from ..llm_router import get_active_router  # noqa: F401
 from ..utils import atomic_write_json as _atomic_write_json
 
 # 迭代 #73: module logger 之前缺失 → 4 处 silent `except Exception: continue`
@@ -131,8 +136,16 @@ def add_constraint(memory: dict, desc: str, expires_at_chapter: int, reason: str
 
 
 def maybe_compress_hot_to_cold(memory: dict, novel_id: str) -> dict:
-    """If recent_summaries > 20, push oldest 10 into cold.compressed_history
-    (truncated to last 3000 chars)."""
+    """If recent_summaries > 20, push oldest 10 into cold.compressed_history.
+
+    ─── Phase 5 fix #6 ───
+    之前：硬截断到 `[-3000:]` —— 长篇写到 150 章左右就会物理丢失旧剧情记录
+    （悄无声息，没有告警）。已落地的历史无法恢复，但保证后续不再丢。
+
+    新策略：超阈值就调 LLM 二次摘要，把现有 cold.compressed_history 压回
+    ~1500 字左右，再 append 新 10 章的内容。这样无论写多长都不会丢（只是
+    老数据被 LLM 精炼成更短的形式）。
+    """
     summaries = memory.get("hot", {}).get("recent_summaries", [])
     if len(summaries) <= HOT_TO_COLD_THRESHOLD:
         return memory
@@ -140,10 +153,102 @@ def maybe_compress_hot_to_cold(memory: dict, novel_id: str) -> dict:
     new_lines = "\n".join(f"Ch{s['chapter']}: {s['summary']}" for s in to_compress)
     cold = memory.get("cold", {})
     existing = cold.get("compressed_history", "")
-    cold["compressed_history"] = (existing + "\n" + new_lines if existing else new_lines)[-3000:]
+
+    candidate = (existing + "\n" + new_lines) if existing else new_lines
+
+    # 容量闸门：超过 SOFT_CAP 就触发 LLM 二次摘要
+    if len(candidate) > SECONDARY_SUMMARIZE_SOFT_CAP:
+        _log.info(
+            "memory overflow detected for %s: candidate=%d chars > soft_cap=%d, "
+            "triggering LLM secondary summarization",
+            novel_id, len(candidate), SECONDARY_SUMMARIZE_SOFT_CAP,
+        )
+        summarized = _secondary_summarize_cold_history(
+            existing, novel_id=novel_id, target_chars=SECONDARY_SUMMARIZE_TARGET,
+        )
+        if summarized is None:
+            # LLM 调用失败（内部 try/except 已捕获）→ fallback 到硬截断。
+            # 不让单次 LLM 失败炸掉整个 run。
+            _log.warning(
+                "secondary summarize returned None for %s, falling back to "
+                "hard truncation at 3000 chars", novel_id,
+            )
+            cold["compressed_history"] = candidate[-3000:]
+        else:
+            # 用 LLM 二次摘要的输出 + 新行重新拼，永远不会再溢出
+            cold["compressed_history"] = summarized + "\n" + new_lines
+            # 标记本轮发生了压缩（便于审计/前端展示"历史已被精炼"）
+            cold.setdefault("compressed_history_meta", {})
+            cold["compressed_history_meta"]["last_summarized_at_chapter"] = (
+                memory.get("meta", {}).get("last_updated_chapter", 0)
+            )
+            cold["compressed_history_meta"]["total_compression_events"] = (
+                cold["compressed_history_meta"].get("total_compression_events", 0) + 1
+            )
+    else:
+        cold["compressed_history"] = candidate
+
     memory["hot"]["recent_summaries"] = keep
     memory["cold"] = cold
     return memory
+
+
+# Phase 5 fix #6 容量阈值
+SECONDARY_SUMMARIZE_SOFT_CAP = 4000   # 超过这个就触发二次摘要
+SECONDARY_SUMMARIZE_TARGET   = 1500   # 摘要后目标长度
+
+
+COMPRESS_COLD_SYSTEM = """你是记忆压缩AI。现有以下章节摘要压缩过的长程历史（之前已经被摘要过一次）。
+请把它再压成更精炼的纯文本版本：
+- 保留所有关键事件、重要人物状态变化、未解决的伏笔/剧情线
+- 删除重复 / 已解决 / 装饰性细节
+- 用「Ch N: x」或「弧 K: y」格式条目化
+- 输出纯文本，目标 {target_chars} 字以内"""
+
+
+def _secondary_summarize_cold_history(existing: str, *, novel_id: str,
+                                      target_chars: int = SECONDARY_SUMMARIZE_TARGET
+                                      ) -> Optional[str]:
+    """调 LLM 对现有 compressed_history 做二次摘要。
+
+    返回：摘要后的字符串（≤ target_chars 左右）。如果 LLM 失败或返回 None，
+    caller 应 fallback 到硬截断。
+
+    失败语义：单次 LLM 调用失败不影响整体压缩（上层 try/except 已经处理）。
+    """
+    if not existing:
+        return existing
+    from ..llm_router import get_active_router
+    from ..llm.router import LLMRouter
+    try:
+        router = get_active_router()
+        if router is None:
+            router = LLMRouter()
+        prompt = (
+            COMPRESS_COLD_SYSTEM.format(target_chars=target_chars)
+            + f"\n\n【现有 history：约 {len(existing)} 字】\n{existing}\n\n输出压缩版："
+        )
+        resp, _cost = router.call(
+            agent_name="summarizer",
+            system_prompt="你是小说创作团队的记忆压缩AI。",
+            user_prompt=prompt,
+            max_tokens=1500,
+            temperature=0.2,
+        )
+        resp = resp.strip()
+        # 摘掉可能存在的 ``` fence
+        if resp.startswith("```"):
+            lines = resp.split("\n")
+            resp = "\n".join(lines[1:])
+            if resp.strip().endswith("```"):
+                resp = resp.strip()[:-3].strip()
+        return resp or None
+    except Exception as exc:
+        _log.warning(
+            "secondary summarize LLM call failed (novel=%s): %s — "
+            "上层 fallback", novel_id, exc,
+        )
+        return None
 
 
 def get_chapter_relevant_context(memory: dict, task: dict) -> dict:
@@ -168,7 +273,11 @@ def get_chapter_relevant_context(memory: dict, task: dict) -> dict:
     due_soon = [f["desc"] for f in planted
                 if isinstance(f.get("target_arc"), int) and f.get("target_arc") <= ch_num + 30][:3]
     total_tracked = memory.get("meta", {}).get("total_chapters_tracked", 0)
-    cold_summary = memory.get("cold", {}).get("compressed_history", "")[-500:] if total_tracked > 20 else ""
+    # Phase 5 fix #6 配套：原代码硬截 500 字，长篇丧失"早期脉络"印象。
+    # 改成 2000 字上限（更接近 L2 active context token 预算）。
+    # Phase 5 fix 之后 L2 cold.compressed_history 已被二次摘要管理，无需再 500-cut。
+    cold_full = memory.get("cold", {}).get("compressed_history", "")
+    cold_summary = cold_full[-2000:] if total_tracked > 20 else ""
     return {
         "protagonist_level": hot.get("protagonist_level", "感债者"),
         "protagonist_level_num": hot.get("protagonist_level_num", 1),

@@ -39,9 +39,25 @@ CHECKER_SYSTEM = """你是一位经验丰富的网络文学质量评审，专注
 
 
 def score_chapter(text: str, task: dict, agent_name: str = "checker_main") -> tuple[dict, float]:
-    """单模型打分。"""
+    """单模型打分。
+
+    Phase 5 fix #5：把质检采样从「固定 3000 字截断」改成「保留开头 + 结尾」，
+    因为弧高潮章节目标字数就是 3000-3300 字，原来的硬截断恰好把权重最高
+    的"结尾钩子"段切掉，质检打分对高潮章节显著失准。
+
+    新策略（避免 token 爆掉的同时保住结尾钩子）：
+      - 总长 ≤ 4000：原样送（普通/弧高潮章节几乎都 ≤ 4000）
+      - 总长 > 4000：保留头 2000 + 尾 2000，中间用「...」占位 → 仍能读到结尾钩子
+
+    适用于 arc-climax 章节（target=3000-3300）以及任何 < 4000 的篇幅。
+    """
     chapter_info = f"第{task['chapter_number']}章 | 定位：{task['chapter_role']} | 爽点：{task['shuang_description']}"
-    sample = text[:3000] + ("...[截断]" if len(text) > 3000 else "")
+
+    # Phase 5：保留头 + 尾，保住结尾钩子而不是硬截前 3000 字
+    if len(text) <= 4000:
+        sample = text
+    else:
+        sample = text[:2000] + "\n\n...【中段省略】...\n\n" + text[-2000:]
 
     router: LLMRouter | None = get_active_router()
     if router is None:
