@@ -264,3 +264,78 @@ def test_frontend_build():
     r = subprocess.run(cmd, cwd=str(frontend_dir), capture_output=True, text=True, timeout=180)
     assert r.returncode == 0, f"npm run build 失败:\nSTDOUT: {r.stdout[-1000:]}\nSTDERR: {r.stderr[-1000:]}"
     assert (frontend_dir / "dist" / "index.html").exists()
+
+
+# ───────── Phase 3: migration 异常收窄回归 ─────────
+
+def test_migration_skip_missing_table(tmp_path):
+    """Phase 3 异常收窄：表不存在时跳过该列（不 raise），让 Base.metadata.create_all 后续补建。
+
+    模拟一张根本不在 SQLite 里的表上有待加列的迁移场景，应被跳过而不是崩溃。
+    """
+    from app import migrations as _migrations
+    from sqlalchemy import create_engine
+    test_engine = create_engine(f"sqlite:///{tmp_path}/migration_test.sqlite")
+
+    # 临时塞一条"不存在的表"的迁移进列表，跑完应不抛
+    original = list(_migrations._MIGRATIONS)
+    try:
+        _migrations._MIGRATIONS.append(("nonexistent_table_xyz", "fake_col", "VARCHAR"))
+        applied = _migrations.run_migrations(test_engine)
+        # 只要没抛就算通过；applied 应为 0（真实表也还没建）
+        assert applied == 0, f"无表场景不该 apply 任何迁移，实际={applied}"
+    finally:
+        _migrations._MIGRATIONS[:] = original
+
+
+def test_migration_fail_fast_on_ddl_error(tmp_path):
+    """Phase 3 异常收窄：真实 DDL 失败必须 raise，让启动 fail-fast。
+
+    之前的实现是 except Exception 一刀切吞掉所有错误（包括 DDL 语法错、表名拼错），
+    只剩 warning。这次回归通过硬塞一条注定失败的 ALTER（错误的类型语法）验证
+    run_migrations 不再静默吞掉异常。
+    """
+    from app import migrations as _migrations
+    from sqlalchemy import create_engine, text
+
+    test_engine = create_engine(f"sqlite:///{tmp_path}/migration_failfast.sqlite")
+
+    # 先手动建一张表（让 _table_exists 通过），再在 _MIGRATIONS 里塞一条注定失败的 DDL
+    with test_engine.begin() as conn:
+        conn.execute(text("CREATE TABLE broken_table (id INTEGER PRIMARY KEY)"))
+
+    original = list(_migrations._MIGRATIONS)
+    try:
+        # SQLite ALTER TABLE ADD COLUMN 不支持 PRIMARY KEY 约束在新列上 → 必定抛 OperationalError
+        _migrations._MIGRATIONS.append(("broken_table", "bad_col", "VARCHAR PRIMARY KEY"))
+        with pytest.raises(Exception) as exc_info:
+            _migrations.run_migrations(test_engine)
+        # 确认是 sqlite 抛出的真错误，不是被吞掉的 warning
+        err_msg = str(exc_info.value).lower()
+        assert "sqlite" in err_msg or "operationalerror" in err_msg or "error" in err_msg, (
+            f"DDL 失败应原样 raise（不被吞），实际 exception={exc_info.value!r}"
+        )
+    finally:
+        _migrations._MIGRATIONS[:] = original
+
+
+def test_migration_idempotent_on_existing_column(tmp_path):
+    """Phase 3 异常收窄：列已存在时跳过（同之前行为，但不能 raise）。"""
+    from app import migrations as _migrations
+    from sqlalchemy import create_engine, text
+
+    test_engine = create_engine(f"sqlite:///{tmp_path}/migration_idem.sqlite")
+
+    # 建表 + 已有列（模拟"重复跑 run_migrations"）
+    with test_engine.begin() as conn:
+        conn.execute(text("CREATE TABLE test_idem (id INTEGER PRIMARY KEY, existing_col VARCHAR)"))
+
+    original = list(_migrations._MIGRATIONS)
+    try:
+        _migrations._MIGRATIONS.append(("test_idem", "existing_col", "VARCHAR"))
+        # 不应抛
+        applied = _migrations.run_migrations(test_engine)
+        assert applied == 0, f"已存在列应 skip 不 apply，实际 applied={applied}"
+    finally:
+        _migrations._MIGRATIONS[:] = original
+

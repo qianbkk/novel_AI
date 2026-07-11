@@ -83,7 +83,11 @@ def _bootstrap():
 
 @pytest.fixture(scope="module")
 def client():
-    return TestClient(app)
+    # 用 with context 触发 lifespan，让 run_migrations 真正跑起来（Phase 3 owner_id/audit_mode
+    # 这些增量列不会由 Base.metadata.create_all 自动加给已有表——必须走 migrations）。
+    # 不走 lifespan 时直接 SELECT/INSERT 含新列会报 "table projects has no column named owner_id"。
+    with TestClient(app) as c:
+        yield c
 
 
 # ───────── Tests ─────────
@@ -195,11 +199,25 @@ def test_bridge_run_accepts_outline_mode(client, _bootstrap):
 
 
 def test_set_audit_mode(client, _bootstrap):
-    """POST /bridge/set-audit-mode：草稿模式切换"""
+    """POST /bridge/set-audit-mode：草稿模式切换 — Phase 3 去全局化版
+
+    之前：直接写 os.environ["NOVEL_AUDIT_MODE"]（进程全局，多项目共用时
+    A 设 draft 会污染 B 的 run）。
+    现在：写入 Project.audit_mode 列，单项目隔离。
+    """
     pid, _ = _bootstrap
     r = client.post(f"/projects/{pid}/bridge/set-audit-mode", json={"mode": "draft"})
     assert r.status_code == 200, r.text
     assert r.json()["mode"] == "draft"
+    # 验证：mode 已持久化到 Project.audit_mode（不是 os.environ）
+    db = SessionLocal()
+    try:
+        p = db.get(Project, pid)
+        assert p.audit_mode == "draft", (
+            f"set_audit_mode 应写 Project.audit_mode（db），实际={p.audit_mode!r}"
+        )
+    finally:
+        db.close()
 
 
 def test_set_audit_mode_invalid(client, _bootstrap):
@@ -207,6 +225,115 @@ def test_set_audit_mode_invalid(client, _bootstrap):
     pid, _ = _bootstrap
     r = client.post(f"/projects/{pid}/bridge/set-audit-mode", json={"mode": "bogus"})
     assert r.status_code in (400, 422)
+
+
+def test_set_audit_mode_isolation(client, _bootstrap):
+    """Phase 3 regression：A 设 draft 不会污染 B 的默认值。
+
+    验收：项目 A 设 draft，项目 B 没动 → A.audit_mode='draft'，B.audit_mode='full'。
+    反映到 subprocess env 也是同样语义（见 test_spawn_audit_mode_per_project）。
+    """
+    pid_a, _ = _bootstrap
+    db = SessionLocal()
+    try:
+        # 再插一个项目 B
+        p_b = Project(
+            title="Project B",
+            genre="都市",
+            audience="男频·青年向",
+            config_json={"tropes": ["系统流"]},
+        )
+        db.add(p_b)
+        db.commit()
+        db.refresh(p_b)
+        pid_b = p_b.id
+    finally:
+        db.close()
+
+    # A 设 draft
+    r = client.post(f"/projects/{pid_a}/bridge/set-audit-mode", json={"mode": "draft"})
+    assert r.status_code == 200, r.text
+
+    # 验证两个项目的 audit_mode 各自独立（DB 层面的隔离）
+    db = SessionLocal()
+    try:
+        a = db.get(Project, pid_a)
+        b = db.get(Project, pid_b)
+        assert a.audit_mode == "draft", f"A.audit_mode 应为 draft，实际={a.audit_mode!r}"
+        assert b.audit_mode in (None, "full"), (
+            f"B.audit_mode 不应被 A 污染，仍为默认值（None 或 'full'），"
+            f"实际={b.audit_mode!r}"
+        )
+    finally:
+        db.close()
+
+
+def test_spawn_audit_mode_per_project(client, _bootstrap, monkeypatch):
+    """Phase 3 regression：spawn subprocess 时 audit_mode 必须按 project_id 取值。
+
+    验收：项目 A 设 draft，项目 B 没动 → _spawn_engine_subprocess 为 A/B
+    分别注入不同的 NOVEL_AUDIT_MODE env（A=draft，B=full），而不是
+    从父进程 os.environ 读同一个值（那样会互相污染）。
+    """
+    pid_a, _ = _bootstrap
+    db = SessionLocal()
+    try:
+        p_b = Project(
+            title="Project B for spawn test",
+            genre="都市",
+            audience="男频·青年向",
+            config_json={"tropes": ["系统流"]},
+            audit_mode="full",  # 默认：显式设 full
+        )
+        db.add(p_b)
+        db.commit()
+        db.refresh(p_b)
+        pid_b = p_b.id
+        # 给 A 设 draft
+        p_a = db.get(Project, pid_a)
+        p_a.audit_mode = "draft"
+        db.commit()
+    finally:
+        db.close()
+
+    # Monkeypatch subprocess.Popen 把 env 抓出来
+    captured: dict = {}
+
+    class _FakePopen:
+        def __init__(self, cmd, env, **kwargs):
+            captured["env"] = env
+            # 用标准库 fake 进程对象，_drain_stdout 里只调 stdout.readline / wait
+            class _Proc:
+                stdout = __import__("io").StringIO("")
+                returncode = 0
+                def wait(self, *_a, **_kw): return 0
+                stdout_lines = property(lambda self: self.stdout)
+            self.proc = _Proc()
+
+        def __getattr__(self, name):
+            return getattr(self.proc, name)
+
+    monkeypatch.setattr("subprocess.Popen", _FakePopen)
+
+    from app.api import bridge as _bridge
+
+    # 1) 跑 A 的 subprocess
+    q1 = __import__("queue").Queue()
+    _bridge._spawn_engine_subprocess("run-fake-1", pid_a, "planner", [], q1, "batch")
+    env_a = captured["env"]
+    assert env_a.get("NOVEL_AUDIT_MODE") == "draft", (
+        f"A 项目 audit_mode=draft，subprocess env NOVEL_AUDIT_MODE 应该是 draft，"
+        f"实际={env_a.get('NOVEL_AUDIT_MODE')!r}"
+    )
+
+    # 2) 跑 B 的 subprocess（A 已设 draft 全局，B 应仍为 full，不能污染）
+    q2 = __import__("queue").Queue()
+    _bridge._spawn_engine_subprocess("run-fake-2", pid_b, "planner", [], q2, "batch")
+    env_b = captured["env"]
+    assert env_b.get("NOVEL_AUDIT_MODE") == "full", (
+        f"B 项目 audit_mode=full，subprocess env NOVEL_AUDIT_MODE 应该是 full，"
+        f"不能被 A 的 draft 污染，实际={env_b.get('NOVEL_AUDIT_MODE')!r}"
+    )
 
 
 def test_project_set_platform_valid(client, _bootstrap):

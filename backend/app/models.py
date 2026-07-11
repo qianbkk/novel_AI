@@ -46,6 +46,14 @@ class Project(Base):
     budget_limit_usd = Column(Float, nullable=True)
     novel_ai_status = Column(String, default="not_started")
     # not_started | concept_pushed | planner_done | bootstrap_done | writing | done
+    # ─── Phase 3: owner_id 占位（nullable，目前不读写）──
+    # 单租户原型阶段不启用多用户隔离，但预留该列避免将来真要多用户时做高风险数据回填迁移。
+    owner_id = Column(String, nullable=True)             # 预留：未来关联 User.id
+    # ─── Phase 3: per-project audit_mode（去全局化）──
+    # 草稿模式 = 'draft'：node_load_arc_tasks 覆盖任务 audit_mode，writer 跳过 compliance+checker。
+    # 完整模式 = 'full'（默认）：全质检链路。
+    # 之前用 os.environ["NOVEL_AUDIT_MODE"] 是进程全局状态——多项目共用时 A 设了 draft 会污染 B 的 run。
+    audit_mode = Column(String, default="full")         # full | lite | draft
     created_at = Column(DateTime, default=_utcnow)
 
     world_setting = relationship("WorldSetting", back_populates="project", uselist=False)

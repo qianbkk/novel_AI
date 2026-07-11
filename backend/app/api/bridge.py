@@ -144,23 +144,28 @@ async def run_bridge(
 
 
 @router.post("/set-audit-mode")
-def set_audit_mode(payload: dict):
-    """运行时切换整体 audit_mode（持久到 DB 行 + 推 env 到下次 subprocess run）。
+def set_audit_mode(project_id: str, payload: dict, db: Session = Depends(get_db)):
+    """运行时切换单个项目的 audit_mode（持久到 Project 行 + 推 env 到下次 subprocess run）。
 
-    草稿模式 = NOVEL_AUDIT_MODE=draft：node_load_arc_tasks 把所有任务的
+    草稿模式 = audit_mode='draft'：node_load_arc_tasks 把所有任务的
     audit_mode 覆盖为 'draft'，node_write_pipeline 跳过 compliance+checker。
     完整模式 = 'full'（默认）：全质检链路。
+
+    ─── Phase 3 ───
+    之前直接写 os.environ["NOVEL_AUDIT_MODE"]，是进程全局状态——多项目共用
+    一个 backend 时，A 设 draft 会污染 B 的下次 run。去全局化：写入 Project.audit_mode，
+    run 时由 bridge 从 DB 读出注入 subprocess env，单项目隔离。
     """
     mode = (payload or {}).get("mode", "full").lower()
     if mode not in ("full", "lite", "draft"):
         raise HTTPException(400, f"audit_mode must be one of full|lite|draft (got {mode!r})")
-    # 这里只能 forward 到 subprocess（下次 run 启动时通过 env 传 NOVEL_AUDIT_MODE）。
-    # 现在直接写 os.environ 也行（uvicorn 进程内的 outline 会读），但更干净是
-    # 通过 Project.novel_ai_status 持久化，run 时 bridge 注入 env。
-    # 为简化起见，直接写 os.environ —— 跟个人使用场景匹配（只有一个人）。
-    import os as _os
-    _os.environ["NOVEL_AUDIT_MODE"] = mode
-    log.info("set_audit_mode=%s (in-process; will be propagated to subprocess on next run)", mode)
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "project not found")
+    project.audit_mode = mode
+    db.commit()
+    log.info("set_audit_mode project=%s mode=%s (persisted; will be propagated to subprocess on next run)",
+             project_id, mode)
     return {"mode": mode}
 
 
@@ -183,11 +188,16 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
     db = SessionLocal()
     try:
         binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
+        # 从 Project 表读 per-project audit_mode（去全局化迭代 — 取代 os.environ）
+        # 多项目共用一个 backend 时，A 设 draft 不会污染 B 的 run。
+        project = db.get(Project, project_id)
+        project_audit_mode = (project.audit_mode if project and project.audit_mode else "full")
         env = os.environ.copy()
         env["NOVEL_OUTLINE_MODE"] = outline_mode
-        # 草稿模式开关：POST /bridge/set-audit-mode 写 env，subprocess 必须继承，
-        # 否则 engine 的 outline 仍走完整 audit_mode='full' 链路。
-        env["NOVEL_AUDIT_MODE"] = os.environ.get("NOVEL_AUDIT_MODE", "")
+        # 草稿模式开关：POST /bridge/set-audit-mode 写入 Project.audit_mode，
+        # subprocess 必须继承，否则 engine 的 outline 仍走完整 audit_mode='full' 链路。
+        # 兼容兜底：如果 Project.audit_mode 为空（极老数据列尚未应用），沿用父进程 env。
+        env["NOVEL_AUDIT_MODE"] = project_audit_mode or os.environ.get("NOVEL_AUDIT_MODE", "")
         # P0 修复 (iter #84)：subprocess 必须继承 NOVEL_AI_DIR + NOVEL_ENGINE_MOCK。
         # 否则：
         #   - NOVEL_AI_DIR 缺失 → engine 写到 backend/data/engine/output/，
