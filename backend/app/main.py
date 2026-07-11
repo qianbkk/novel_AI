@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import Base, SessionLocal, engine
-from .api import bridge, chapters, projects, providers, role_assignments, worldbuild, rules, foreshadowings, ai_assist, world
+from .api import auth, bridge, chapters, projects, providers, role_assignments, worldbuild, rules, foreshadowings, ai_assist, world
 from .api.role_assignments import seed_role_assignments
 from .backup_db import take_all_snapshots
 from .config import get_allowed_origins_list
@@ -56,6 +56,66 @@ def _check_master_key_in_production() -> None:
         raise RuntimeError(str(e)) from e
 
 
+def _check_production_hardening() -> None:
+    """生产模式启动校验（Phase 4）：fail-fast 把 dev-only 配置挡在外面。
+
+    与 _check_master_key_in_production 不同：这条是"只警告 + 继续运行"，
+    让用户能 review + 修后再启动；但**严重错配**仍 fail-fast。
+
+    检查项：
+      1. ALLOWED_ORIGINS 不允许 localhost / 127.0.0.1 / * 通配
+      2. RATE_LIMIT_EXEMPT_LOCALHOST 必须设为 0（生产不再豁免本机）
+      3. JWT_SECRET 必须设（不能用 dev 自动生成的）
+      4. ALLOWED_PROXIES 建议设（反代 IP 白名单）
+    """
+    if os.environ.get("NOVEL_PRODUCTION") != "1":
+        return
+
+    from .config import get_allowed_origins_list
+    issues: list[str] = []
+
+    origins = get_allowed_origins_list()
+    bad_origin_keywords = ("localhost", "127.0.0.1", "*")
+    bad_origins = [o for o in origins
+                   if any(k in o for k in bad_origin_keywords)]
+    if bad_origins:
+        issues.append(
+            f"ALLOWED_ORIGINS 含 dev-only origin: {bad_origins}\n"
+            f"  → 生产模式应只有真实前端域名（https://your-frontend）"
+        )
+
+    if os.environ.get("RATE_LIMIT_EXEMPT_LOCALHOST", "").strip() not in ("0", "false", "False"):
+        issues.append(
+            "RATE_LIMIT_EXEMPT_LOCALHOST 应设为 0（生产不再豁免本机）\n"
+            "  当前配置会让任何打到 127.0.0.1 的请求绕过速率限制"
+        )
+
+    if not os.environ.get("JWT_SECRET", "").strip():
+        issues.append(
+            "JWT_SECRET 应显式设置（不能用 dev 自动生成的）\n"
+            "  生成：python -c \"import secrets;print(secrets.token_urlsafe(64))\""
+        )
+
+    if not os.environ.get("ALLOWED_PROXIES", "").strip():
+        log.warning(
+            "ALLOWED_PROXIES 未配置 — 反代场景下 X-Forwarded-For 不可信，\n"
+            "  生产部署建议显式设置（逗号分隔 IP/CIDR）"
+        )
+
+    if issues:
+        msg = "PRODUCTION 模式启动校验失败：\n  - " + "\n  - ".join(issues)
+        # 严重配置错配 → fail-fast。warn-only 的项（上面 ALLOWED_PROXIES）已经单独 log.warning
+        raise RuntimeError(msg)
+
+
+def _check_backup_path() -> int:
+    """触发备份前确认数据库不存在 sync 漏洞警告路径。
+
+    此函数只是占位 — 真备份由 take_all_snapshots() 单独跑。
+    """
+    return 0
+
+
 def _recover_orphan_bridge_runs() -> int:
     """启动时清理孤儿 BridgeRun。
 
@@ -104,6 +164,7 @@ async def lifespan(app: FastAPI):
     """
     log.info("startup: master_key_check + migrations + seed_role_assignments + recover_orphan_bridge_runs + backup begin")
     _check_master_key_in_production()  # 生产模式 fail-fast（在 run_migrations 前）
+    _check_production_hardening()     # Phase 4: production hardening（ALLOWED_ORIGINS 等）
     applied = run_migrations()
     db = SessionLocal()
     try:
@@ -140,6 +201,7 @@ app.add_middleware(
 # 阈值收口到 app.config.settings.rate_limit_per_minute（默认 60）。
 app.add_middleware(RateLimitMiddleware)
 
+app.include_router(auth.router)               # Phase 4: 多用户认证（register/login/me/change-password）
 app.include_router(projects.router)
 app.include_router(worldbuild.router)
 app.include_router(worldbuild.meta_router)  # /worldbuild/stages (无 project_id)

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from queue import Queue
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
@@ -18,6 +18,17 @@ from ..database import SessionLocal, get_db
 from ..logging_setup import get_logger
 from ..models import BridgeRun, GenerationJob, NovelAIBinding, Project, Provider, RoleAssignment
 from ..schemas import BridgeRunOut, BridgeRunRequest, NovelAIBindingOut, NovelAIBindingUpsert, ReviewRequest
+from ..auth import get_current_user_optional
+from ..auth_scope import is_production_mode, require_owned_project
+
+
+def _current_user_or_401(request: Request):
+    """生产模式下未登录直接 401；dev 模式返回 None。"""
+    user = get_current_user_optional(request)
+    if user is None and is_production_mode():
+        from fastapi import HTTPException, status as _s
+        raise HTTPException(_s.HTTP_401_UNAUTHORIZED, "authentication required")
+    return user
 
 log = get_logger("novel_ai.bridge")
 
@@ -51,10 +62,12 @@ def cleanup_run_queue(run_id: str) -> None:
 
 
 @router.get("/binding", response_model=NovelAIBindingOut)
-def get_binding(project_id: str, db: Session = Depends(get_db)):
+def get_binding(project_id: str, request: Request, db: Session = Depends(get_db)):
+    _current_user_or_401(request)
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "project not found")
+    require_owned_project(db, project_id, get_current_user_optional(request))
     binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
     if not binding:
         raise HTTPException(404, "NovelAIBinding not found for project")
@@ -66,10 +79,9 @@ def get_binding(project_id: str, db: Session = Depends(get_db)):
 
 
 @router.put("/binding", response_model=NovelAIBindingOut)
-def upsert_binding(project_id: str, payload: NovelAIBindingUpsert, db: Session = Depends(get_db)):
-    project = db.get(Project, project_id)
-    if not project:
-        raise HTTPException(404, "project not found")
+def upsert_binding(project_id: str, payload: NovelAIBindingUpsert, request: Request, db: Session = Depends(get_db)):
+    current_user = _current_user_or_401(request)
+    project = require_owned_project(db, project_id, current_user)
     binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
     novel_id = payload.novel_id or project.id
     if binding:
@@ -90,10 +102,11 @@ def upsert_binding(project_id: str, payload: NovelAIBindingUpsert, db: Session =
 async def run_bridge(
     project_id: str,
     payload: BridgeRunRequest,
+    request: Request,
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
-    project, binding = _get_project_and_binding(project_id, db)
+    project, binding = _get_project_and_binding(request, project_id, db)
     command = payload.command.lower().strip()
     if command in WRITE_COMMANDS and not _worldbuild_done(project_id, project, db):
         raise HTTPException(400, "worldbuild must be completed before running write commands")
@@ -144,7 +157,7 @@ async def run_bridge(
 
 
 @router.post("/set-audit-mode")
-def set_audit_mode(project_id: str, payload: dict, db: Session = Depends(get_db)):
+def set_audit_mode(project_id: str, payload: dict, request: Request, db: Session = Depends(get_db)):
     """运行时切换单个项目的 audit_mode（持久到 Project 行 + 推 env 到下次 subprocess run）。
 
     草稿模式 = audit_mode='draft'：node_load_arc_tasks 把所有任务的
@@ -162,6 +175,7 @@ def set_audit_mode(project_id: str, payload: dict, db: Session = Depends(get_db)
     project = db.get(Project, project_id)
     if not project:
         raise HTTPException(404, "project not found")
+    require_owned_project(db, project_id, get_current_user_optional(request))
     project.audit_mode = mode
     db.commit()
     log.info("set_audit_mode project=%s mode=%s (persisted; will be propagated to subprocess on next run)",
@@ -299,7 +313,9 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
 
 
 @router.get("/stream")
-async def stream_bridge(project_id: str, run_id: str, db: Session = Depends(get_db)):
+async def stream_bridge(project_id: str, run_id: str, request: Request, db: Session = Depends(get_db)):
+    _current_user_or_401(request)
+    require_owned_project(db, project_id, get_current_user_optional(request))
     bridge_run = db.get(BridgeRun, run_id)
     if not bridge_run or bridge_run.project_id != project_id:
         raise HTTPException(404, "bridge run not found")
@@ -325,16 +341,16 @@ async def stream_bridge(project_id: str, run_id: str, db: Session = Depends(get_
 
 
 @router.post("/push-concept")
-async def push_concept(project_id: str, db: Session = Depends(get_db)):
-    project, binding = _get_project_and_binding(project_id, db)
+async def push_concept(project_id: str, request: Request, db: Session = Depends(get_db)):
+    project, binding = _get_project_and_binding(request, project_id, db)
     if not _worldbuild_done(project_id, project, db):
         raise HTTPException(400, "worldbuild must be completed before pushing concept")
     return await push_setting_concept(project_id, binding.novel_ai_dir, db)
 
 
 @router.post("/pull-setting")
-async def pull_setting(project_id: str, db: Session = Depends(get_db)):
-    project, binding = _get_project_and_binding(project_id, db)
+async def pull_setting(project_id: str, request: Request, db: Session = Depends(get_db)):
+    project, binding = _get_project_and_binding(request, project_id, db)
     # 迭代 #79: pull_setting 之前没有 worldbuild 检查——root_cause_analysis.md
     # 第 87 行明确指出 "50 章 0 个 ChapterCharacter 边" 就是因为 import_chapters 早于
     # pull 拉的代码路径。现在明确：pull 必须 worldbuild 完成。
@@ -344,8 +360,8 @@ async def pull_setting(project_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/import-chapters")
-async def import_chapters(project_id: str, db: Session = Depends(get_db)):
-    project, binding = _get_project_and_binding(project_id, db)
+async def import_chapters(project_id: str, request: Request, db: Session = Depends(get_db)):
+    project, binding = _get_project_and_binding(request, project_id, db)
     # 迭代 #79: import_chapters 之前没有 worldbuild 检查——"50 章 0 character 边"
     # 根因之一就在这里。import 早于 pull → add_chapter 找不到任何 character 可建边。
     # 强制：必须 worldbuild 完成（status='ready' 或 worldbuild GenerationJob=done）。
@@ -355,11 +371,11 @@ async def import_chapters(project_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/reimport-chapters")
-async def reimport_chapters(project_id: str, db: Session = Depends(get_db)):
+async def reimport_chapters(project_id: str, request: Request, db: Session = Depends(get_db)):
     """强制重新导入章节：用最新的 txt + meta 覆盖 DB 已有行（修复章节管理显示问题）。
     普通 /import-chapters 是幂等的，会跳过已存在行；
     这个端点专用于修复标题 / 内容 / 摘要。"""
-    project, binding = _get_project_and_binding(project_id, db)
+    project, binding = _get_project_and_binding(request, project_id, db)
     # 迭代 #79: reimport 跟 import-chapters 同样的根因——没有 worldbuild guard。
     # reimport 通常用于修复显示问题，但仍然依赖 character / setting 已写入。
     if not _worldbuild_done(project_id, project, db):
@@ -369,10 +385,12 @@ async def reimport_chapters(project_id: str, db: Session = Depends(get_db)):
 
 
 @router.post("/strip-junk-headers")
-async def strip_junk_headers(project_id: str, db: Session = Depends(get_db)):
+async def strip_junk_headers(project_id: str, request: Request, db: Session = Depends(get_db)):
     """清理章节 txt 文件里的"假标题"残留头（【修改后正文】/【卷名】第N章 标题/重复第N章 行）。
     一次跑 3 个常见 case：ch1 占位 / ch42 卷首 / ch50 重复标题。
     修完 txt 后自动 reimport 把 DB 同步。"""
+    _current_user_or_401(request)
+    require_owned_project(db, project_id, get_current_user_optional(request))
     import subprocess, sys
     from pathlib import Path
     # 调用 scripts.strip_chapter_headers
@@ -392,26 +410,26 @@ async def strip_junk_headers(project_id: str, db: Session = Depends(get_db)):
 
 
 @router.get("/status")
-def status(project_id: str, db: Session = Depends(get_db)):
-    _, binding = _get_project_and_binding(project_id, db)
+def status(project_id: str, request: Request, db: Session = Depends(get_db)):
+    _, binding = _get_project_and_binding(request, project_id, db)
     return read_status(binding.novel_ai_dir)
 
 
 @router.get("/pending")
-def pending(project_id: str, db: Session = Depends(get_db)):
-    _, binding = _get_project_and_binding(project_id, db)
+def pending(project_id: str, request: Request, db: Session = Depends(get_db)):
+    _, binding = _get_project_and_binding(request, project_id, db)
     return read_pending(binding.novel_ai_dir)
 
 
 @router.get("/budget")
-def budget(project_id: str, db: Session = Depends(get_db)):
-    _, binding = _get_project_and_binding(project_id, db)
+def budget(project_id: str, request: Request, db: Session = Depends(get_db)):
+    _, binding = _get_project_and_binding(request, project_id, db)
     return read_budget_log(binding.novel_ai_dir)
 
 
 @router.post("/review")
-def review(project_id: str, payload: ReviewRequest, db: Session = Depends(get_db)):
-    _, binding = _get_project_and_binding(project_id, db)
+def review(project_id: str, payload: ReviewRequest, request: Request, db: Session = Depends(get_db)):
+    _, binding = _get_project_and_binding(request, project_id, db)
     try:
         return apply_review(
             binding.novel_ai_dir,
@@ -440,10 +458,14 @@ async def _run_bridge_async(run_id: str, project_id: str, command: str,
     )
 
 
-def _get_project_and_binding(project_id: str, db: Session) -> tuple[Project, NovelAIBinding]:
-    project = db.get(Project, project_id)
-    if not project:
-        raise HTTPException(404, "project not found")
+def _get_project_and_binding(
+    request: Request,
+    project_id: str,
+    db: Session,
+) -> tuple[Project, NovelAIBinding]:
+    """拿项目 + binding，且校验 ownership（Phase 4）。"""
+    current_user = _current_user_or_401(request)
+    project = require_owned_project(db, project_id, current_user)
     binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
     if not binding:
         raise HTTPException(400, "NovelAIBinding not found for project")

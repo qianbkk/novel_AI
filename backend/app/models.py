@@ -333,3 +333,24 @@ class RuleConfig(Base):
     updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
 
     project = relationship("Project")
+
+
+# ─── Phase 4: 多用户认证 ───
+class User(Base):
+    """应用层 user 表。email 唯一登录。
+
+    设计原则（与 Phase 3 memo 一致）：
+      - 不引入 RBAC；只支持"多用户各自独立数据"。
+      - bcrypt 哈希密码（cost=12）；不在 DB 留明文/密文外的明文痕迹。
+      - owner_id 关系：在 Phase 1 已预埋 Project.owner_id（nullable），
+        上线 register 时把 owner_id backfill 给首个 user；后续 user
+        创建的 project 走 owner_id=current_user.id。
+    """
+    __tablename__ = "users"
+
+    id = Column(String, primary_key=True, default=gen_id)
+    email = Column(String, nullable=False, unique=True)
+    display_name = Column(String, nullable=True)
+    password_hash = Column(String, nullable=False)
+    created_at = Column(DateTime, default=_utcnow)
+
