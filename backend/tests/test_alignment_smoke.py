@@ -369,6 +369,24 @@ def test_worldbuild_stages_endpoint(client):
     }
     missing = expected - keys
     assert not missing, f"stages 缺字段: {missing}"
+    # Phase 7：反方向断言 — 后端多返任何不在 expected 里的 key 立刻挂（防 STAGES
+    # 加新条目忘改 expected 集合导致 silent drift）
+    extra = keys - expected
+    assert not extra, (
+        f"stages 多返未登记字段: {extra}。"
+        f"（STAGES 加新条目必须同步更新 expected 集合，让预期发现者审一次）"
+    )
+    # Phase 7：顺序断言 — 顺序错乱会让前端进度条在错位位置显示「done」
+    expected_order = [
+        "parse_config", "world_basics", "plot_skeleton", "characters",
+        "relations", "foreshadowing", "map", "factions_power",
+        "currency_special", "consistency_check",
+    ]
+    actual_order = [s["key"] for s in data["stages"]]
+    assert actual_order == expected_order, (
+        f"stages 顺序漂移：\n  expected={expected_order}\n  actual={actual_order}\n"
+        f"（顺序错会让前端 SSE stage_done 事件对不上进度条位置）"
+    )
     # label 不可为空字符串（前端拿这个渲染）
     for s in data["stages"]:
         assert s["label"], f"stage {s['key']} label 为空"

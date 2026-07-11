@@ -61,8 +61,12 @@ export default function WorldBuild() {
 
   // 阶段清单从后端拉（不阻塞首屏 — FALLBACK_STAGES 已就位）
   useEffect(() => {
+    let cancelled = false;
     api.listWorldbuildStages()
       .then((r) => {
+        // 防御：组件已经卸载（路由切换）/ 已经开始构建（用户点"开始"了）
+        // → 不要用后端清单覆盖 stages，避免 SSE 进度条闪烁
+        if (cancelled || building) return;
         if (Array.isArray(r.stages) && r.stages.length > 0) {
           setStages(r.stages);
           // 用后端真实清单重置 stageStatus，确保新增 stage 也被覆盖
@@ -75,15 +79,22 @@ export default function WorldBuild() {
           });
         }
       })
-      .catch(() => {/* 静默用 FALLBACK_STAGES — 已注 */});
-  }, []);
+      .catch((err) => {
+        // 开发期帮助：后端持续 500 / CORS 不通时静默 fallback 会让 bug 不可见
+        // eslint-disable-next-line no-console
+        console.warn("[WorldBuild] stages fetch failed, using fallback:", err);
+      });
+    return () => { cancelled = true; };
+  }, [building]);
 
   async function handleStart() {
     if (!projectId) return;
+    if (stages.length === 0) return;  // 安全护栏：FALLBACK_STAGES 应该非空，但万一未来被清空不要炸
+    const firstStage = stages[0];
     setError(null);
     setBuilding(true);
     setProgress(0);
-    setStageStatus({ [stages[0].key]: "active" });
+    setStageStatus({ [firstStage.key]: "active" });
 
     const job = await api.startWorldbuild(projectId);
     const es = new EventSource(api.worldbuildStreamUrl(projectId, job.id));
@@ -121,6 +132,8 @@ export default function WorldBuild() {
 
     es.onerror = () => {
       // 连接异常断开（比如后端重启）；不在这里报错刷屏，留给用户重试
+      // 显式 close() 防止某些浏览器重连逻辑（即便浏览器本来会自动关闭显式更稳）
+      es.close();
       setBuilding(false);
     };
   }

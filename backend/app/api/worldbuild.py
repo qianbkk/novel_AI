@@ -11,6 +11,7 @@ from ..models import (
     PowerSystem, MapNode, Foreshadowing, Currency, EntityRelation,
 )
 from ..schemas import JobOut, StageListOut
+from ..worldbuild.stages import STAGES
 from ..worldbuild.orchestrator import run_worldbuild_job, get_job_queue, cleanup_job_queue
 
 router = APIRouter(prefix="/projects/{project_id}/worldbuild", tags=["worldbuild"])
@@ -41,7 +42,8 @@ def list_worldbuild_stages():
     注意：meta 路由（不带 project_id），NOT project-scoped，**不挂 owner 校验**——
     STAGES 是全应用一致的 10 阶段常量，任何 user 看都一样。
     """
-    from ..worldbuild.stages import STAGES
+    # Phase 7：从模块顶层 import（auditor 🟢-1 建议）。原本 defer 是误以为能避免
+    # 循环导入，但 orchestrator.py 必然 import stages.py，启动时早已加载。
     return {"stages": [{"key": k, "label": lbl} for (k, lbl, _fn) in STAGES]}
 
 
