@@ -35,6 +35,92 @@ def _init_memory() -> dict:
     return empty_l2()
 
 
+def _merge_threads(existing: list, llm_returned: list) -> list:
+    """Phase 8 fix #8 核心：active_threads / closed_threads 的 dedup-aware 合并。
+
+    之前 `hot["active_threads"] = updates["active_threads"]` 直接破坏性赋值
+    —— 一个 chapter 不提某条线，LLM 漏列，这一条就永久消失。Arc-level 剧情线
+    不可逆丢失，writer 后面的章节会脱节。
+
+    修法：
+      1. 先按 LLM 返回的顺序收下 active 列表（这是当前活跃顺序的真相）
+      2. 再把 existing 没出现在 LLM 里、且不被 LLM 显式 close 的旧线追加
+      3. 同义改写去重（substring 互相包含算同一线）
+      4. cap 50 防止假阳性的孤儿线无限堆
+
+    cold.closed_threads / cold.resolved_foreshadowing 同型问题：
+    一章节 LLM 把"已回收伏笔 X"再返一次就会双倍记录。用 _append_dedup。
+    """
+    existing_list = list(existing or [])
+    llm_list = list(llm_returned or [])
+
+    result = []
+    seen: set = set()
+
+    def _norm(s: str) -> str:
+        return s.strip() if isinstance(s, str) else ""
+
+    # 1. 先收下 LLM 当前活跃列表（按 LLM 给的顺序 = 当前活跃顺序）
+    for t in llm_list:
+        s = _norm(t)
+        if not s or s in seen:
+            continue
+        # 检查是否跟已收的"语义太近"（避免轻微改写重复）
+        is_dup = False
+        for kept in result[-10:]:
+            if s in kept or kept in s:
+                is_dup = True
+                break
+        if is_dup:
+            continue
+        result.append(s)
+        seen.add(s)
+
+    # 2. existing 没在 LLM 列表里出现的也保留（防 LLM 漏列）
+    for t in existing_list:
+        s = _norm(t)
+        if not s or s in seen:
+            continue
+        is_dup = False
+        for kept in result[-10:]:
+            if s in kept or kept in s:
+                is_dup = True
+                break
+        if is_dup:
+            continue
+        result.append(s)
+        seen.add(s)
+
+    return result[:50]
+
+
+def _append_dedup(existing: list, additions: list) -> list:
+    """Phase 8 fix #10：cold 三件套通用 dedup append。
+
+    同一事件 / 同条伏笔 / 同条 closed thread 在多章节被 LLM 反复提及时，
+    也只记一次（substring fuzzy dedup，跟 _merge_threads 同样的弱判断）。
+    """
+    result = list(existing or [])
+    seen = {str(x).strip() for x in result if x}
+    for item in (additions or []):
+        s = str(item).strip() if item else ""
+        if not s:
+            continue
+        # substring 互相包含算同一记录
+        is_dup = False
+        # 只跟最近 50 条已有做比较，O(n²) 限制范围
+        for kept in result[-50:]:
+            ks = str(kept).strip()
+            if s in ks or ks in s:
+                is_dup = True
+                break
+        if is_dup:
+            continue
+        result.append(item)
+        seen.add(s)
+    return result
+
+
 TRACKER_SYSTEM = """你是叙事状态追踪AI。阅读本章正文，提取状态变化并更新记录。
 严格输出JSON，不输出任何其他内容：
 {
@@ -63,6 +149,16 @@ def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: s
     hot = current_memory.get("hot", {})
     constraints = current_memory.get("constraints", {})
 
+    # Phase 8 fix #7：原代码 `chapter_text[:2000]` 把弧高潮（3000-3300）截掉尾段。
+    # tracker 提取的是事实（last_chapter_ending / scene_location / world_events），
+    # 看到错位置会直接记错事实——比 checker 主观打分更严重。
+    # 新策略：≤4000 字全送；>4000 字保留头 1500 + 尾 2000（保尾段优先级更高，因为
+    # world_events / last_chapter_ending / chapter_summary 主要在结尾）。
+    if len(chapter_text) <= 4000:
+        text_sample = chapter_text
+    else:
+        text_sample = chapter_text[:1500] + "\n\n...【中段省略】...\n\n" + chapter_text[-2000:]
+
     context = f"""【当前状态】
 主角等级：{hot.get('protagonist_level','感债者')}（Lv{hot.get('protagonist_level_num',1)}）
 主角点数：{hot.get('protagonist_points',0)}
@@ -71,8 +167,8 @@ def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: s
 角色状态：{json.dumps(hot.get('character_states',{}), ensure_ascii=False)[:400]}
 当前约束数：{len(constraints.get('forbidden_constraints',[]))}条
 
-【第{task['chapter_number']}章正文（前2000字）】
-{chapter_text[:2000]}"""
+【第{task['chapter_number']}章正文】
+{text_sample}"""
 
     router: LLMRouter | None = get_active_router()
     if router is None:
@@ -133,15 +229,27 @@ def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: s
     char_states.update(updates.get("character_states", {}))
     hot["character_states"] = char_states
 
+    # Phase 8 fix #8：active_threads 不能 LLM 一旦漏列就被静默删除。
+    # 之前 `hot["active_threads"] = updates["active_threads"]` 是破坏性替换。
+    # 用 _merge_threads 收下 LLM 列表 + 保留旧线（防止 LLM 漏列）。
     if "active_threads" in updates:
-        hot["active_threads"] = updates["active_threads"]
+        hot["active_threads"] = _merge_threads(
+            hot.get("active_threads", []),
+            updates.get("active_threads", []),
+        )
 
     if "last_chapter_ending" in updates:
         hot["last_chapter_ending"] = updates["last_chapter_ending"]
+    # Phase 8 fix #9：scene_location / time_context 不能破坏性替换。
+    # 一章节不写地点 = 主角位置未变，用旧值；不应当归零。
     if "scene_location" in updates:
-        hot["scene_location"] = updates["scene_location"]
+        new_loc = str(updates["scene_location"] or "").strip()
+        if new_loc:
+            hot["scene_location"] = new_loc
     if "time_context" in updates:
-        hot["time_context"] = updates["time_context"]
+        new_t = str(updates["time_context"] or "").strip()
+        if new_t:
+            hot["time_context"] = new_t
 
     # 章节摘要进热层
     if "chapter_summary" in updates:
@@ -151,14 +259,24 @@ def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: s
         hot["recent_events"] = " | ".join(s["summary"] for s in summaries[-5:])
 
     # 世界事件进冷层
+    # Phase 8 fix #10：cold 三件套 append-only 但加 dedup。同一事件跨章节被
+    # LLM 重提时只记一次，substring fuzzy 去重（跟 _merge_threads 同样的弱判断）。
     cold = current_memory.get("cold", {})
-    world_events = cold.get("world_events", [])
-    world_events.extend(updates.get("new_world_events", []))
-    cold["world_events"] = world_events[-50:]
-    new_closed = updates.get("new_closed_threads", [])
-    cold["closed_threads"] = cold.get("closed_threads", []) + new_closed
-    new_resolved = updates.get("resolved_foreshadowing", [])
-    cold["resolved_foreshadowing"] = cold.get("resolved_foreshadowing", []) + new_resolved
+    world_events_deduped = _append_dedup(
+        cold.get("world_events", []),
+        updates.get("new_world_events", []),
+    )
+    cold["world_events"] = world_events_deduped[-50:]  # cap
+    closed_deduped = _append_dedup(
+        cold.get("closed_threads", []),
+        updates.get("new_closed_threads", []),
+    )
+    cold["closed_threads"] = closed_deduped
+    resolved_deduped = _append_dedup(
+        cold.get("resolved_foreshadowing", []),
+        updates.get("resolved_foreshadowing", []),
+    )
+    cold["resolved_foreshadowing"] = resolved_deduped
 
     # 约束与伏笔进 constraints 层
     constr = current_memory.get("constraints", {})
