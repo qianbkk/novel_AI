@@ -277,7 +277,10 @@ def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: s
     current_memory["meta"]        = meta
 
     # 热冷分离压缩
-    current_memory = maybe_compress_hot_to_cold(current_memory, novel_id)
+    # Phase A fix：maybe_compress_hot_to_cold 现在返回 (memory, compress_cost)，
+    # 二次摘要的真实 LLM 花费需要累加到本次 run 的 cost 上，否则
+    # state["budget_used_usd"] 漏记 → BUDGET_HARD 硬停阈值失效。
+    current_memory, compress_cost = maybe_compress_hot_to_cold(current_memory, novel_id)
 
     save_l2(novel_id, current_memory)
-    return current_memory, cost
+    return current_memory, cost + compress_cost

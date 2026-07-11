@@ -171,7 +171,7 @@ def t8():
     assert len(m2["constraints"]["forbidden_constraints"]) == 0
     for i in range(25):
         m["hot"]["recent_summaries"].append({"chapter": i+1, "summary": f"第{i+1}章"})
-    m = maybe_compress_hot_to_cold(m, "test")
+    m, _compress_cost = maybe_compress_hot_to_cold(m, "test")
     assert len(m["hot"]["recent_summaries"]) == 15
 
 
