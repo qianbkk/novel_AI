@@ -12,85 +12,53 @@ import logging
 
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
-from ..utils import parse_llm_json_response
+from ..utils import parse_llm_json_response, truncate_preserving_ends
 from ..memory.manager import (
-    get_l2, save_l2, expire_constraints, maybe_compress_hot_to_cold,
+    save_l2, expire_constraints, maybe_compress_hot_to_cold,
 )
 
 
 log = logging.getLogger("novel_ai.engine.tracker")
 
 
-# 兼容旧接口
-def load_memory(novel_id: str) -> dict:
-    return get_l2(novel_id)
-
-
-def save_memory(novel_id: str, memory: dict):
-    save_l2(novel_id, memory)
-
-
-def _init_memory() -> dict:
-    from ..memory.manager import empty_l2
-    return empty_l2()
+# Phase 8 simplify: 抽出 fuzzy-dedup 子例程，3 个调用点共用。
+# 之前 substring 循环在多处复制粘贴; window 由调用方决定
+# (threads 用 10，cold 三件套用 50 防 O(n²) 爆炸)。
+def _is_fuzzy_dup(s: str, existing: list, window: int = 10) -> bool:
+    """substring 互相包含视为「同义改写」同一项。扫最近 window 条已有项。"""
+    for kept in existing[-window:]:
+        ks = str(kept).strip()
+        if s in ks or ks in s:
+            return True
+    return False
 
 
 def _merge_threads(existing: list, llm_returned: list) -> list:
-    """Phase 8 fix #8 核心：active_threads / closed_threads 的 dedup-aware 合并。
+    """Phase 8 fix #8: active_threads 的 dedup-aware 合并。
 
-    之前 `hot["active_threads"] = updates["active_threads"]` 直接破坏性赋值
-    —— 一个 chapter 不提某条线，LLM 漏列，这一条就永久消失。Arc-level 剧情线
-    不可逆丢失，writer 后面的章节会脱节。
+    之前 hot["active_threads"] = updates["active_threads"] 直接破坏性赋值
+    —— 一个 chapter 没提某条线，LLM 漏列，这一条就永久消失。Arc-level 剧情线
+    不可逆丢失，writer 后续章节脱节。
 
-    修法：
-      1. 先按 LLM 返回的顺序收下 active 列表（这是当前活跃顺序的真相）
-      2. 再把 existing 没出现在 LLM 里、且不被 LLM 显式 close 的旧线追加
-      3. 同义改写去重（substring 互相包含算同一线）
-      4. cap 50 防止假阳性的孤儿线无限堆
-
-    cold.closed_threads / cold.resolved_foreshadowing 同型问题：
-    一章节 LLM 把"已回收伏笔 X"再返一次就会双倍记录。用 _append_dedup。
+    修法: 1) LLM 当前顺序优先; 2) existing 兜底防漏列; 3) fuzzy dedup;
+    4) cap 50 防 LLM 全漏列时孤儿线无限堆。
     """
-    existing_list = list(existing or [])
-    llm_list = list(llm_returned or [])
+    def _norm(x) -> str:
+        return x.strip() if isinstance(x, str) else ""
 
-    result = []
-    seen: set = set()
-
-    def _norm(s: str) -> str:
-        return s.strip() if isinstance(s, str) else ""
-
-    # 1. 先收下 LLM 当前活跃列表（按 LLM 给的顺序 = 当前活跃顺序）
-    for t in llm_list:
+    result: list[str] = []
+    # Pass 1: LLM 当前顺序
+    for t in llm_returned or []:
         s = _norm(t)
-        if not s or s in seen:
-            continue
-        # 检查是否跟已收的"语义太近"（避免轻微改写重复）
-        is_dup = False
-        for kept in result[-10:]:
-            if s in kept or kept in s:
-                is_dup = True
-                break
-        if is_dup:
+        if not s or _is_fuzzy_dup(s, result):
             continue
         result.append(s)
-        seen.add(s)
-
-    # 2. existing 没在 LLM 列表里出现的也保留（防 LLM 漏列）
-    for t in existing_list:
+    # Pass 2: existing 兜底
+    for t in existing or []:
         s = _norm(t)
-        if not s or s in seen:
-            continue
-        is_dup = False
-        for kept in result[-10:]:
-            if s in kept or kept in s:
-                is_dup = True
-                break
-        if is_dup:
+        if not s or _is_fuzzy_dup(s, result):
             continue
         result.append(s)
-        seen.add(s)
-
     return result[:50]
 
 
@@ -98,26 +66,14 @@ def _append_dedup(existing: list, additions: list) -> list:
     """Phase 8 fix #10：cold 三件套通用 dedup append。
 
     同一事件 / 同条伏笔 / 同条 closed thread 在多章节被 LLM 反复提及时，
-    也只记一次（substring fuzzy dedup，跟 _merge_threads 同样的弱判断）。
+    也只记一次（substring fuzzy dedup，window=50 限制 O(n²) 上界）。
     """
     result = list(existing or [])
-    seen = {str(x).strip() for x in result if x}
-    for item in (additions or []):
+    for item in additions or []:
         s = str(item).strip() if item else ""
-        if not s:
-            continue
-        # substring 互相包含算同一记录
-        is_dup = False
-        # 只跟最近 50 条已有做比较，O(n²) 限制范围
-        for kept in result[-50:]:
-            ks = str(kept).strip()
-            if s in ks or ks in s:
-                is_dup = True
-                break
-        if is_dup:
+        if not s or _is_fuzzy_dup(s, result, window=50):
             continue
         result.append(item)
-        seen.add(s)
     return result
 
 
@@ -151,13 +107,11 @@ def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: s
 
     # Phase 8 fix #7：原代码 `chapter_text[:2000]` 把弧高潮（3000-3300）截掉尾段。
     # tracker 提取的是事实（last_chapter_ending / scene_location / world_events），
-    # 看到错位置会直接记错事实——比 checker 主观打分更严重。
-    # 新策略：≤4000 字全送；>4000 字保留头 1500 + 尾 2000（保尾段优先级更高，因为
-    # world_events / last_chapter_ending / chapter_summary 主要在结尾）。
-    if len(chapter_text) <= 4000:
-        text_sample = chapter_text
-    else:
-        text_sample = chapter_text[:1500] + "\n\n...【中段省略】...\n\n" + chapter_text[-2000:]
+    # 比 checker 主观打分更严重 — 看到错位置会直接记错事实。
+    # 策略：≤4000 全送；>4000 保留头 1500 + 尾 2000（保尾段，状态多在结尾）。
+    text_sample = truncate_preserving_ends(
+        chapter_text, head_chars=1500, tail_chars=2000,
+    )
 
     context = f"""【当前状态】
 主角等级：{hot.get('protagonist_level','感债者')}（Lv{hot.get('protagonist_level_num',1)}）

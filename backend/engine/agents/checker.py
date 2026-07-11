@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
-from ..utils import parse_llm_json_response
+from ..utils import parse_llm_json_response, truncate_preserving_ends
 
 
 CHECKER_SYSTEM = """你是一位经验丰富的网络文学质量评审，专注于都市系统流类型。
@@ -53,11 +53,9 @@ def score_chapter(text: str, task: dict, agent_name: str = "checker_main") -> tu
     """
     chapter_info = f"第{task['chapter_number']}章 | 定位：{task['chapter_role']} | 爽点：{task['shuang_description']}"
 
-    # Phase 5：保留头 + 尾，保住结尾钩子而不是硬截前 3000 字
-    if len(text) <= 4000:
-        sample = text
-    else:
-        sample = text[:2000] + "\n\n...【中段省略】...\n\n" + text[-2000:]
+    # Phase 5: 保留头 + 尾，保住结尾钩子而不是硬截前 3000 字
+    # Phase 9 simplify: 抽出到 utils.truncate_preserving_ends，跟 tracker 复用同一处实现
+    sample = truncate_preserving_ends(text, head_chars=2000, tail_chars=2000)
 
     router: LLMRouter | None = get_active_router()
     if router is None:
@@ -69,7 +67,10 @@ def score_chapter(text: str, task: dict, agent_name: str = "checker_main") -> tu
         max_tokens=600,
         temperature=0.2,
     )
-    resp = resp.strip().lstrip("```json").lstrip("```").rstrip("```").strip()
+    # Phase 9 simplify: 删除冗余 fence stripping —— parse_llm_json_response 内部已经剥。
+    # 之前的 resp.strip().lstrip("```json")... 既 broken 又冗余：
+    # lstrip("```json") 当 str.chars 模式会逐字符扫，把 j/s/o/n 等字母也算剥离集，
+    # 实际让 fence 仍残留。parse_llm_json_response 自己处理且已测试覆盖。
     default = {
         "dimensions": {"hook_power": 6, "shuang_density": 6, "character_voice": 6,
                        "plot_logic": 7, "writing_naturalness": 6},

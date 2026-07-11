@@ -15,6 +15,50 @@ from typing import Any
 log = logging.getLogger("novel_ai.utils")
 
 
+def strip_markdown_fence(resp: str) -> str:
+    """脱掉 LLM 响应最外层 ```json ... ``` fence（去首尾空白后第一行是 ``` 时）。
+
+    多个 agent（checker / tracker / outline / memory_manager）以前各自 inline 同样的
+    剥 fence 代码（lines[1:] + lines[:-1] if 末位 ```）。这里集中一处。
+
+    不试图解析内层 — 仅剥外层 fence。parse_llm_json_response 进一步做 JSON 解析。
+    返回脱完 fence 后的字符串（也可能跟原样一致 — 没有 fence 时）。
+    """
+    if not resp:
+        return resp
+    s = resp.strip()
+    if not s.startswith("```"):
+        return resp
+    lines = s.split("\n")
+    lines = lines[1:]  # drop 头部 ```json / ```
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines).strip()
+
+
+def truncate_preserving_ends(
+    text: str,
+    *,
+    head_chars: int = 1500,
+    tail_chars: int = 2000,
+    threshold: int = 4000,
+    placeholder: str = "\n\n...【中段省略】...\n\n",
+) -> str:
+    """章节较长时保留头 + 尾，避免质检（checker）/ 状态抽取（tracker）截掉
+    弧高潮的尾段（目标字数 3000-3300，权重最高的「结尾钩子」/ 实际状态都在这里）。
+
+    复用此 helper：
+      - checker.py / Phase 5 fix #5：threshold=4000, head=2000, tail=2000
+      - tracker.py / Phase 8 fix #7：threshold=4000, head=1500, tail=2000
+        （head 较短因为 tracker 关心的是「实际状态」（facts） — 状态多在后面）
+
+    单源：以后改阈值只一处，跨 agent 行为一致。
+    """
+    if len(text) <= threshold:
+        return text
+    return text[:head_chars] + placeholder + text[-tail_chars:]
+
+
 def _coerce_type(parsed: Any, default: Any) -> Any:
     """类型保护：parse 出来的对象必须跟 default 类型一致。
 
