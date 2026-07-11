@@ -10,13 +10,18 @@ Phase 4 多用户认证 API。
 - 不引入 RBAC；只支持"多用户各自独立数据"。
 - 不写权限模型。所以没有"删除 user"/"列出 user"等管理端点——
   这种 admin 操作属于"将来真要 SaaS 化时再说"的范畴。
+
+Phase B2：login/register 同时通过 Set-Cookie 颁发 token，
+前端继续从 body 读 access_token 不变（向后兼容）；未来前端切换到
+cookie-only 时只需删 body 字段即可。
 """
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from sqlalchemy.orm import Session
 
@@ -31,6 +36,40 @@ from ..database import SessionLocal, get_db
 from ..logging_setup import get_logger
 from ..middleware.rate_limit import get_login_limiter
 from ..models import Project, User
+
+
+# ─── Phase B2: token cookie 配置 ───
+# cookie 名：与 Authorization Bearer header 解耦，避免 header + cookie
+# 同时设时被覆盖的歧义
+AUTH_COOKIE_NAME = "novel_ai_token"
+# 与 issue_token 里的 expires_in 一致（7 天）；写两份在这里方便后续
+# 改成可配置
+_AUTH_COOKIE_MAX_AGE = 7 * 86400
+
+
+def _set_auth_cookie(response: Response, token: str) -> None:
+    """通过 Set-Cookie 把 JWT 写到浏览器 cookie。
+
+    Phase B2：保留 body 里的 access_token 字段（向后兼容，前端暂不切），
+    同时下发 HttpOnly cookie 准备好"前端未来切 cookie-only"的路径。
+
+    属性说明：
+      - HttpOnly: JS 读不到，防 XSS 偷 token（前提：当前前端无 dangerouslySetInnerHTML）
+      - SameSite=Strict: 防 CSRF（仅同站请求带 cookie）
+      - Secure: 走 HTTPS 才发 cookie；dev 模式 http://localhost 不带，
+        生产模式 NOVEL_PRODUCTION=1 时强制带
+      - Path=/: 全站可用（不止 /auth/）
+    """
+    secure_cookie = os.environ.get("NOVEL_PRODUCTION") == "1"
+    response.set_cookie(
+        key=AUTH_COOKIE_NAME,
+        value=token,
+        max_age=_AUTH_COOKIE_MAX_AGE,
+        path="/",
+        httponly=True,
+        secure=secure_cookie,
+        samesite="strict",
+    )
 
 log = get_logger("novel_ai.auth_api")
 
@@ -74,11 +113,15 @@ class ChangePasswordRequest(BaseModel):
 # ───────── 端点 ─────────
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
-def register(payload: RegisterRequest, db: Session = Depends(get_db)):
+def register(payload: RegisterRequest, response: Response, db: Session = Depends(get_db)):
     """注册新 user 并自动签发 token。
 
     首次注册的特殊性：把 DB 里所有 owner_id=NULL 的 Project 都 backfill 给
     这个新 user，避免"我的老数据丢了"。后续注册不再动老数据。
+
+    Phase B2：除 body 里的 access_token 外，额外通过 Set-Cookie 下发
+    HttpOnly cookie（SameSite=Strict；Secure 在 NOVEL_PRODUCTION=1 时打开）。
+    向后兼容：保留 body 字段，前端暂不切。
     """
     email = payload.email.strip().lower()
     if "@" not in email or "." not in email.split("@", 1)[1]:
@@ -111,6 +154,7 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
                  updated)
 
     token = issue_token(user.id)
+    _set_auth_cookie(response, token)
     return TokenResponse(
         access_token=token,
         token_type="bearer",
@@ -120,7 +164,8 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, request: Request, response: Response,
+          db: Session = Depends(get_db)):
     """登录：bcrypt 验签密码 → 签发 token。
 
     注意：始终返回"邮箱或密码不对"（不区分），防止用户枚举攻击。
@@ -129,6 +174,10 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     同一 (client_ip, email) 组合 15 分钟内最多 5 次失败尝试，超出后返 429。
     登录成功 → 清零（让真实用户偶尔输错后立即能用）。
     实现：调 get_login_limiter()（middleware/rate_limit.py）。
+
+    ─── Phase B2：Set-Cookie ───
+    除 body 里的 access_token 外，额外通过 Set-Cookie 下发 HttpOnly cookie。
+    向后兼容：保留 body 字段，前端暂不切。
     """
     # 拿真实客户端 IP（跟 RateLimitMiddleware 同一逻辑，但这里直接读避免依赖中间件顺序）
     client_ip = request.client.host if request.client else "unknown"
@@ -155,6 +204,7 @@ def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)
     # 登录成功 → 清零失败计数
     limiter.record_success(client_ip, email)
     token = issue_token(user.id)
+    _set_auth_cookie(response, token)
     return TokenResponse(
         access_token=token,
         token_type="bearer",
