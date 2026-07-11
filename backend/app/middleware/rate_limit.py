@@ -204,6 +204,93 @@ def reset_for_testing() -> None:
     _limiter.reset()
 
 
+# ════════════════════════════════════════════════════════════════════════
+# Phase B1：登录端点单独限流（per-IP+email，15 分钟内最多 5 次失败）
+# ════════════════════════════════════════════════════════════════════════
+#
+# 为什么全局 IPRateLimiter 不够：
+#   - 全局中间件只按 IP 限流；如果一个攻击者用同一 IP 集中攻击多个 email，
+#     会因为"非写端点"豁免（_is_write_endpoint 判定 /auth/login 不在
+#     /api/v1/ 路径下，实际不走全局限流）。
+#   - 需要 per-(IP, email) 维度的失败计数，登录成功时重置（让真实用户
+#     在偶尔输错后不被永久锁）。
+# 设计取舍：
+#   - 不做"账号锁定"持久化字段（避免引入 User.account_locked 状态和
+#     运营复杂度；只是速率限制，攻击者等 15 分钟就能继续尝试）。
+#   - 复用现有 IPRateLimiter 的 deque + lock 模式，不引入新的存储。
+#   - key 用 (ip, email) 字符串拼接作 dict key（小写 email 防大小写绕过）。
+
+class LoginRateLimiter:
+    """Per-(IP, email) 失败计数：15 分钟窗口内最多 5 次失败 → 429。
+
+    成功调用 reset() 后清零（让真实用户偶尔输错后立即能用）。
+    """
+
+    def __init__(self, max_failures: int = 5, window_seconds: int = 15 * 60):
+        self.max = max_failures
+        self.window = window_seconds
+        self._buckets: dict[str, Deque[float]] = defaultdict(deque)
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(ip: str, email: str) -> str:
+        # email 必须先 normalize（小写 + strip）才能让登录路径调用前做好，
+        # 这里再做一次兜底
+        return f"{ip}::{email.strip().lower()}"
+
+    def is_allowed(self, ip: str, email: str) -> bool:
+        """检查是否还能尝试登录（窗口内失败 < max）。
+
+        Returns:
+            True — 允许尝试（无论成功失败本函数都不增计数，由调用方按结果
+                  调 record_success 或 record_failure）
+            False — 已被限流（窗口内失败 ≥ max）
+
+        设计：is_allowed 只检查不增计数，是为了把"增计数"显式分到成功/
+        失败两个分支——这样 record_success 能 reset 计数，让真实用户不
+        会因为偶尔输错密码被永久锁。
+        """
+        now = time.monotonic()
+        cutoff = now - self.window
+        key = self._key(ip, email)
+        with self._lock:
+            bucket = self._buckets[key]
+            while bucket and bucket[0] < cutoff:
+                bucket.popleft()
+            return len(bucket) < self.max
+
+    def record_failure(self, ip: str, email: str) -> None:
+        """记一次失败。"""
+        now = time.monotonic()
+        key = self._key(ip, email)
+        with self._lock:
+            self._buckets[key].append(now)
+
+    def record_success(self, ip: str, email: str) -> None:
+        """登录成功 → 清零计数器（让真实用户偶尔输错后立即可用）。"""
+        key = self._key(ip, email)
+        with self._lock:
+            self._buckets.pop(key, None)
+
+    def reset(self) -> None:
+        """测试 helper：清空所有 (ip, email) bucket。"""
+        with self._lock:
+            self._buckets.clear()
+
+
+_login_limiter = LoginRateLimiter()
+
+
+def get_login_limiter() -> LoginRateLimiter:
+    """暴露单例给 endpoint 调用 + 测试 reset。"""
+    return _login_limiter
+
+
+def reset_login_limiter_for_testing() -> None:
+    """测试 helper：清空 login limiter。"""
+    _login_limiter.reset()
+
+
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """FastAPI middleware：每个写端点请求检查 IP 速率。
 

@@ -16,7 +16,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from sqlalchemy.orm import Session
 
@@ -29,6 +29,7 @@ from ..auth import (
 )
 from ..database import SessionLocal, get_db
 from ..logging_setup import get_logger
+from ..middleware.rate_limit import get_login_limiter
 from ..models import Project, User
 
 log = get_logger("novel_ai.auth_api")
@@ -119,20 +120,40 @@ def register(payload: RegisterRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     """登录：bcrypt 验签密码 → 签发 token。
 
     注意：始终返回"邮箱或密码不对"（不区分），防止用户枚举攻击。
+
+    ─── Phase B1：per-(IP, email) 限流 ───
+    同一 (client_ip, email) 组合 15 分钟内最多 5 次失败尝试，超出后返 429。
+    登录成功 → 清零（让真实用户偶尔输错后立即能用）。
+    实现：调 get_login_limiter()（middleware/rate_limit.py）。
     """
+    # 拿真实客户端 IP（跟 RateLimitMiddleware 同一逻辑，但这里直接读避免依赖中间件顺序）
+    client_ip = request.client.host if request.client else "unknown"
     email = payload.email.strip().lower()
+    limiter = get_login_limiter()
+
+    if not limiter.is_allowed(client_ip, email):
+        log.warning("login rate limit hit: ip=%s email=%s", client_ip, email)
+        raise HTTPException(
+            status_code=429,
+            detail="登录尝试次数过多，15 分钟后再试",
+            headers={"Retry-After": str(15 * 60)},
+        )
+
     user = db.query(User).filter_by(email=email).first()
     # 故意调 verify_password 一次以拉齐 timing
     dummy_hash = "$2b$12$" + "x" * 53
     if not user or not verify_password(payload.password,
                                        user.password_hash or dummy_hash):
         log.warning("login failed for email=%s", email)
+        limiter.record_failure(client_ip, email)
         raise HTTPException(401, "邮箱或密码不对")
 
+    # 登录成功 → 清零失败计数
+    limiter.record_success(client_ip, email)
     token = issue_token(user.id)
     return TokenResponse(
         access_token=token,
