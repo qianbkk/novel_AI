@@ -4,12 +4,13 @@
 原文件位置：tests/test_invariants.py（已替换为 re-export shim）
 """
 
+from tests._paths import REPO_ROOT, BACKEND_ROOT
 import json
 import sys
 from pathlib import Path
 import pytest
 
-BACKEND = Path(__file__).resolve().parents[2]
+BACKEND = Path(REPO_ROOT)
 sys.path.insert(0, str(BACKEND))
 
 # ── 原 test_invariants.py 顶部声明的 app.schema_validator 系列 ──

@@ -4,12 +4,13 @@
 原文件位置：tests/test_invariants.py（已替换为 re-export shim）
 """
 
+from tests._paths import REPO_ROOT, BACKEND_ROOT
 import json
 import sys
 from pathlib import Path
 import pytest
 
-BACKEND = Path(__file__).resolve().parents[2]
+BACKEND = Path(REPO_ROOT)
 sys.path.insert(0, str(BACKEND))
 
 # ── 原 test_invariants.py 顶部声明的 app.schema_validator 系列 ──
@@ -839,7 +840,7 @@ class TestSSEQueueCleanup:
         """stream_worldbuild event_generator 必须用 try/finally 包裹清理（防止异常泄漏）。"""
         from pathlib import Path
         import re
-        worldbuild_py = Path(__file__).resolve().parents[1] / "app" / "api" / "worldbuild.py"
+        worldbuild_py = Path(BACKEND_ROOT) / "app" / "api" / "worldbuild.py"
         content = worldbuild_py.read_text(encoding="utf-8")
         # 找 event_generator 函数体
         m = re.search(
@@ -861,7 +862,7 @@ class TestSSEQueueCleanup:
         """stream_bridge event_generator 同理。"""
         from pathlib import Path
         import re
-        bridge_py = Path(__file__).resolve().parents[1] / "app" / "api" / "bridge.py"
+        bridge_py = Path(BACKEND_ROOT) / "app" / "api" / "bridge.py"
         content = bridge_py.read_text(encoding="utf-8")
         # 找 stream_bridge 的 event_generator
         m = re.search(

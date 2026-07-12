@@ -4,12 +4,13 @@
 原文件位置：tests/test_invariants.py（已替换为 re-export shim）
 """
 
+from tests._paths import REPO_ROOT, BACKEND_ROOT
 import json
 import sys
 from pathlib import Path
 import pytest
 
-BACKEND = Path(__file__).resolve().parents[2]
+BACKEND = Path(REPO_ROOT)
 sys.path.insert(0, str(BACKEND))
 
 # ── 原 test_invariants.py 顶部声明的 app.schema_validator 系列 ──
@@ -504,7 +505,7 @@ class TestMemorySaveAtomic:
     def test_save_l2_atomic_write_uses_tmp_file(self, monkeypatch):
         """save_l2 源码必须用 atomic write（.tmp + os.replace）。"""
         from pathlib import Path
-        manager_py = Path(__file__).resolve().parents[1] / "engine" / "memory" / "manager.py"
+        manager_py = Path(BACKEND_ROOT) / "engine" / "memory" / "manager.py"
         content = manager_py.read_text(encoding="utf-8")
         # 用基于行的解析：找 def save_l2 行，下一个 def 之前都是 body
         lines = content.splitlines()
@@ -541,8 +542,8 @@ class TestMemorySaveAtomic:
         别名 import，但 helper 本体必须在 utils.py。
         """
         from pathlib import Path
-        manager_py = Path(__file__).resolve().parents[1] / "engine" / "memory" / "manager.py"
-        utils_py = Path(__file__).resolve().parents[1] / "engine" / "utils.py"
+        manager_py = Path(BACKEND_ROOT) / "engine" / "memory" / "manager.py"
+        utils_py = Path(BACKEND_ROOT) / "engine" / "utils.py"
         manager_content = manager_py.read_text(encoding="utf-8")
         utils_content = utils_py.read_text(encoding="utf-8")
         manager_lines = manager_content.splitlines()

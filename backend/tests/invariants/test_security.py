@@ -4,12 +4,13 @@
 原文件位置：tests/test_invariants.py（已替换为 re-export shim）
 """
 
+from tests._paths import REPO_ROOT, BACKEND_ROOT
 import json
 import sys
 from pathlib import Path
 import pytest
 
-BACKEND = Path(__file__).resolve().parents[2]
+BACKEND = Path(REPO_ROOT)
 sys.path.insert(0, str(BACKEND))
 
 # ── 原 test_invariants.py 顶部声明的 app.schema_validator 系列 ──
@@ -36,7 +37,7 @@ class TestMasterKeyRotation:
     def test_rotate_master_key_script_exists(self):
         """rotate_master_key.py 必须存在 + 含 main() + 关键选项。"""
         from pathlib import Path
-        script = Path(__file__).resolve().parents[2] / "backend" / "scripts" / "rotate_master_key.py"
+        script = Path(REPO_ROOT) / "backend" / "scripts" / "rotate_master_key.py"
         assert script.exists(), "backend/scripts/rotate_master_key.py 不存在"
         # 验证含 main + --new-key + --dry-run
         content = script.read_text(encoding="utf-8")
@@ -56,7 +57,7 @@ class TestMasterKeyRotation:
         """传非法 --new-key 必须立刻报错退出（不开始改 DB）。"""
         import subprocess
         from pathlib import Path
-        script_dir = Path(__file__).resolve().parents[2] / "backend" / "scripts"
+        script_dir = Path(REPO_ROOT) / "backend" / "scripts"
         # 完全非 base64
         result = subprocess.run(
             ["python", "-m", "scripts.rotate_master_key", "--new-key", "not-base64-at-all!!!"],
@@ -247,7 +248,7 @@ class TestMasterKeyScriptsEndToEnd:
         from cryptography.fernet import Fernet
         from pathlib import Path
         import subprocess
-        backend_root = Path(__file__).resolve().parents[1]
+        backend_root = Path(BACKEND_ROOT)
 
         result = subprocess.run(
             ["python", "-m", "scripts.generate_master_key"],
@@ -276,7 +277,7 @@ class TestMasterKeyScriptsEndToEnd:
         """连续两次运行 generate 必产生不同 key（secrets 随机）。"""
         from pathlib import Path
         import subprocess
-        backend_root = Path(__file__).resolve().parents[1]
+        backend_root = Path(BACKEND_ROOT)
         keys = []
         for _ in range(2):
             result = subprocess.run(
@@ -397,7 +398,7 @@ class TestRotateMasterKeyEndToEnd:
         provider_id = self._make_provider(plain)
         try:
             # 3. 加载脚本 + 调 rotate 函数（不通过 subprocess，monkeypatch 才能控）
-            backend_root = Path(__file__).resolve().parents[1]
+            backend_root = Path(BACKEND_ROOT)
             spec = importlib.util.spec_from_file_location(
                 "rotate_under_test",
                 backend_root / "scripts" / "rotate_master_key.py",
@@ -450,7 +451,7 @@ class TestRotateMasterKeyEndToEnd:
         plain = "sk-dryrun-test"
         provider_id = self._make_provider(plain)
         try:
-            backend_root = Path(__file__).resolve().parents[1]
+            backend_root = Path(BACKEND_ROOT)
             spec = importlib.util.spec_from_file_location(
                 "rotate_dry",
                 backend_root / "scripts" / "rotate_master_key.py",
@@ -838,7 +839,7 @@ class TestMasterKeyPersistedAcrossRestarts:
     def test_dev_key_path_is_gitignored(self):
         """dev master key 文件路径必须被 .gitignore 覆盖（#82 — 不能误提交）。"""
         from pathlib import Path
-        repo_root = Path(__file__).resolve().parents[2]  # backend/tests → backend → repo_root
+        repo_root = Path(REPO_ROOT)  # backend/tests → backend → repo_root
         # .gitignore 必须包含 .dev_master_key
         gi = repo_root / ".gitignore"
         content = gi.read_text(encoding="utf-8")

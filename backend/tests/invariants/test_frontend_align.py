@@ -4,12 +4,13 @@
 原文件位置：tests/test_invariants.py（已替换为 re-export shim）
 """
 
+from tests._paths import REPO_ROOT, BACKEND_ROOT
 import json
 import sys
 from pathlib import Path
 import pytest
 
-BACKEND = Path(__file__).resolve().parents[2]
+BACKEND = Path(REPO_ROOT)
 sys.path.insert(0, str(BACKEND))
 
 # ── 原 test_invariants.py 顶部声明的 app.schema_validator 系列 ──
@@ -153,7 +154,7 @@ class TestFrontendBackendPortConsistency:
         (README.md / dev.bat / docs/novel-ai-guide.html / run_mvp.py) 全已修。
         """
         from pathlib import Path
-        repo = Path(__file__).resolve().parents[2]
+        repo = Path(REPO_ROOT)
         # 扫这些路径下硬编码 :8123 的可执行/文档文件
         targets = [
             repo / "README.md",
@@ -206,7 +207,7 @@ class TestFrontendTypesAligned:
     def test_frontend_bridge_run_type_has_all_fields(self):
         """前端 BridgeRun 类型必须含 args_json / stdout_text / started_at / finished_at。"""
         from pathlib import Path
-        types_ts = Path(__file__).resolve().parents[2] / "frontend" / "src" / "types.ts"
+        types_ts = Path(REPO_ROOT) / "frontend" / "src" / "types.ts"
         content = types_ts.read_text(encoding="utf-8")
         # 提取 BridgeRun interface 块
         import re
@@ -222,7 +223,7 @@ class TestFrontendTypesAligned:
     def test_frontend_chapter_full_created_at_nullable(self):
         """前端 ChapterFull.created_at 应为 string | null（后端允许 None）。"""
         from pathlib import Path
-        types_ts = Path(__file__).resolve().parents[2] / "frontend" / "src" / "types.ts"
+        types_ts = Path(REPO_ROOT) / "frontend" / "src" / "types.ts"
         content = types_ts.read_text(encoding="utf-8")
         import re
         m = re.search(r"export interface ChapterFull\s*\{([^}]*)\}", content)
@@ -254,7 +255,7 @@ class TestAgentsPackageDocAccurate:
         # 直接读文件
         from pathlib import Path
         import ast
-        init_py = Path(__file__).resolve().parents[1] / "engine" / "agents" / "__init__.py"
+        init_py = Path(BACKEND_ROOT) / "engine" / "agents" / "__init__.py"
         src = init_py.read_text(encoding="utf-8")
 
         # 用 AST 扫描真实 import（避免被注释/文档字符串里的字面文本误判）
@@ -289,7 +290,7 @@ class TestAgentsPackageDocAccurate:
     def test_no_legacy_stub_py_on_disk(self):
         """agents 目录里不应该再有 stub.py 模块（fail-fast 原则）。"""
         from pathlib import Path
-        agents_dir = Path(__file__).resolve().parents[1] / "engine" / "agents"
+        agents_dir = Path(BACKEND_ROOT) / "engine" / "agents"
         stub_py = agents_dir / "stub.py"
         # 如果真存在 stub.py，本测试提醒——fail-fast 模式不应该有这个兜底
         if stub_py.exists():

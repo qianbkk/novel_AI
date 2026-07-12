@@ -4,12 +4,13 @@
 原文件位置：tests/test_invariants.py（已替换为 re-export shim）
 """
 
+from tests._paths import REPO_ROOT, BACKEND_ROOT
 import json
 import sys
 from pathlib import Path
 import pytest
 
-BACKEND = Path(__file__).resolve().parents[2]
+BACKEND = Path(REPO_ROOT)
 sys.path.insert(0, str(BACKEND))
 
 # ── 原 test_invariants.py 顶部声明的 app.schema_validator 系列 ──
@@ -35,7 +36,7 @@ class TestReviewContract:
 
     def test_frontend_submit_review_uses_content_field(self):
         """前端 api.submitReview 类型声明 + BridgeConsole 调用都用 `content`。"""
-        client_ts = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "api" / "client.ts").read_text(encoding="utf-8")
+        client_ts = (Path(REPO_ROOT) / "frontend" / "src" / "api" / "client.ts").read_text(encoding="utf-8")
         assert "edited_content" not in client_ts, (
             "frontend api/client.ts 还用 edited_content 字段 — "
             "后端 ReviewRequest 读 content，编辑内容会被丢弃"
@@ -46,7 +47,7 @@ class TestReviewContract:
 
     def test_frontend_submit_review_call_site_uses_content(self):
         """BridgeConsole.tsx 实际调用 api.submitReview 时用 content key。"""
-        console_tsx = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "pages" / "BridgeConsole.tsx").read_text(encoding="utf-8")
+        console_tsx = (Path(REPO_ROOT) / "frontend" / "src" / "pages" / "BridgeConsole.tsx").read_text(encoding="utf-8")
         assert "edited_content" not in console_tsx, (
             "frontend BridgeConsole.tsx 还传 edited_content — "
             "实际提交时编辑内容会被丢弃"
@@ -82,7 +83,7 @@ class TestBridgeDeadCodeRemoved:
     def test_no_run_bridge_async_imported_string_in_source(self):
         """源码（包括 subprocess 降级路径字符串）不能出现 _run_bridge_async_imported。"""
         from pathlib import Path
-        repo = Path(__file__).resolve().parents[2]
+        repo = Path(REPO_ROOT)
         offenders: list[str] = []
         for py_file in (repo / "backend").rglob("*.py"):
             # 跳过 tests/ 自身（test 文件里 grep 这个名字是合法的——在断言里）
@@ -99,7 +100,7 @@ class TestBridgeDeadCodeRemoved:
     def test_run_bridge_async_only_stub(self):
         """_run_bridge_async 函数体应只剩 stub（抛 NotImplementedError），不能真有逻辑。"""
         from pathlib import Path
-        bridge_py = Path(__file__).resolve().parents[2] / "backend" / "app" / "api" / "bridge.py"
+        bridge_py = Path(REPO_ROOT) / "backend" / "app" / "api" / "bridge.py"
         content = bridge_py.read_text(encoding="utf-8")
         # 找到函数定义位置
         import re
@@ -127,7 +128,7 @@ class TestOrphanBridgeRunRecovery:
     def test_main_has_orphan_recovery_function(self):
         """backend/app/main.py 必须定义 _recover_orphan_bridge_runs 函数。"""
         from pathlib import Path
-        main_py = Path(__file__).resolve().parents[2] / "backend" / "app" / "main.py"
+        main_py = Path(REPO_ROOT) / "backend" / "app" / "main.py"
         content = main_py.read_text(encoding="utf-8")
         assert "_recover_orphan_bridge_runs" in content, (
             "backend/app/main.py 缺 _recover_orphan_bridge_runs 函数 — "
@@ -137,7 +138,7 @@ class TestOrphanBridgeRunRecovery:
     def test_main_uses_lifespan_handler(self):
         """必须用 @asynccontextmanager lifespan 替代 deprecated @app.on_event。"""
         from pathlib import Path
-        main_py = Path(__file__).resolve().parents[2] / "backend" / "app" / "main.py"
+        main_py = Path(REPO_ROOT) / "backend" / "app" / "main.py"
         content = main_py.read_text(encoding="utf-8")
         assert "@asynccontextmanager" in content and "async def lifespan" in content, (
             "backend/app/main.py 必须用 lifespan handler（@app.on_event 已被 deprecated）"
@@ -150,7 +151,7 @@ class TestOrphanBridgeRunRecovery:
     def test_lifespan_calls_orphan_recovery(self):
         """lifespan handler 必须调 _recover_orphan_bridge_runs()。"""
         from pathlib import Path
-        main_py = Path(__file__).resolve().parents[2] / "backend" / "app" / "main.py"
+        main_py = Path(REPO_ROOT) / "backend" / "app" / "main.py"
         content = main_py.read_text(encoding="utf-8")
         # lifespan 函数体内必须调 _recover_orphan_bridge_runs
         import re
@@ -224,8 +225,8 @@ class TestOrphanBridgeRunRecovery:
     def test_cors_uses_env_or_default(self):
         """CORS 必须从 env 读 ALLOWED_ORIGINS，不能硬编码 *。"""
         from pathlib import Path
-        main_py = Path(__file__).resolve().parents[2] / "backend" / "main.py" if False else (
-            Path(__file__).resolve().parents[2] / "backend" / "app" / "main.py"
+        main_py = Path(REPO_ROOT) / "backend" / "main.py" if False else (
+            Path(REPO_ROOT) / "backend" / "app" / "main.py"
         )
         content = main_py.read_text(encoding="utf-8")
         assert 'allow_origins=["*"]' not in content, (
@@ -252,7 +253,7 @@ class TestBridgeSubprocessArchitecture:
 
     def test_worker_script_exists(self):
         from pathlib import Path
-        ws = Path(__file__).resolve().parents[1] / "engine" / "workers" / "run_bridge_subprocess.py"
+        ws = Path(BACKEND_ROOT) / "engine" / "workers" / "run_bridge_subprocess.py"
         assert ws.exists(), f"worker 脚本不存在: {ws}"
 
     def test_bridge_has_spawn_engine_subprocess(self):
@@ -310,7 +311,7 @@ class TestBridgeSubprocessArchitecture:
             [sys.executable, "-m", "engine.workers.run_bridge_subprocess",
              "smoke-test", "c12345678901234567890123456789012", "status", "batch"],
             capture_output=True, text=True,
-            cwd=str(Path(__file__).resolve().parents[1]),
+            cwd=str(Path(BACKEND_ROOT)),
             timeout=15,
         )
         # 之前 status 命令的 build_graph 错让 exit_code=1，修了之后必须=0
@@ -350,7 +351,7 @@ class TestRunBridgeConcurrencyGuard:
     def test_no_dead_project_lock_in_bridge_py(self):
         """bridge.py 不应再定义 / 调用 _project_locks / _get_project_lock。"""
         from pathlib import Path
-        bridge_py = Path(__file__).resolve().parents[1] / "app" / "api" / "bridge.py"
+        bridge_py = Path(BACKEND_ROOT) / "app" / "api" / "bridge.py"
         content = bridge_py.read_text(encoding="utf-8")
         # 关键符号：定义 + 调用都不能有（注释里的解释 OK）
         offenders: list[str] = []
@@ -385,7 +386,7 @@ class TestRunBridgeConcurrencyGuard:
         """
         from pathlib import Path
         import re
-        bridge_py = Path(__file__).resolve().parents[1] / "app" / "api" / "bridge.py"
+        bridge_py = Path(BACKEND_ROOT) / "app" / "api" / "bridge.py"
         content = bridge_py.read_text(encoding="utf-8")
         # 找 run_bridge 函数体（多行 args 模式：args 跨行 \n）
         m = re.search(

@@ -4,12 +4,13 @@
 原文件位置：tests/test_invariants.py（已替换为 re-export shim）
 """
 
+from tests._paths import REPO_ROOT, BACKEND_ROOT
 import json
 import sys
 from pathlib import Path
 import pytest
 
-BACKEND = Path(__file__).resolve().parents[2]
+BACKEND = Path(REPO_ROOT)
 sys.path.insert(0, str(BACKEND))
 
 # ── 原 test_invariants.py 顶部声明的 app.schema_validator 系列 ──
@@ -64,7 +65,7 @@ class TestDeploymentDocs:
         """generate_master_key.py 必须存在且能跑（生成有效 Fernet key）。"""
         import subprocess
         from pathlib import Path
-        script = Path(__file__).resolve().parents[2] / "backend" / "scripts" / "generate_master_key.py"
+        script = Path(REPO_ROOT) / "backend" / "scripts" / "generate_master_key.py"
         assert script.exists(), (
             "backend/scripts/generate_master_key.py 不存在 — "
             "部署时无法生成 MASTER_KEY，Provider API key 加密没人能用"
@@ -93,7 +94,7 @@ class TestDeploymentDocs:
     def test_readme_has_deployment_section(self):
         """README 必须有「部署」章节且提到 MASTER_KEY + ALLOWED_ORIGINS。"""
         from pathlib import Path
-        readme = Path(__file__).resolve().parents[2] / "README.md"
+        readme = Path(REPO_ROOT) / "README.md"
         content = readme.read_text(encoding="utf-8")
         assert "## 部署" in content, "README 缺「部署」章节"
         assert "MASTER_KEY" in content, "部署章节必须提到 MASTER_KEY"
@@ -111,7 +112,7 @@ class TestOpenApiExport:
     def test_frontend_openapi_gitignored(self):
         """frontend/openapi.json 必须在 frontend/.gitignore 里（不再 commit）。"""
         from pathlib import Path
-        gi = Path(__file__).resolve().parents[2] / "frontend" / ".gitignore"
+        gi = Path(REPO_ROOT) / "frontend" / ".gitignore"
         content = gi.read_text(encoding="utf-8")
         assert "openapi.json" in content, (
             "frontend/.gitignore 必须包含 openapi.json — "
@@ -121,7 +122,7 @@ class TestOpenApiExport:
     def test_export_openapi_script_exists(self):
         """export_openapi.py 必须存在 + 可作为 module import。"""
         from pathlib import Path
-        script = Path(__file__).resolve().parents[2] / "backend" / "scripts" / "export_openapi.py"
+        script = Path(REPO_ROOT) / "backend" / "scripts" / "export_openapi.py"
         assert script.exists(), "backend/scripts/export_openapi.py 不存在"
         # 验证可 import + 有 main()
         import importlib.util

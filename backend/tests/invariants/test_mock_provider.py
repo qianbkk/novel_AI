@@ -4,12 +4,13 @@
 原文件位置：tests/test_invariants.py（已替换为 re-export shim）
 """
 
+from tests._paths import REPO_ROOT, BACKEND_ROOT
 import json
 import sys
 from pathlib import Path
 import pytest
 
-BACKEND = Path(__file__).resolve().parents[2]
+BACKEND = Path(REPO_ROOT)
 sys.path.insert(0, str(BACKEND))
 
 # ── 原 test_invariants.py 顶部声明的 app.schema_validator 系列 ──
@@ -363,7 +364,7 @@ class TestLlmRouterDecryptFailureLogging:
     def test_load_routes_source_logs_on_decrypt_failure(self):
         """源码级锁死：load_routes 必须 log.warning。"""
         from pathlib import Path
-        router_py = Path(__file__).resolve().parents[1] / "engine" / "llm_router.py"
+        router_py = Path(BACKEND_ROOT) / "engine" / "llm_router.py"
         content = router_py.read_text(encoding="utf-8")
         # 找 load_routes 函数体（兼容多行签名 + 缩进）
         lines = content.splitlines()

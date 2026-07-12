@@ -4,12 +4,13 @@
 原文件位置：tests/test_invariants.py（已替换为 re-export shim）
 """
 
+from tests._paths import REPO_ROOT, BACKEND_ROOT
 import json
 import sys
 from pathlib import Path
 import pytest
 
-BACKEND = Path(__file__).resolve().parents[2]
+BACKEND = Path(REPO_ROOT)
 sys.path.insert(0, str(BACKEND))
 
 # ── 原 test_invariants.py 顶部声明的 app.schema_validator 系列 ──
@@ -35,7 +36,7 @@ class TestReportsPathUnified:
         """reports.py 解析路径时必须读 NOVEL_AI_DIR env。"""
         from pathlib import Path
         reports_py = (
-            Path(__file__).resolve().parents[2]
+            Path(REPO_ROOT)
             / "backend" / "app" / "bridge" / "reports.py"
         )
         content = reports_py.read_text(encoding="utf-8")
@@ -395,7 +396,7 @@ class TestExportChaptersResilient:
         """
         from pathlib import Path
         import re
-        exporter_py = Path(__file__).resolve().parents[1] / "engine" / "tools" / "exporter.py"
+        exporter_py = Path(BACKEND_ROOT) / "engine" / "tools" / "exporter.py"
         content = exporter_py.read_text(encoding="utf-8")
         m = re.search(
             r"def export_chapters\([\s\S]*?\):(.*?)(?=\ndef |\nclass |\Z)",
@@ -415,7 +416,7 @@ class TestExportChaptersResilient:
     def test_print_stats_source_has_per_chapter_try_except(self):
         """print_stats 同样修法：源码必须有 try/except + continue。"""
         from pathlib import Path
-        exporter_py = Path(__file__).resolve().parents[1] / "engine" / "tools" / "exporter.py"
+        exporter_py = Path(BACKEND_ROOT) / "engine" / "tools" / "exporter.py"
         content = exporter_py.read_text(encoding="utf-8")
         # 用基于缩进的解析：找到 def print_stats( 后的非空行，body 是缩进 >= 4 空格的行
         lines = content.splitlines()
@@ -567,7 +568,7 @@ class TestPullSettingJsonErrorHandling:
     def test_pull_setting_source_has_json_error_handling(self):
         """源码级锁死：pull_setting_package 必须 catch JSONDecodeError + UnicodeDecodeError。"""
         from pathlib import Path
-        sync_py = Path(__file__).resolve().parents[1] / "app" / "bridge" / "setting_sync.py"
+        sync_py = Path(BACKEND_ROOT) / "app" / "bridge" / "setting_sync.py"
         content = sync_py.read_text(encoding="utf-8")
         # 找 pull_setting_package 函数
         import re
@@ -675,7 +676,7 @@ class TestPostProcessLLMFailure:
     def test_post_process_source_uses_503_not_fake_pass(self):
         """源码级锁死：post-process LLM 失败时必须 raise HTTPException 不是 return 占位。"""
         from pathlib import Path
-        rules_py = Path(__file__).resolve().parents[1] / "app" / "api" / "rules.py"
+        rules_py = Path(BACKEND_ROOT) / "app" / "api" / "rules.py"
         content = rules_py.read_text(encoding="utf-8")
         # 找 _llm_call_for_postprocess 函数体
         lines = content.splitlines()
@@ -761,7 +762,7 @@ class TestSubprocessEnvContract:
     def test_run_bridge_subprocess_documents_env_contract(self):
         """subprocess 脚本应当文档化 / 承认 env 契约（不是隐式 magic）。"""
         from pathlib import Path
-        worker = Path(__file__).resolve().parents[1] / "engine" / "workers" / "run_bridge_subprocess.py"
+        worker = Path(BACKEND_ROOT) / "engine" / "workers" / "run_bridge_subprocess.py"
         src = worker.read_text(encoding="utf-8")
         # 必须有 NOVEL_AI_DIR 或 NOVEL_ENGINE_MOCK 的明确引用（说明开发者意识到契约）
         assert "NOVEL_AI_DIR" in src or "NOVEL_ENGINE_MOCK" in src, (
