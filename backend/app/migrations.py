@@ -12,12 +12,35 @@
 from __future__ import annotations
 
 import logging
+import sqlite3
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from .database import engine
 
 log = logging.getLogger("novel_ai.migrations")
+
+
+# ─── /simplify-2026-07-13-round3: 异常分类（fail-fast + TOCTOU 并存）───
+# 之前 _apply_one_migration 一刀切 except Exception + 外层再兜一刀，导致
+# 真实 DDL 错也被吞 → startup 静默"成功"但表结构不完整。修法：
+#   1) 把 benign race（duplicate column / already exists）独立识别并吞
+#   2) 任何其他异常原样 raise，让外层 + 调用方看到真相
+# 这是 Phase 3 fail-fast（finding #2）和 security-2026-07-13 #4（TOCTOU）
+# 共同达成的目标——两者不冲突，之前只是没分清。
+_BENIGN_ALTER_PATTERNS = ("duplicate column name", "already exists")
+
+
+def _is_benign_alter_error(exc: BaseException) -> bool:
+    """ALTER TABLE 失败但属于良性竞态（另一进程已加）→ 返回 True，外层吞。
+
+    用错误消息模式而非 sqlite_errorcode：sqlite_errorcode 对「语法错 /
+    类型不兼容 / 不支持的列约束」这些真错误返回 OperationalError 100=21
+    之类，业务侧无法可靠区分；只能靠消息里是否带 'duplicate column name'
+    或 'already exists' 字符串判断。
+    """
+    msg = str(exc).lower()
+    return any(pat in msg for pat in _BENIGN_ALTER_PATTERNS)
 
 
 # 增量迁移列表。每条是 (table, column, ddl_type)。
@@ -100,9 +123,12 @@ _UNIQUE_INDEX_MIGRATIONS: list[tuple[str, str, str]] = [
 def _apply_one_migration(conn, table: str, column: str, ddl_type: str) -> bool:
     """应用一条 ADD COLUMN 迁移。返回是否真的执行了 ALTER。
 
-    security-2026-07-13 #4:
-      - ALTER 撞 "duplicate column" → race-loser 视为成功，返回 False（已存在）
-      - 真实 DDL 错误 → raise，让 run_migrations 的外层 except 捕获并 log warning
+    security-2026-07-13 #4 + /simplify-2026-07-13-round3:
+      - ALTER 撞 TOCTOU（duplicate column / already exists）→ race-loser
+        视为成功，返回 False（已存在），不抛
+      - 真实 DDL 错误（语法错 / 类型不支持 / 列约束不被 SQLite 允许）→ 原样
+        raise，让 startup 暴露失败而非静默"成功"
+      - 失败分类走 _is_benign_alter_error 单一入口，避免散在 try/except 里
     """
     # 表不存在时跳过：通常意味着 Base.metadata.create_all 还没跑过
     # 或模型尚未引入这张表（开发期常见的"先删表再 migrate"场景）。
@@ -119,8 +145,7 @@ def _apply_one_migration(conn, table: str, column: str, ddl_type: str) -> bool:
             text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
         )
     except Exception as alter_exc:  # noqa: BLE001
-        msg = str(alter_exc).lower()
-        if "duplicate column" in msg or "already exists" in msg:
+        if _is_benign_alter_error(alter_exc):
             # --reload 时新旧 uvicorn 并存会撞 TOCTOU——
             # 两个进程都读到"列不存在"→ 都尝试 ALTER → 后提交者抛
             # "duplicate column name"。捕获并视为 race-loser 的成功。
@@ -130,7 +155,8 @@ def _apply_one_migration(conn, table: str, column: str, ddl_type: str) -> bool:
                 table, column,
             )
             return False
-        # 真实 DDL 错误（语法错 / 类型不被支持等）→ 让外层 catch
+        # 真实 DDL 错误（语法错 / 类型不被支持 / 不支持的列约束等）→ 原样
+        # raise，让调用方和启动流程看到真相，不要静默吞掉。
         raise
     log.info("migration applied: %s.%s (%s)", table, column, ddl_type)
     return True
@@ -158,47 +184,32 @@ def _apply_one_index_migration(conn, table: str, index_name: str,
 def run_migrations(target_engine: Engine | None = None) -> int:
     """启动时跑所有增量迁移。返回成功执行的条数。
 
-    ─── Phase 3: 异常收窄 ───
-    之前的实现是 except Exception 一刀切吞掉所有错误（包括真实 DDL 失败），
-    只剩 warning。这有隐藏风险：DDL 写错（语法/表名拼错/字段类型不被 SQLite 支持）
-    会被静默吞掉，启动看似正常但表结构其实不完整，后续 INSERT/SELECT 会炸。
+    ─── Phase 3 异常收窄 + security-2026-07-13 #4 TOCTOU + /simplify-round3 ───
+    三个目标并存，且**不冲突**：
 
-    新策略：
-      1. 表不存在 → 跳过该列（Base.metadata.create_all 创建表后下次启动会补加）
+      1. 表不存在 → 跳过该列（Base.metadata.create_all 创建表后下次启动补加）
       2. 列已存在 → 跳过（idempotent）
-      3. ALTER TABLE 真实失败 → raise，让外层 catch 记录 warning 但不 crash
+      3. ALTER 撞 TOCTOU（duplicate column / already exists）→ race-loser
+         视为成功，不抛（_apply_one_migration 内部已归类）
+      4. ALTER 真实失败（语法错 / 类型不兼容 / 不支持的列约束）→ 原样
+         raise，让 startup / 调用方看到真相，不要静默"成功"
 
-    ─── security-2026-07-13 #4: TOCTOU + 单条失败隔离 ───
-      - ALTER 撞 "duplicate column" 视为 race-loser 成功（--reload 并发启动）
-      - 单条迁移失败 → warning + 继续下一条，绝不让 startup 崩溃
+    历史上这层 for-loop 套过 except Exception 来兜单条失败——但 `_apply_one_migration`
+    已经把良性 race 单独识别并吞了，外层再 except 只会**反向把真 DDL 错也吞掉**，
+    触发 test_migration_fail_fast_on_ddl_error 失败。删掉外层兜底。
     """
     target_engine = target_engine or engine
     applied = 0
     with target_engine.begin() as conn:
-        # security-2026-07-13 #4: 单条迁移失败不应拖垮 startup。
-        # 真实场景：用户跑 `git pull` 后改 schema 列类型，ALTER TABLE 因
-        # "type incompatibility" 失败——这不该让后端进程退出；logging + 继续
-        # 跑下一条即可。开发者发现 SQL 错误时看 startup log 即可定位。
         for table, column, ddl_type in _MIGRATIONS:
-            try:
-                if _apply_one_migration(conn, table, column, ddl_type):
-                    applied += 1
-            except Exception as loop_exc:  # noqa: BLE001
-                log.warning(
-                    "migration entry failed (continuing to next): %s.%s (%s) — %s",
-                    table, column, ddl_type, loop_exc,
-                )
+            if _apply_one_migration(conn, table, column, ddl_type):
+                applied += 1
         # 唯一索引迁移：与 _MIGRATIONS 分开，因为 CREATE UNIQUE INDEX 走
-        # IF NOT EXISTS 而不是 PRAGMA + ALTER 两步。
+        # IF NOT EXISTS 而不是 PRAGMA + ALTER 两步。IF NOT EXISTS 本身不会
+        # 抛 duplicate error，所以这条循环不需要 benign 判断。
         for table, index_name, columns_sql in _UNIQUE_INDEX_MIGRATIONS:
-            try:
-                if _apply_one_index_migration(conn, table, index_name, columns_sql):
-                    applied += 1
-            except Exception as loop_exc:  # noqa: BLE001
-                log.warning(
-                    "unique-index migration failed (continuing): %s ON %s%s — %s",
-                    index_name, table, columns_sql, loop_exc,
-                )
+            if _apply_one_index_migration(conn, table, index_name, columns_sql):
+                applied += 1
     return applied
 
 
