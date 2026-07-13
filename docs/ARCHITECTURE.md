@@ -7,7 +7,7 @@
 
 ## 1. 一句话
 
-**FastAPI + React 嵌一个 LangGraph 9-Agent 长篇网文写作引擎，前置 10 阶段结构化世界构建，后置图谱+向量混合检索守一致性。单租户本地原型。**
+**FastAPI + React 嵌一个 LangGraph 9-Agent 长篇网文写作引擎，前置 10 阶段结构化世界构建，后置图谱+向量混合检索守一致性。dev 模式默认单租户；`NOVEL_PRODUCTION=1` 切换为强制鉴权的多租户模式（Phase 4 起可用）。**
 
 ---
 
@@ -26,7 +26,8 @@
 ┌───────────────────── FastAPI 后端 (uvicorn :8132) ─────────────────────────┐
 │                                                                            │
 │  lifespan (main.py):                                                      │
-│   - NOVEL_PRODUCTION=1 时强制 MASTER_KEY 已设 (fail-fast)               │
+│   - NOVEL_PRODUCTION=1 时强制 MASTER_KEY / JWT_SECRET / ALLOWED_ORIGINS  │
+│     等已妥善配置 (fail-fast)                                             │
 │   - run_migrations (idempotent ALTER TABLE ADD COLUMN)                  │
 │   - seed_role_assignments (15 个写作角色种子)                            │
 │   - _recover_orphan_bridge_runs (上一轮崩溃的 running 行标 failed)        │
@@ -35,9 +36,12 @@
 │  middleware:                                                               │
 │   - CORSMiddleware (env ALLOWED_ORIGINS, 默认 localhost:5293)            │
 │   - RateLimitMiddleware (env RATE_LIMIT_PER_MINUTE 默认 60;               │
-│                          127.0.0.1 / ::1 默认豁免 — 个人使用是摩擦)       │
+│                          127.0.0.1 / ::1 默认豁免 — 个人使用是摩擦;       │
+│                          /auth/login 另有独立的按 (IP,email) 失败限流)    │
 │                                                                            │
-│  app/api/*: REST 路由                                                      │
+│  app/api/*: REST 路由（含 auth.py：JWT 注册/登录，HttpOnly Cookie 下发）  │
+│  app/auth_scope.py: owner 校验（dev 模式 owner_id IS NULL 全局可见；      │
+│                      生产模式强制登录 + 拒绝 NULL-owner 行）              │
 │  app/worldbuild/*: 10 阶段 linear pipeline + SSE                          │
 │  app/bridge/*:   与 engine 桥接 (push-concept → planner → pull → ...)    │
 │  app/rag/*:      图谱 + 向量混合检索 (重复度 + 语义)                      │
@@ -51,7 +55,9 @@
 ┌────────────── LangGraph 引擎（独立 Python 进程）────────────────────────────┐
 │                                                                            │
 │  engine/graph.py: 状态机装配 + SSE 队列封装                                │
-│  engine/orchestrator.py: 7 节点 LangGraph 状态机                          │
+│  engine/orchestrator.py: 6 节点 LangGraph 状态机 (load_arc_tasks →        │
+│    get_next_task → write_pipeline →(不过)→ rewrite →(仍不过)→            │
+│    human_escalation；(通过)→ save_and_track，循环至完成)                  │
 │  engine/agents/*: 9 个真实实现的 agent                                     │
 │    planner / outline (batch|card|talk) / writer / normalizer /            │
 │    compliance / checker (主评+2 路交叉) / rewriter (P0/P1/P2) /            │
@@ -88,7 +94,7 @@
 2. 改生成端 prompt（planner.py / stages.py / rewriter.py 等）
 3. 改消费端解析（setting_sync.py / chapter_import.py）
 4. `python -m scripts.audit_project --strict`（暴露漂移）
-5. `python -m pytest tests/test_invariants.py -v`（118 个 invariant 锁死）
+5. `python -m pytest tests/test_invariants.py -v`（Phase 4 起拆分为 `tests/invariants/test_<domain>.py` 14 个文件，近 400 个 invariant 锁死；`test_invariants.py` 保留为 re-export shim 向后兼容）
 
 **自由字段**（个人偏好、不影响引擎逻辑）可以放进 `Project.config_json` 的 freeform 部分，跳过 1-5 步。
 
@@ -104,15 +110,17 @@
 | 真实生成质量没人验证 | **真实风险** | 真实模型（DeepSeek/Kimi/MiniMax/Anthropic）跑 worldview + 角色卡 + 章节后，质量靠肉眼观察，无自动评估 |
 | 跨库一致性窗口 | 受控但需知情 | `novel_assistant.db` 与 `checkpoints.sqlite` 无跨文件事务；靠 `chapter_import.py` 按 `chapter_no` 幂等去重 |
 
-## 已冻结的事
+## 已实现 vs 仍冻结的护栏
 
-参见 README "部署" 段落与 memory：认证、多 worker、CORS 收紧、限流强化、分布式队列等"生产级护栏"全部冻结到"决定要开放"再启用。当前只在最少必要位置做了基础保护（Fernet 加密 + IP 限流 + 自动备份）。
+Phase 4（2026-07-11）起，多用户认证（JWT + bcrypt + HttpOnly Cookie + owner 校验 + 登录限流）已实现，dev 模式默认关闭（单租户），`NOVEL_PRODUCTION=1` 时强制开启。参见 README "部署" 段落。
+
+仍冻结到"决定要开放"再启用的项：多 worker 部署下的 MASTER_KEY 一致性、分布式任务队列（现为子进程 + DB 状态检查，迁移触发条件见 `docs/superpowers/plans/2026-07-11-phase4-queue-migration.md`）、密钥管理服务（Vault/KMS）、WAF/DDoS 防护。
 
 ---
 
 ## 5. 关键不变量（auto-locked by tests）
 
-`backend/tests/test_invariants.py`（118 项）+ `test_invariants.py` 自身扩写 + `scripts/audit_project.py` 端到端审计：
+`backend/tests/invariants/test_<domain>.py`（14 个域文件，近 400 项）+ `scripts/audit_project.py` 端到端审计：
 
 - 所有改动核心模块后必须 PASS。
 - 流程：编辑 → 改对应章节 → `python -m pytest tests/` → 至少本模块绿 → commit。

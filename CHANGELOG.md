@@ -4,7 +4,96 @@
 
 格式参考 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)。
 
+## [Unreleased] — 2026-07-12
+
+### Bug Fix（phaseD — `2e80fec`）测试路径深度假设修复
+
+Phase 4 把 `test_invariants.py` 8500 行拆成 `tests/invariants/test_X.py` 子包后，实际路径比原来多一层目录深度，但 56 处 `Path(__file__).resolve().parents[N]` 硬编码深度假设未同步更新——从仓库根目录跑测试直接 `ModuleNotFoundError`，从 `backend/` 跑则 37 个 path-fragile 测试失败，跨机器/跨终端结果不一致。
+
+- 新增 `backend/tests/_paths.py`：`find_repo_root()` / `find_backend_root()` 向上找 marker 文件定位真实根目录，模块级常量 `REPO_ROOT` / `BACKEND_ROOT` 缓存
+- 新增 `backend/tests/conftest.py`：pytest 收集时把 `backend/` 插入 `sys.path`
+- `tests/invariants/test_*.py`（14 个文件，56 处）：`parents[N]` 替换为 `_paths.py` 提供的常量
+- 验证：仓库根目录与 `backend/` 各跑 36 个 path-fragile 测试，两边均 66 passed 且结果完全一致（此前 37 failed）
+
+### Tests（phaseC — `c656a68`）mock 100 章长篇端到端跑测
+
+Phase 5-9 的记忆/质检修复此前只有单测覆盖。新增 `test_longform_e2e.py`（4 用例 + `_MockRouter` + `_simulate_longform_run` helper），用 mock router 模拟 100 章 tracker 路径验证长跑下的累积行为：冷记忆压缩事件计数正确、Phase A 的 tracker+二次摘要成本累加、`active_threads` 在 fuzzy dedup 下不无限堆积、约束过期机制不抛异常。真实 LLM 才能验证的项（人工抽查压缩内容质量等）列入报告，留给用户手动执行。
+
+### Chore（phaseB3 — `e5f6c5d`）Alembic CI 校验评估
+
+调查确认仓库无任何 CI 配置（`.github/`、`.gitlab-ci.yml` 等均不存在），`alembic` 依赖与迁移目录已在 Phase 4 就绪，`test_alembic.py` 已覆盖本地校验。按方案标记 CI 集成为"不适用，跳过"，不在 YAGNI 范围内新建 CI。
+
+### Security（phaseB2-backend — `5cff12e`）`/auth/login` `/auth/register` 下发 HttpOnly Cookie
+
+前端 JWT 目前存 localStorage，一旦未来引入富文本渲染将有被 XSS 窃取的风险。新增 `_set_auth_cookie()` helper：`httponly=True` 防 XSS、`samesite=strict` 防 CSRF、`secure` 仅生产模式（`NOVEL_PRODUCTION=1`）下随 HTTPS 强制、`path=/`、7 天有效期。`body.access_token` 字段保留向后兼容，登录失败路径不下发 cookie。前端切到 cookie-only 留待 Phase E。新增 `test_auth_cookie.py`（7 用例）。
+
+### Security（phaseB1 — `a36c5ca`）`/auth/login` 按 (IP, email) 失败限流
+
+登录端点此前只受全局按 IP 计数的限流保护（且未挂载到 `/auth/*` 路径），无法防"同 IP 攻击多 email"或"多 IP 攻击同一 email"。新增 `LoginRateLimiter`：per-(ip, email) 滑动窗口，15 分钟 5 次失败触发 429 + `Retry-After`，登录成功清零失败计数。不做账号持久化锁定（避免引入解锁流程等运营复杂度）。新增 `test_auth_login_rate_limit.py`（6 用例）。
+
+### Bug Fix（phaseA — `0fee57b`）二次摘要花费透传，避免 `BUDGET_HARD` 硬停阈值失效
+
+`memory/manager.py:_secondary_summarize_cold_history()` 内部的真实 LLM 调用会产生费用，但函数只返回摘要文本，成本被丢弃——`state.budget_used_usd` 长期低于真实花费，使 `BUDGET_HARD=1.50` 硬停机制失去准确性依据。属于 #58/#60 同型问题在新调用路径里的复发。
+
+- `maybe_compress_hot_to_cold()` 与 `_secondary_summarize_cold_history()` 均改为返回 `(结果, cost)` 元组，成本沿调用链向上传递
+- `run_tracker` 返回值累加 `cost + compress_cost`
+- 新增回归测试 `test_run_tracker_accumulates_secondary_summarize_cost`，直接锁定"cost 漏记二次摘要花费"这一失败模式
+
 ## [Unreleased] — 2026-07-11
+
+### Refactor（phase9 — `70dd44a`）抽公共 helper + 删 dead code
+
+`/simplify` + `/code-review` 过一轮 Phase 7-8 改动后的清理：
+
+- `engine/utils.py` 新增 `truncate_preserving_ends()`（checker.py/tracker.py 重复的头尾截断逻辑合一）与 `strip_markdown_fence()`（4 个 agent 各自 inline 的 fence 剥离逻辑合一）
+- 修复 `checker.py:72` 的 `lstrip("```json")` 死代码兼 bug（`lstrip` 按字符集逐字剥离，会误剥 JSON 内的 j/s/o/n 字符；`parse_llm_json_response` 内部已处理 fence，此处纯冗余）
+- `engine/agents/tracker.py` 抽出 `_is_fuzzy_dup()` 收敛 3 处重复的子串模糊去重逻辑，删除未被引用的 `load_memory`/`save_memory`/`_init_memory` 死代码
+- 新增 `test_utils_helpers.py`（10 用例）覆盖两个新 helper
+
+### Bug Fix（phase8 — `70f1c2f`）tracker 防 LLM 状态抽取漂移（4 处核心）
+
+`tracker.py` 提取的是事实性状态（剧情线/地点/世界事件），4 处静默破坏性操作会导致记忆随长篇推进系统性漂移：
+
+- `chapter_text[:2000]` 截断切掉弧高潮章节（3000-3300 字）的结尾，而结尾恰是事实密度最高的部分——改为 ≤4000 字全量送、超出则保留头 1500+尾 2000
+- `active_threads` 用 `=` 破坏性替换：LLM 某章漏列的剧情线会永久从记忆消失——抽 `_merge_threads()`，LLM 当前顺序为准 + 保留旧记录中未被提及的 + 子串同义去重 + cap 50
+- `scene_location`/`time_context` 同样被空值覆盖——加空字符串保护，缺字段时保持旧值
+- `world_events`/`closed_threads`/`resolved_foreshadowing` 三个 append-only 列表无去重，同一事件跨章节重提会被双倍记录——抽 `_append_dedup()`，子串互相包含视为同一条，比较窗口限定最近 50 条
+
+新增 `test_tracker_drift.py`（15 用例：`_merge_threads` 单元 7 个、`_append_dedup` 单元 4 个、`run_tracker` 集成 4 个）。
+
+### Bug Fix（phase7-followup — `f20e4aa`）`/worldbuild/stages` 加 Cache-Control 头
+
+`STAGES` 是部署期不可变常量，加 `public, max-age=3600` 让浏览器缓存 1 小时，减少每次 `WorldBuild` 组件挂载的重复请求；后端重启天然 cache-bust。新增 `test_route_response_has_cache_control_header` 断言 `max-age ≥ 3600`。
+
+### Bug Fix（phase7 — `1acd5db`）真跨端对齐校验 + WorldBuild 竞态防御
+
+外部审计发现三个问题：
+
+- `WorldBuild.tsx` 的 stages fetch `useEffect` 依赖为空数组，慢网络下会出现"用户已点击开始构建、fetch 才 resolve 覆盖 stageStatus"的竞态窗口——加 `building`/`cancelled` 守卫，`onerror` 显式关闭 `EventSource`
+- 此前声称"前后端对齐"的测试并未做真实跨端比对——新增 `test_alignment_stages.py`（6 用例），用正则解析前端 `FALLBACK_STAGES` 与后端 `STAGES` 常量，双向断言 keys/顺序/label/数量/路由响应顺序完全一致
+- `test_worldbuild_stages_endpoint` 补充 `extra = keys - expected` 反向断言（后端多返任何未登记 key 立刻挂）
+- `backend/app/api/worldbuild.py` 把 `from ..worldbuild.stages import STAGES` 的函数内 deferred import 提到模块顶部（原意图规避循环导入不成立，orchestrator.py 启动时已隐式加载该模块）
+
+### Bug Fix（quality / Phase 5 发现 #5+#6 — `b8246df`）checker 真看结尾 + cold_memory 二次摘要
+
+两条系统性拉低长篇质量的问题：
+
+- **#5**：`checker.py` 原本只送前 3000 字给质检模型，但弧高潮章节目标字数正是 3000-3300 字，导致权重最高（30%）的 `hook_power` 维度看不到结尾钩子。改为 ≤4000 字全量送，>4000 字保留头 2000+尾 2000。
+- **#6**：`memory/manager.py` 的 `compressed_history` 原本硬截断到最后 3000 字，长篇写到 100+ 章会静默丢失早期剧情，且无告警。改为超过 4000 字触发 LLM 二次摘要压缩到约 1500 字再追加新内容，永不硬丢数据；LLM 调用失败时降级为硬截断兜底并告警，不静默吞异常。同时在 `compressed_history_meta` 记录 `total_compression_events`/`last_summarized_at_chapter` 供审计追踪。
+
+新增诊断脚本 `scripts/dev_diag_cold_memory.py`（扫描现存 `l2/*.json` 确认无历史项目已触发硬截断）与 `test_cold_memory.py`（6 用例）。
+
+### Bug Fix（outline — `0613a3d`）大纲卡片模式 B/C 分支真调 LLM，消除静默假功能
+
+外部审计发现 `run_outline_card` 的 P3 阶段是假功能：B/C 分支代码直接复用 `batch_tasks`，前端用户选"悬疑反转"或"情感共鸣"拿到的内容与 A 完全相同——比功能缺失更危险，因为不会报错。改为 B/C 各自独立 LLM 调用（共享基础 prompt + 追加 flavor 专属指导），单分支失败时 fallback 复用 A 并记录告警日志，不让整次抽卡崩溃。`_build_user_prompt`/`_extract_json_array`/`_mark_arc_climax` 抽为模块级共享 helper。新增 `test_outline_card.py`（6 用例，核心断言 B/C 不能与 A point-identical）。
+
+### Security（phase4-finding-4 — `db8f5a3`）owner 校验补齐 6 个子资源路由
+
+外部审计指出 Phase 4（`d91db8d`）的 owner 校验只覆盖了 `projects.py`/`bridge.py` 两个顶层 CRUD，`chapters`/`world`/`worldbuild`/`foreshadowings`/`rules`/`ai_assist` 等子资源路由全部漏挂——跨用户可直接读取他人的章节正文、角色卡、世界观、关系图谱。为全部相关 handler 加上 `Depends(_owner_check)`（`worldbuild.meta_router` 的全局静态路由故意不挂）。新增结构性测试 `test_auth_structural_coverage.py`：遍历 `app.routes`，凡路径含 `{project_id}` 必须依赖某种 owner 校验路径，防止未来新增路由再次漏挂；另有 9 个行为性测试验证跨用户 403 / owner 自己 200 / meta 路由公开可读。
+
+### Feature（phase4-ui — `139d87b`）前端认证对接 + 登录弹窗
+
+补完 Phase 4 上线基础设施的前端部分：`api/client.ts` 存取 localStorage JWT、自动附加 `Authorization` header、401 时清 token 并派发 `novel_ai:auth_required` 事件；新增 `components/LoginDialog.tsx`（注册/登录双模式切换，401/409/422 错误提示汉化）；`App.tsx` 侧栏账号区块（未登录显示登录/注册入口，登录后显示邮箱+登出，挂载时校验已存 token 有效性）；`types.ts` 新增 `User`/`TokenResponse`/`AuthErrorEvent` 类型。README「本地运行」章节补充多用户认证说明。
 
 ### Phase 4 — 多用户认证 + 上线基础设施（`d91db8d`）
 
