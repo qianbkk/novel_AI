@@ -89,9 +89,12 @@ def llm_semantic_check(text: str, platform: str = "fanqie") -> tuple[dict, float
         temperature=0.1,
     )
     resp = resp.strip()
-    if resp.startswith("```"):
-        resp = "\n".join(resp.split("\n")[1:])
-        resp = resp.rstrip("`").strip()
+    # 剥 fence（Phase 9+ code-review-2026-07-13 漏迁移：当时只迁了 outline /
+    # manager / parse_llm_json_response，本次补完）
+    from ..utils import strip_markdown_fence
+    stripped = strip_markdown_fence(resp)
+    if stripped:
+        resp = stripped
     try:
         result = json.loads(resp)
     except Exception:

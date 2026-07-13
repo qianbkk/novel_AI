@@ -112,40 +112,64 @@ def test_strip_fence_empty():
 
 
 def test_outline_and_manager_use_helper_not_inline():
-    """code-review-2026-07-13 #1：outline._extract_json_array 和
-    memory_manager._secondary_summarize_cold_history 必须用共享 helper，
-    不能再 inline fence 剥离逻辑（这是 Phase 9 commit 漏做的"替换调用方"
-    那半，本次补完）。
+    """code-review-2026-07-13 #1 + /simplify-2026-07-13 跟进：outline /
+    manager / compliance / parse_llm_json_response 必须用共享 helper，
+    不能再 inline fence 剥离逻辑。
+
+    用 AST 而非 regex——AST 是 Python 自己定义的代码结构抽象，不受注释/
+    缩进/空行变体影响。
     """
-    import re
+    import ast
     from pathlib import Path
-    # backend/tests/test_utils_helpers.py → parents[1] = backend/
     backend_root = Path(__file__).resolve().parents[1]
+
+    def _find_strip_calls(source: str) -> list[ast.Call]:
+        """返回源码里所有调用 strip_markdown_fence 的 AST.Call 节点。"""
+        tree = ast.parse(source)
+        return [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "strip_markdown_fence"
+        ]
+
+    def _imports_strip(source: str) -> bool:
+        """源码是否 import 了 strip_markdown_fence（from ..utils import ...）。"""
+        tree = ast.parse(source)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module and \
+               node.module.endswith("utils"):
+                if any(alias.name == "strip_markdown_fence" for alias in node.names):
+                    return True
+        return False
+
     outline_src = (backend_root / "engine/agents/outline.py").read_text(encoding="utf-8")
     manager_src = (backend_root / "engine/memory/manager.py").read_text(encoding="utf-8")
+    compliance_src = (backend_root / "engine/agents/compliance.py").read_text(encoding="utf-8")
     utils_src = (backend_root / "engine/utils.py").read_text(encoding="utf-8")
 
-    # outline.py::_extract_json_array 应 import helper
-    assert "from ..utils import strip_markdown_fence" in outline_src, \
-        "outline.py 必须 import strip_markdown_fence helper"
+    # 三个 caller 必须 import helper
+    for label, src in [("outline.py", outline_src), ("manager.py", manager_src),
+                       ("compliance.py", compliance_src)]:
+        assert _imports_strip(src), \
+            f"{label} 必须 import strip_markdown_fence helper"
 
-    # memory/manager.py::_secondary_summarize_cold_history 应 import helper
-    assert "from ..utils import strip_markdown_fence" in manager_src, \
-        "manager.py 必须 import strip_markdown_fence helper"
+    # outline.py / manager.py / compliance.py 内部必须调用 helper
+    # （import 了不用 → UnboundLocalError；用 1 次及以上 → 替换发生）
+    for label, src in [("outline.py", outline_src), ("manager.py", manager_src),
+                       ("compliance.py", compliance_src)]:
+        assert len(_find_strip_calls(src)) >= 1, \
+            f"{label} 必须调用 strip_markdown_fence"
 
-    # parse_llm_json_response 内部应改为调 helper，不再 inline fence 剥离
-    # (原 inline 块约 8 行：if s.startswith("```"): lines = s.split(...); ... )
-    parse_fn_block = utils_src[utils_src.index("def parse_llm_json_response"):]
-    # 找到下一个 def 边界
-    next_def = re.search(r"^def ", parse_fn_block[len("def parse_llm_json_response"):],
-                          re.MULTILINE)
-    parse_fn_block = parse_fn_block[:next_def.start() + len("def parse_llm_json_response")] \
-        if next_def else parse_fn_block
-    assert "strip_markdown_fence(resp)" in parse_fn_block, \
+    # parse_llm_json_response 内部 fence 剥离必须用 helper（且不应再有
+    # "Drop first line" 这种 inline fence 注释）
+    parse_strip_calls = _find_strip_calls(utils_src)
+    assert len(parse_strip_calls) >= 1, \
         "parse_llm_json_response 必须内部调用 strip_markdown_fence"
-    # 不应再有 "Drop first line (```json or ```)" 这种 inline fence 注释
-    assert "Drop first line" not in parse_fn_block, \
-        "parse_llm_json_response 不应再有 inline fence 剥离代码"
+    # 锁定 future 不能回退：utils.py 里不应出现 inline fence stripping 标志
+    # （"Drop first line" 注释 + lines[1:] fence-strip pattern）
+    assert "Drop first line" not in utils_src, \
+        "utils.py parse_llm_json_response 不应再有 inline fence 剥离代码"
 
 
 def test_strip_fence_fence_on_first_line_only():

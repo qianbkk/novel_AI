@@ -116,6 +116,22 @@ def _check_backup_path() -> int:
     return 0
 
 
+def _is_pid_alive(pid: int | None) -> bool:
+    """signal 0 = 只探测 PID 是否存在，不真发信号。
+    ESRCH = 已死；EPERM = 存在但属于其他用户（容器/PID 复用），按 alive 处理；
+    其他 OSError 一律按 alive 处理（不主动终止陌生进程）。
+    """
+    if not pid:
+        return False
+    import errno
+    import os
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError as e:
+        return e.errno == errno.EPERM
+
+
 def _recover_orphan_bridge_runs() -> int:
     """启动时清理孤儿 BridgeRun。
 
@@ -135,14 +151,11 @@ def _recover_orphan_bridge_runs() -> int:
     / orchestrator_state.json / 章节 txt 全部遭殃）。
 
     新版：
-      - 用 os.kill(pid, 0) 探测活体（不真发信号，只查 PID 是否还在）
+      - 用 _is_pid_alive(pid) 探测活体（不真发信号，只查 PID 是否还在）
       - 还活着 → 完全不动这条行（subprocess 仍在跑，状态保持 'running'），
                  让 POST /bridge/run 因为 (pending, running) 检查自然 409
-      - 进程已死 → 标 failed，写 finished_at
-      - pid 是 NULL（老 schema 列不存在或迁移前插入的行）→ 保留旧行为标 failed
+      - 进程已死（含 pid=None 的老 schema 行）→ 标 failed，写 finished_at
     """
-    import errno
-    import os
     from datetime import datetime, timezone
     from .models import BridgeRun
     db = SessionLocal()
@@ -156,17 +169,7 @@ def _recover_orphan_bridge_runs() -> int:
         )
         recovered = 0
         for run in stuck:
-            # signal 0 = 只探测 PID 是否存在，不真发信号。
-            # ESRCH = 已死；EPERM = 存在但属于其他用户（容器/PID 复用），保守按 alive 处理；
-            # 其他 OSError 一律按 alive 处理（不主动终止陌生进程）。
-            alive = False
-            if run.pid:
-                try:
-                    os.kill(run.pid, 0)
-                    alive = True
-                except OSError as e:
-                    alive = (e.errno == errno.EPERM)
-            if alive:
+            if _is_pid_alive(run.pid):
                 # 子进程还在跑！**不要动这条行**——让它继续写。
                 # POST /bridge/run 的 (pending, running) 检查会拒绝新启。
                 log.warning(

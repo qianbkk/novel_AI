@@ -25,7 +25,7 @@ def strip_markdown_fence(resp: str | None) -> str | None:
     返回脱完 fence 后的字符串（无 fence 时也 strip + 同样返回，行为一致）。
     None / 空字符串 → 原样返回（None 透传，空串经 strip 仍空串）。
     """
-    if resp is None or resp == "":
+    if not resp:
         return resp
     s = resp.strip()
     if not s.startswith("```"):
@@ -45,25 +45,18 @@ def truncate_preserving_ends(
     threshold: int = 4000,
     placeholder: str = "\n\n...【中段省略】...\n\n",
 ) -> str:
-    """章节较长时保留头 + 尾，避免质检（checker）/ 状态抽取（tracker）截掉
-    弧高潮的尾段（目标字数 3000-3300，权重最高的「结尾钩子」/ 实际状态都在这里）。
+    """章节较长时保留头 + 尾，避免质检 / 状态抽取截掉弧高潮的尾段。
 
-    复用此 helper：
-      - checker.py / Phase 5 fix #5：threshold=4000, head=2000, tail=2000
-      - tracker.py / Phase 8 fix #7：threshold=4000, head=1500, tail=2000
-        （head 较短因为 tracker 关心的是「实际状态」（facts） — 状态多在后面）
+    单源：改阈值只一处，跨 agent 行为一致。
+    调用方（Phase 5/8 fix）：checker / tracker 都满足 head+tail < threshold。
 
-    单源：以后改阈值只一处，跨 agent 行为一致。
-
-    前置条件：head_chars + tail_chars < threshold（否则「截断」会比原文还长且
-    头尾重叠）。caller 不守规矩时记 warning 并原样返回——fail-soft 比 fail-fast
-    更适合已有 caller 都合规的稳定 helper，保留向后兼容。
+    前置条件 head+tail < threshold 违反时：log warning + 原样返回（fail-soft），
+    避免未来新 caller 误用产出比原文更长的"截断"喂给 LLM。
     """
     if head_chars + tail_chars >= threshold:
         log.warning(
             "truncate_preserving_ends: head_chars(%d) + tail_chars(%d) >= threshold(%d)，"
-            "「截断」会输出比原文更长且头尾重叠——caller 应减小头尾或增大阈值。"
-            "本次原样返回 text。",
+            "「截断」会比原文更长——本次原样返回。",
             head_chars, tail_chars, threshold,
         )
         return text
@@ -134,9 +127,7 @@ def parse_llm_json_response(resp: str, default):
     if not resp:
         return default
 
-    # Strip ``` fences (any language tag) — 复用 strip_markdown_fence
-    # (Phase 9 refactor 后续：原本内联的 fence 剥离逻辑提到 strip_markdown_fence，
-    # 此处改为调 helper，避免双份实现)
+    # Strip ``` fences — 复用 strip_markdown_fence（不再 inline fence 剥离）
     s = strip_markdown_fence(resp)
     if s is None:
         return default

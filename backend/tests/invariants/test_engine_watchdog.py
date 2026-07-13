@@ -52,7 +52,11 @@ class TestWatchdogLogic:
                 if proc.poll() is not None:
                     return
                 if time.time() - last_ts["ts"] > timeout_sec:
-                    _kill_process_tree(proc.pid)
+                    # 测试场景下直接强杀——`time.sleep(999)` 在 Windows 上
+                    # 不响应 graceful taskkill (Ctrl+Break 不打断 Python 的
+                    # Win32 Sleep)。生产 watchdog 走 SIGTERM → 30s grace →
+                    # SIGKILL 二段式；这里简化为一刀切。
+                    _kill_process_tree(proc.pid, force=True)
                     killed["flag"] = True
                     return
         threading.Thread(target=watchdog, daemon=True).start()
@@ -67,8 +71,8 @@ class TestWatchdogLogic:
         try:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
-            from app.api.bridge import _terminate_process_tree
-            _terminate_process_tree(proc.pid)
+            from app.api.bridge import _kill_process_tree
+            _kill_process_tree(proc.pid, force=True)
             pytest.fail("子进程在终止信号后未在 15s 内退出")
 
         assert proc.returncode != 0, f"被终止的子进程 returncode 应非 0，实际 {proc.returncode}"

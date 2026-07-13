@@ -42,40 +42,27 @@ router = APIRouter(prefix="/projects/{project_id}/bridge", tags=["bridge"])
 BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
-def _terminate_process_tree(pid: int) -> None:
-    """跨平台礼貌终止整个进程树 (security-2026-07-13 #3)。
+def _kill_process_tree(pid: int, force: bool = False) -> None:
+    """跨平台终止整个进程树 (security-2026-07-13 #3)。
 
-    POSIX: os.killpg + SIGTERM；Windows: taskkill /T /PID (no /F)。
-    给子进程一个清理机会；后续需要时再 SIGKILL/_kill_process_tree。
+    POSIX: os.killpg + SIGTERM (force=False) / SIGKILL (force=True)。
+    Windows: taskkill /T /PID [force=True 时加 /F]。
+    子进程已死 / 跨用户 / 不存在均静默忽略（不影响主流程）。
     """
     try:
         if sys.platform == "win32":
-            subprocess.run(
-                ["taskkill", "/T", "/PID", str(pid)],
-                capture_output=True, timeout=10,
-            )
+            args = ["taskkill", "/T", "/PID", str(pid)]
+            if force:
+                args.insert(1, "/F")
+            subprocess.run(args, capture_output=True, timeout=10)
         else:
-            os.killpg(pid, 15)  # SIGTERM
-    except (ProcessLookupError, PermissionError, OSError):
-        # 子进程已死 / 跨用户 / 不存在；都不影响主流程
-        pass
-
-
-def _kill_process_tree(pid: int) -> None:
-    """跨平台强杀整个进程树 (security-2026-07-13 #3)。
-
-    _terminate_process_tree 之后宽限期仍不退出 → 直接 SIGKILL / taskkill /F。
-    """
-    try:
-        if sys.platform == "win32":
-            subprocess.run(
-                ["taskkill", "/F", "/T", "/PID", str(pid)],
-                capture_output=True, timeout=10,
-            )
-        else:
-            os.killpg(pid, 9)  # SIGKILL
+            os.killpg(pid, 9 if force else 15)
     except (ProcessLookupError, PermissionError, OSError):
         pass
+
+
+# 向后兼容别名（/simplify-2026-07-13 合并两个 twin helper 后保留旧名）
+_terminate_process_tree = lambda pid: _kill_process_tree(pid, force=False)
 
 _run_queues: dict[str, Queue] = {}
 # _project_locks 已删除（迭代 #30）：
@@ -306,10 +293,13 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
         # watchdog 线程每 30s 轮询检查 ts 超时则 killpg 终止整个进程组。
         import time as _time
         from app.config import settings as _settings
+        # /simplify-2026-07-13: 把 timeout 一次性 bind 到局部变量，避免 watchdog
+        # 闭包长期 pin Settings 单例（Pydantic 对象 + validators + alias map）。
+        timeout_sec = _settings.engine_timeout_min * 60
+        timeout_min_for_msg = _settings.engine_timeout_min
         _activity = {"last_stdout_ts": _time.time(), "killed_by_watchdog": False}
         def _watchdog():
             """周期检查 stdout 空闲时间；超时 SIGTERM + 宽限期 SIGKILL。"""
-            timeout_sec = _settings.engine_timeout_min * 60
             grace_sec = 30  # SIGTERM 后等 30s 再 SIGKILL
             term_sent_at = None
             while True:
@@ -323,7 +313,7 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                         "engine watchdog: idle %.0fs > %ds, terminating pid=%s run_id=%s",
                         idle, timeout_sec, proc.pid, run_id,
                     )
-                    _terminate_process_tree(proc.pid)
+                    _kill_process_tree(proc.pid, force=False)
                     term_sent_at = _time.time()
                     _activity["killed_by_watchdog"] = True
                     queue.put({
@@ -337,7 +327,7 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                         "engine watchdog: grace period expired, force-killing pid=%s run_id=%s",
                         proc.pid, run_id,
                     )
-                    _kill_process_tree(proc.pid)
+                    _kill_process_tree(proc.pid, force=True)
                     return
         def _drain_stdout():
             db = SessionLocal()
@@ -374,7 +364,7 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                     # security-2026-07-13 #3: 看门狗 SIGTERM/-KILL 终止 → 标 failed(timeout)
                     if _activity["killed_by_watchdog"]:
                         bridge_run.status = "failed"
-                        timeout_msg = f"engine subprocess killed by watchdog after {_settings.engine_timeout_min}min idle"
+                        timeout_msg = f"engine subprocess killed by watchdog after {timeout_min_for_msg}min idle"
                         bridge_run.stdout_text = (bridge_run.stdout_text or "") + f"\n[error] {timeout_msg}\n"
                     else:
                         bridge_run.status = "done" if exit_code == 0 else "failed"

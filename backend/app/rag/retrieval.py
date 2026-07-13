@@ -15,6 +15,7 @@
 向量检索对这类任务并不可靠（参考调研里"多跳推理在长上下文/向量检索
 下都会衰减"的结论）。
 """
+import sqlite3
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -22,6 +23,9 @@ from ..models import Chapter, ChapterCharacter, Character, EmbeddingChunk
 from .embedding import embed_text, cosine_similarity
 
 REPETITION_THRESHOLD = 0.85  # 经验阈值；接入真实 embedding 模型后需要按实际相似度分布重新校准
+
+# SQLite 错误码常量（python sqlite3 模块暴露的 sqlite_errorcode 返回值）
+SQLITE_CONSTRAINT_UNIQUE = 2067  # UNIQUE 约束失败
 
 
 class DuplicateChapterError(Exception):
@@ -42,15 +46,13 @@ async def add_chapter(project_id: str, chapter_no: int, title: str, content: str
         db.flush()
     except IntegrityError as e:
         db.rollback()
-        # 唯一约束 (project_id, chapter_no) 触发——并发 POST 或前端重复点击
-        # 都会撞这个。SQLite 报错格式是 "UNIQUE constraint failed: chapters.project_id,
-        # chapters.chapter_no"（用列名而非约束名），所以按列组合匹配。
-        # 注意：Chapter 目前只有这一个 UniqueConstraint；如果将来加新的，
-        # 需要扩展匹配条件避免误分类。
-        err_msg = str(e.orig)
-        if ("chapters" in err_msg
-                and "project_id" in err_msg
-                and "chapter_no" in err_msg):
+        # 用 SQLite sqlite_errorcode 区分 UNIQUE 约束 vs 其他完整性错误——
+        # 比字符串匹配更稳健，不受错误格式升级或新增 UniqueConstraint 影响。
+        # 当前 Chapter 唯一的 UniqueConstraint 是 (project_id, chapter_no)，
+        # 所以任何 UNIQUE 失败都视为重复；将来加第二个 UniqueConstraint 时
+        # 需要进一步区分是哪个约束触发（可读 sqlite_message[table_name, *cols]）。
+        if isinstance(e.orig, sqlite3.IntegrityError) and \
+           getattr(e.orig, "sqlite_errorcode", None) == SQLITE_CONSTRAINT_UNIQUE:
             existing = (
                 db.query(Chapter)
                 .filter_by(project_id=project_id, chapter_no=chapter_no)
