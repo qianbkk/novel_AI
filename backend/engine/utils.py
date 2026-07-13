@@ -15,20 +15,21 @@ from typing import Any
 log = logging.getLogger("novel_ai.utils")
 
 
-def strip_markdown_fence(resp: str) -> str:
+def strip_markdown_fence(resp: str | None) -> str | None:
     """脱掉 LLM 响应最外层 ```json ... ``` fence（去首尾空白后第一行是 ``` 时）。
 
     多个 agent（checker / tracker / outline / memory_manager）以前各自 inline 同样的
     剥 fence 代码（lines[1:] + lines[:-1] if 末位 ```）。这里集中一处。
 
     不试图解析内层 — 仅剥外层 fence。parse_llm_json_response 进一步做 JSON 解析。
-    返回脱完 fence 后的字符串（也可能跟原样一致 — 没有 fence 时）。
+    返回脱完 fence 后的字符串（无 fence 时也 strip + 同样返回，行为一致）。
+    None / 空字符串 → 原样返回（None 透传，空串经 strip 仍空串）。
     """
-    if not resp:
+    if resp is None or resp == "":
         return resp
     s = resp.strip()
     if not s.startswith("```"):
-        return resp
+        return s  # 两个分支都 strip，保持返回值格式一致
     lines = s.split("\n")
     lines = lines[1:]  # drop 头部 ```json / ```
     if lines and lines[-1].strip().startswith("```"):
@@ -53,7 +54,19 @@ def truncate_preserving_ends(
         （head 较短因为 tracker 关心的是「实际状态」（facts） — 状态多在后面）
 
     单源：以后改阈值只一处，跨 agent 行为一致。
+
+    前置条件：head_chars + tail_chars < threshold（否则「截断」会比原文还长且
+    头尾重叠）。caller 不守规矩时记 warning 并原样返回——fail-soft 比 fail-fast
+    更适合已有 caller 都合规的稳定 helper，保留向后兼容。
     """
+    if head_chars + tail_chars >= threshold:
+        log.warning(
+            "truncate_preserving_ends: head_chars(%d) + tail_chars(%d) >= threshold(%d)，"
+            "「截断」会输出比原文更长且头尾重叠——caller 应减小头尾或增大阈值。"
+            "本次原样返回 text。",
+            head_chars, tail_chars, threshold,
+        )
+        return text
     if len(text) <= threshold:
         return text
     return text[:head_chars] + placeholder + text[-tail_chars:]
@@ -121,17 +134,12 @@ def parse_llm_json_response(resp: str, default):
     if not resp:
         return default
 
-    s = resp.strip()
-
-    # Strip ``` fences (any language tag)
-    if s.startswith("```"):
-        lines = s.split("\n")
-        # Drop first line (```json or ```)
-        lines = lines[1:]
-        # Drop trailing ``` if present
-        if lines and lines[-1].strip().startswith("```"):
-            lines = lines[:-1]
-        s = "\n".join(lines).strip()
+    # Strip ``` fences (any language tag) — 复用 strip_markdown_fence
+    # (Phase 9 refactor 后续：原本内联的 fence 剥离逻辑提到 strip_markdown_fence，
+    # 此处改为调 helper，避免双份实现)
+    s = strip_markdown_fence(resp)
+    if s is None:
+        return default
 
     parsed: Any = None
 

@@ -221,17 +221,19 @@ def _build_user_prompt(arc: dict, start_chapter: int, setting: dict,
 def _extract_json_array(resp: str) -> str:
     """剥 markdown fence + extract [...] JSON array。
     复用 run_outline 里的逻辑（避免重复）。
+
+    Phase 9 refactor 后续：fence 剥离改用 utils.strip_markdown_fence 共享 helper，
+    仅保留「从已剥 fence 的文本里切 [...] 片段」这一段（因为 strip_markdown_fence
+    不知道要找 JSON 数组）。
     """
-    resp = resp.strip()
-    if resp.startswith("```"):
-        lines = resp.split("\n")
-        resp = "\n".join(lines[1:])
-        if resp.strip().endswith("```"):
-            resp = resp.strip()[:-3].strip()
-    start = resp.find('['); end = resp.rfind(']') + 1
+    from ..utils import strip_markdown_fence
+    s = strip_markdown_fence(resp)
+    if s is None:
+        return resp
+    start = s.find('['); end = s.rfind(']') + 1
     if start >= 0 and end > start:
-        return resp[start:end]
-    return resp
+        return s[start:end]
+    return s
 
 
 def _mark_arc_climax(tasks: list, arc: dict) -> None:

@@ -355,26 +355,35 @@ def test_worldbuild_stages_endpoint(client):
     """GET /worldbuild/stages 返回 10 阶段清单 — 防止前后端 STAGES 漂移
 
     这是为了让前端 WorldBuild.tsx 不再硬编码 STAGES 数组。
-    后端返回的 key 必须包含所有 10 个 known stage (防止漏写 / 改名)。
+    后端返回的 key + 顺序必须包含所有 10 个 known stage (防止漏写 / 改名 /
+    顺序错位——顺序错位会让进度条 UI 跟实际任务流错位，正是本 commit 想解的问题)。
     """
     r = client.get("/worldbuild/stages")
     assert r.status_code == 200, r.text
     data = r.json()
     assert "stages" in data
     keys = {s["key"] for s in data["stages"]}
-    expected = {
+    # 后端 stages.py::STAGES 里的固定顺序——和 WorldBuild.tsx::FALLBACK_STAGES 同步
+    # (Phase 6 单源化前两边各自硬编码)。
+    expected_order = [
         "parse_config", "world_basics", "plot_skeleton", "characters",
         "relations", "foreshadowing", "map", "factions_power",
         "currency_special", "consistency_check",
-    }
+    ]
+    expected = set(expected_order)
+    actual_order = [s["key"] for s in data["stages"]]
     missing = expected - keys
     assert not missing, f"stages 缺字段: {missing}"
-    # Phase 7：反方向断言 — 后端多返任何不在 expected 里的 key 立刻挂（防 STAGES
+    # 反方向断言 — 后端多返任何不在 expected 里的 key 立刻挂（防 STAGES
     # 加新条目忘改 expected 集合导致 silent drift）
     extra = keys - expected
     assert not extra, (
         f"stages 多返未登记字段: {extra}。"
         f"（STAGES 加新条目必须同步更新 expected 集合，让预期发现者审一次）"
+    )
+    # 顺序断言 — 顺序错位会让前端进度条渲染错位，必须显式锁死。
+    assert actual_order == expected_order, (
+        f"stages 顺序不一致: actual={actual_order}, expected={expected_order}"
     )
     # Phase 7：顺序断言 — 顺序错乱会让前端进度条在错位位置显示「done」
     expected_order = [

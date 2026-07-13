@@ -56,6 +56,24 @@ def test_truncate_chapter_climax_with_checker_defaults():
     assert out == text  # ≤threshold 不截断
 
 
+def test_truncate_warns_when_head_plus_tail_exceeds_threshold(caplog):
+    """head + tail >= threshold 时应该 log warning 并原样返回——fail-soft。
+
+    修法：code-review-2026-07-13 报告指出 helper 把阈值参数化但没校验参数合理性。
+    当前两个调用方都满足约束，未来 caller 不守规矩时静默产出比原文更长的"截断"
+    会喂给 LLM 超 token。这次加 warning + 原样返回作为兜底。
+    """
+    import logging
+    text = "X" * 5000
+    with caplog.at_level(logging.WARNING, logger="novel_ai.utils"):
+        out = truncate_preserving_ends(text, head_chars=3000, tail_chars=3000, threshold=4000)
+    # fail-soft：原样返回而不是"截断"出更长文本
+    assert out == text
+    # warning 被记下
+    assert any("head_chars" in r.message and ">= threshold" in r.message
+               for r in caplog.records)
+
+
 # ────────────────────────────────────────────────────────────
 # strip_markdown_fence
 # ────────────────────────────────────────────────────────────
@@ -90,7 +108,44 @@ def test_strip_fence_handles_multiline():
 
 def test_strip_fence_empty():
     assert strip_markdown_fence("") == ""
-    assert strip_markdown_fence(None) == None  # type: ignore[arg-type]
+    assert strip_markdown_fence(None) is None
+
+
+def test_outline_and_manager_use_helper_not_inline():
+    """code-review-2026-07-13 #1：outline._extract_json_array 和
+    memory_manager._secondary_summarize_cold_history 必须用共享 helper，
+    不能再 inline fence 剥离逻辑（这是 Phase 9 commit 漏做的"替换调用方"
+    那半，本次补完）。
+    """
+    import re
+    from pathlib import Path
+    # backend/tests/test_utils_helpers.py → parents[1] = backend/
+    backend_root = Path(__file__).resolve().parents[1]
+    outline_src = (backend_root / "engine/agents/outline.py").read_text(encoding="utf-8")
+    manager_src = (backend_root / "engine/memory/manager.py").read_text(encoding="utf-8")
+    utils_src = (backend_root / "engine/utils.py").read_text(encoding="utf-8")
+
+    # outline.py::_extract_json_array 应 import helper
+    assert "from ..utils import strip_markdown_fence" in outline_src, \
+        "outline.py 必须 import strip_markdown_fence helper"
+
+    # memory/manager.py::_secondary_summarize_cold_history 应 import helper
+    assert "from ..utils import strip_markdown_fence" in manager_src, \
+        "manager.py 必须 import strip_markdown_fence helper"
+
+    # parse_llm_json_response 内部应改为调 helper，不再 inline fence 剥离
+    # (原 inline 块约 8 行：if s.startswith("```"): lines = s.split(...); ... )
+    parse_fn_block = utils_src[utils_src.index("def parse_llm_json_response"):]
+    # 找到下一个 def 边界
+    next_def = re.search(r"^def ", parse_fn_block[len("def parse_llm_json_response"):],
+                          re.MULTILINE)
+    parse_fn_block = parse_fn_block[:next_def.start() + len("def parse_llm_json_response")] \
+        if next_def else parse_fn_block
+    assert "strip_markdown_fence(resp)" in parse_fn_block, \
+        "parse_llm_json_response 必须内部调用 strip_markdown_fence"
+    # 不应再有 "Drop first line (```json or ```)" 这种 inline fence 注释
+    assert "Drop first line" not in parse_fn_block, \
+        "parse_llm_json_response 不应再有 inline fence 剥离代码"
 
 
 def test_strip_fence_fence_on_first_line_only():

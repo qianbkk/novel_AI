@@ -254,12 +254,11 @@ def _secondary_summarize_cold_history(existing: str, *, novel_id: str,
             temperature=0.2,
         )
         resp = resp.strip()
-        # 摘掉可能存在的 ``` fence
-        if resp.startswith("```"):
-            lines = resp.split("\n")
-            resp = "\n".join(lines[1:])
-            if resp.strip().endswith("```"):
-                resp = resp.strip()[:-3].strip()
+        # 摘掉可能存在的 ``` fence（Phase 9 refactor 后续：改用共享 helper）
+        from ..utils import strip_markdown_fence
+        stripped = strip_markdown_fence(resp)
+        if stripped:
+            resp = stripped
         return (resp or None), cost
     except Exception as exc:
         _log.warning(
