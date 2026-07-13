@@ -30,11 +30,7 @@ class DuplicateChapterError(Exception):
     API 层捕获后返回 409 + 已有 chapter_id，提示前端做"跳到现有章节"或
     "先删除再新建"的二选一决策，而不是撞 500 让用户误以为后端崩了。
     """
-    def __init__(self, project_id: str, chapter_no: int, existing_chapter_id: str):
-        super().__init__(
-            f"chapter_no={chapter_no} already exists in project={project_id}"
-        )
-        self.project_id = project_id
+    def __init__(self, chapter_no: int, existing_chapter_id: str):
         self.chapter_no = chapter_no
         self.existing_chapter_id = existing_chapter_id
 
@@ -47,16 +43,21 @@ async def add_chapter(project_id: str, chapter_no: int, title: str, content: str
     except IntegrityError as e:
         db.rollback()
         # 唯一约束 (project_id, chapter_no) 触发——并发 POST 或前端重复点击
-        # 都会撞这个。回滚后查已有记录 id，让上层给客户端一个有用的错误。
-        if "uq_chapters_project_chapter_no" in str(e.orig) or \
-           "UNIQUE constraint failed" in str(e.orig):
+        # 都会撞这个。SQLite 报错格式是 "UNIQUE constraint failed: chapters.project_id,
+        # chapters.chapter_no"（用列名而非约束名），所以按列组合匹配。
+        # 注意：Chapter 目前只有这一个 UniqueConstraint；如果将来加新的，
+        # 需要扩展匹配条件避免误分类。
+        err_msg = str(e.orig)
+        if ("chapters" in err_msg
+                and "project_id" in err_msg
+                and "chapter_no" in err_msg):
             existing = (
                 db.query(Chapter)
                 .filter_by(project_id=project_id, chapter_no=chapter_no)
                 .first()
             )
             raise DuplicateChapterError(
-                project_id, chapter_no,
+                chapter_no,
                 existing.id if existing else "",
             ) from e
         raise

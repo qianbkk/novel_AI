@@ -57,7 +57,7 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     # ─── security-2026-07-13 #2: BridgeRun 追踪引擎子进程 ───
     # 双写损坏防护：lifespan 启动时用 pid 探测活体，只标"真孤儿"为 failed。
     ("bridge_runs", "pid", "INTEGER"),
-    ("bridge_runs", "pgid", "INTEGER"),
+    # /simplify 2026-07-13: pgid 列被移除（写了从不读；killpg 时直接用 proc.pid）。
 ]
 
 

@@ -6,39 +6,19 @@
   - 单条迁移抛其他 DDL 错误 → 记 warning 但继续 startup（不让一条坏迁移拖垮整个进程）
   - 正常情况下 run_migrations 仍然 idempotent
 """
-from tests._paths import REPO_ROOT, BACKEND_ROOT
-import json
-import sys
-from pathlib import Path
-import pytest
-
-BACKEND = Path(REPO_ROOT)
-sys.path.insert(0, str(BACKEND))
 
 
 class TestMigrationRacingSafety:
     """ALTER TABLE ADD COLUMN 撞 duplicate column 应被吞掉。"""
 
-    def test_duplicate_column_error_swallowed(self):
+    def test_duplicate_column_error_swallowed(self, db_bootstrap):
         """模拟 race-loser 场景：列已存在（PRAGMA 没刷新过来），ALTER 抛错应被吞。"""
-        from sqlalchemy import text as _sa_text
-        from app.database import engine, Base
-        from app.migrations import run_migrations, _MIGRATIONS
+        from app import migrations as mig_mod
 
-        Base.metadata.create_all(engine)
-        # 先正常跑一遍确保列都加好了
-        run_migrations()
-
-        # 选一个已存在的列，强制让 _column_exists 失效 → ALTER 撞 duplicate
-        # 简单做法：直接 raw SQL 试加一个已存在的列，捕获异常路径。
-        # 这里测的是 run_migrations 的"已存在列"幂等分支，不直接撞 duplicate
-        # 路径（因为 _column_exists 检查在 ALTER 前）—— 但我们要测的是
-        # "如果 ALTER 真抛 duplicate 也不应让 startup 崩"。
         # 通过 monkeypatch _column_exists 让它返回 False，再跑迁移。
-        import app.migrations as mig_mod
         original = mig_mod._column_exists
         # 选 _MIGRATIONS 里第一条 migration 测
-        table, column, ddl_type = _MIGRATIONS[0]
+        table, column, _ddl_type = mig_mod._MIGRATIONS[0]
 
         def fake_column_exists(conn, t, c):
             if (t, c) == (table, column):
@@ -47,7 +27,7 @@ class TestMigrationRacingSafety:
         mig_mod._column_exists = fake_column_exists
         try:
             # 应不抛异常，return applied 数 ≥ 0
-            applied = run_migrations()
+            applied = mig_mod.run_migrations()
             assert isinstance(applied, int)
             assert applied >= 0
         finally:
@@ -57,12 +37,9 @@ class TestMigrationRacingSafety:
 class TestMigrationIsolatedFailure:
     """单条迁移失败不应让整个 startup 崩溃。"""
 
-    def test_bad_migration_does_not_crash_run(self):
+    def test_bad_migration_does_not_crash_run(self, db_bootstrap):
         """模拟一条会失败的迁移—— 不应 raise。"""
         from app import migrations as mig_mod
-        from app.database import engine, Base
-
-        Base.metadata.create_all(engine)
 
         # 临时把 _MIGRATIONS 换成一条必败的迁移（指向不存在的表）
         original = mig_mod._MIGRATIONS
@@ -77,12 +54,9 @@ class TestMigrationIsolatedFailure:
         finally:
             mig_mod._MIGRATIONS = original
 
-    def test_normal_migrations_still_apply_after_bad_one(self):
+    def test_normal_migrations_still_apply_after_bad_one(self, db_bootstrap):
         """坏 migration 之后好 migration 仍应继续跑（直接 patch _apply_one_migration）。"""
         from app import migrations as mig_mod
-        from app.database import engine, Base
-
-        Base.metadata.create_all(engine)
 
         original = mig_mod._apply_one_migration
         # 第一次调用 raise（模拟坏 DDL），第二次调用正常返回 True

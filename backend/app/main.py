@@ -116,7 +116,7 @@ def _check_backup_path() -> int:
     return 0
 
 
-def _recover_orphan_bridge_runs(project_id: str | None = None) -> int:
+def _recover_orphan_bridge_runs() -> int:
     """启动时清理孤儿 BridgeRun。
 
     历史背景：并发保护是双重的（内存 asyncio.Lock + DB BridgeRun.status='running' 检查）。
@@ -141,7 +141,8 @@ def _recover_orphan_bridge_runs(project_id: str | None = None) -> int:
       - 进程已死 → 标 failed，写 finished_at
       - pid 是 NULL（老 schema 列不存在或迁移前插入的行）→ 保留旧行为标 failed
     """
-    import os as _os
+    import errno
+    import os
     from datetime import datetime, timezone
     from .models import BridgeRun
     db = SessionLocal()
@@ -151,25 +152,20 @@ def _recover_orphan_bridge_runs(project_id: str | None = None) -> int:
             db.query(BridgeRun)
             .filter(BridgeRun.status == "running")
             .filter(BridgeRun.finished_at.is_(None))
+            .all()
         )
-        if project_id is not None:
-            stuck = stuck.filter(BridgeRun.project_id == project_id)
-        stuck = stuck.all()
         recovered = 0
         for run in stuck:
+            # signal 0 = 只探测 PID 是否存在，不真发信号。
+            # ESRCH = 已死；EPERM = 存在但属于其他用户（容器/PID 复用），保守按 alive 处理；
+            # 其他 OSError 一律按 alive 处理（不主动终止陌生进程）。
             alive = False
             if run.pid:
                 try:
-                    _os.kill(run.pid, 0)  # signal 0 = 只探测，不真发
+                    os.kill(run.pid, 0)
                     alive = True
-                except ProcessLookupError:
-                    alive = False  # 进程已死
-                except PermissionError:
-                    # PID 存在但属于另一个用户（极端情况，容器/PID 复用）
-                    # 保守按"还活着"处理——避免错误终止别人的进程
-                    alive = True
-                except OSError:
-                    alive = False
+                except OSError as e:
+                    alive = (e.errno == errno.EPERM)
             if alive:
                 # 子进程还在跑！**不要动这条行**——让它继续写。
                 # POST /bridge/run 的 (pending, running) 检查会拒绝新启。

@@ -300,10 +300,9 @@ class BridgeRun(Base):
     # 历史：subprocess 设计上独立于 uvicorn（这样 --reload 不打断 in-flight run），
     # 但 DB 没存 PID → uvicorn 重启后 lifespan 把所有 running 行标 failed，
     # 旧子进程没收到 SIGTERM 还在写磁盘 → 用户重按运行 → 双写损坏。
-    # 修：spawn 时记 pid + pgid；lifespan 用 os.kill(pid, 0) 探测活体——
-    # 还活着就**不动**那条行（保护旧子进程），确保只有一个 writer 在跑。
+    # 修：spawn 时记 pid；lifespan 用 os.kill(pid, 0) 探测活体——
+    # 还活着就不动那条行（保护旧子进程），确保只有一个 writer 在跑。
     pid = Column(Integer, nullable=True)
-    pgid = Column(Integer, nullable=True)
 
 
 class NovelAIBinding(Base):

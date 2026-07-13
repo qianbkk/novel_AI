@@ -5,34 +5,22 @@
   - 返回 404 / 405 而不是 200（防止有人误以为还在工作）
   - scripts/strip_chapter_headers.py 模块本身仍可 import（CLI 用）
 """
-from tests._paths import REPO_ROOT, BACKEND_ROOT
-import json
-import sys
-from pathlib import Path
-import pytest
-
-BACKEND = Path(REPO_ROOT)
-sys.path.insert(0, str(BACKEND))
 
 
 class TestStripJunkEndpointRemoved:
     """路由表不应再有 strip-junk-headers。"""
 
-    def test_endpoint_not_registered(self):
+    def test_endpoint_not_registered(self, db_bootstrap):
         from app.main import app
         routes = {r.path for r in app.routes if hasattr(r, "path")}
         matching = [r for r in routes if "strip-junk" in r.lower()]
         assert not matching, \
             f"strip-junk-headers 端点应已删除，实际路由: {matching}"
 
-    def test_post_returns_404(self):
+    def test_post_returns_404(self, db_bootstrap):
         """Posting 到已删除端点应 404 (FastAPI default for unknown route)."""
         from fastapi.testclient import TestClient
         from app.main import app
-        from app.database import Base, engine
-        from app.migrations import run_migrations
-        Base.metadata.create_all(engine)
-        run_migrations()
 
         client = TestClient(app)
         # 任意 project_id；端点不存在所以 path 不会被路由解析

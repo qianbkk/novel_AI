@@ -2,17 +2,15 @@
 
 锁定：
   - NOVEL_ENGINE_TIMEOUT_MIN 配置项存在且默认 120
-  - 子进程长时间无 stdout 活动 → 看门狗 SIGTERM 整个进程组
+  - 子进程长时间无 stdout 活动 → 看门狗终止整个进程组
   - 进程已退出 → 看门狗立刻返回
 """
-from tests._paths import REPO_ROOT, BACKEND_ROOT
-import json
+import subprocess
 import sys
-from pathlib import Path
-import pytest
+import threading
+import time
 
-BACKEND = Path(REPO_ROOT)
-sys.path.insert(0, str(BACKEND))
+import pytest
 
 
 class TestEngineTimeoutConfig:
@@ -33,22 +31,18 @@ class TestEngineTimeoutConfig:
 
 
 class TestWatchdogLogic:
-    """看门狗核心逻辑：超时 SIGTERM 整个进程组（killpg）。"""
+    """看门狗核心逻辑：超时终止整个进程组。"""
 
-    def test_watchdog_kills_subprocess_after_timeout(self, monkeypatch):
+    def test_watchdog_kills_subprocess_after_timeout(self):
         """极短超时（3s）+ 不输出 stdout 的子进程 → 看门狗应在 timeout 后终止它。"""
-        import subprocess
-        import time
-        import threading
-
         # 1) 启一个啥都不做的子进程，独立进程组
         proc = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(999)"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             start_new_session=True,
         )
-        # 2) 跑一个极简看门狗（跨平台兼容，POSIX 用 killpg，Windows 用 taskkill）
-        from app.api.bridge import _kill_process_tree  # 复用真实实现
+        # 2) 跑一个极简看门狗（跨平台兼容——复用真实 helper）
+        from app.api.bridge import _kill_process_tree
         last_ts = {"ts": time.time()}
         killed = {"flag": False}
         timeout_sec = 3
@@ -58,11 +52,10 @@ class TestWatchdogLogic:
                 if proc.poll() is not None:
                     return
                 if time.time() - last_ts["ts"] > timeout_sec:
-                    _kill_process_tree(proc.pid, grace=False)
+                    _kill_process_tree(proc.pid)
                     killed["flag"] = True
                     return
-        t = threading.Thread(target=watchdog, daemon=True)
-        t.start()
+        threading.Thread(target=watchdog, daemon=True).start()
 
         # 等看门狗触发
         deadline = time.time() + 15
@@ -74,19 +67,14 @@ class TestWatchdogLogic:
         try:
             proc.wait(timeout=15)
         except subprocess.TimeoutExpired:
-            _kill_process_tree(proc.pid, grace=True)
+            from app.api.bridge import _terminate_process_tree
+            _terminate_process_tree(proc.pid)
             pytest.fail("子进程在终止信号后未在 15s 内退出")
 
         assert proc.returncode != 0, f"被终止的子进程 returncode 应非 0，实际 {proc.returncode}"
 
     def test_watchdog_returns_immediately_if_subprocess_already_dead(self):
         """子进程已退出 → 看门狗 next tick 应该立刻 return。"""
-        import subprocess
-        import time
-        import os
-        import signal
-        import threading
-
         proc = subprocess.Popen(
             [sys.executable, "-c", "print('hi')"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

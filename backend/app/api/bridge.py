@@ -1,5 +1,10 @@
 import asyncio
 import json
+import os
+import subprocess
+import sys
+import threading
+import time
 import traceback
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,31 +42,39 @@ router = APIRouter(prefix="/projects/{project_id}/bridge", tags=["bridge"])
 BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 
 
-def _kill_process_tree(pid: int, grace: bool = False) -> None:
-    """跨平台终止整个进程树 (security-2026-07-13 #3)。
+def _terminate_process_tree(pid: int) -> None:
+    """跨平台礼貌终止整个进程树 (security-2026-07-13 #3)。
 
-    POSIX: subprocess.Popen(start_new_session=True) 让子进程成为独立进程组组长，
-    用 os.killpg() 给整个进程组发信号——干净终止子 + 孙。
-    Windows: 没有 killpg 等价物；用 taskkill /F /T /PID <pid> 强制终止进程树。
-    grace=True 时优先发 SIGTERM（POSIX）/ taskkill without /F（Windows），
-    让子进程有机会清理；grace=False 直接 SIGKILL / taskkill /F。
+    POSIX: os.killpg + SIGTERM；Windows: taskkill /T /PID (no /F)。
+    给子进程一个清理机会；后续需要时再 SIGKILL/_kill_process_tree。
     """
-    import sys as _sys
-    import signal as _signal
     try:
-        if _sys.platform == "win32":
-            # Windows 上 Popen(start_new_session=True) 设了 CREATE_NEW_PROCESS_GROUP，
-            # 但 os.kill 不能跨进程组边界；用 taskkill /T 终止子 + 孙。
-            import subprocess as _sp
-            args = ["taskkill", "/T", "/PID", str(pid)]
-            if not grace:
-                args.insert(1, "/F")
-            _sp.run(args, capture_output=True, timeout=10)
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/T", "/PID", str(pid)],
+                capture_output=True, timeout=10,
+            )
         else:
-            sig = _signal.SIGTERM if grace else _signal.SIGKILL
-            os.killpg(pid, sig)
+            os.killpg(pid, 15)  # SIGTERM
     except (ProcessLookupError, PermissionError, OSError):
         # 子进程已死 / 跨用户 / 不存在；都不影响主流程
+        pass
+
+
+def _kill_process_tree(pid: int) -> None:
+    """跨平台强杀整个进程树 (security-2026-07-13 #3)。
+
+    _terminate_process_tree 之后宽限期仍不退出 → 直接 SIGKILL / taskkill /F。
+    """
+    try:
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(pid)],
+                capture_output=True, timeout=10,
+            )
+        else:
+            os.killpg(pid, 9)  # SIGKILL
+    except (ProcessLookupError, PermissionError, OSError):
         pass
 
 _run_queues: dict[str, Queue] = {}
@@ -305,12 +318,12 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                     return  # 子进程已退出
                 idle = _time.time() - _activity["last_stdout_ts"]
                 if term_sent_at is None and idle > timeout_sec:
-                    # 第一次超时：SIGTERM 整个进程组（跨平台 helper）
+                    # 第一次超时：礼貌终止整个进程组（跨平台 helper）
                     log.warning(
                         "engine watchdog: idle %.0fs > %ds, terminating pid=%s run_id=%s",
                         idle, timeout_sec, proc.pid, run_id,
                     )
-                    _kill_process_tree(proc.pid, grace=True)
+                    _terminate_process_tree(proc.pid)
                     term_sent_at = _time.time()
                     _activity["killed_by_watchdog"] = True
                     queue.put({
@@ -319,12 +332,12 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                     })
                     continue
                 if term_sent_at is not None and (_time.time() - term_sent_at) > grace_sec:
-                    # 宽限期结束：SIGKILL 强杀
+                    # 宽限期结束：强杀
                     log.warning(
                         "engine watchdog: grace period expired, force-killing pid=%s run_id=%s",
                         proc.pid, run_id,
                     )
-                    _kill_process_tree(proc.pid, grace=False)
+                    _kill_process_tree(proc.pid)
                     return
         def _drain_stdout():
             db = SessionLocal()
@@ -334,10 +347,9 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                 if not bridge_run:
                     return
                 bridge_run.status = "running"
-                # security-2026-07-13 #2: 把子进程 pid + 进程组 pgid 一并记下来，
+                # security-2026-07-13 #2: 把子进程 pid 记下来，
                 # lifespan 回收时用 pid 探测活体——还活着就**不动**这条行。
                 bridge_run.pid = proc.pid
-                bridge_run.pgid = os.getpgid(proc.pid) if hasattr(os, "getpgid") else None
                 db.commit()
                 queue.put({"event": "start", "run_id": run_id, "command": command,
                            "outline_mode": outline_mode})
