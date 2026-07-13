@@ -13,7 +13,8 @@
 历史背景：
   frontend/openapi.json 之前是手工导出 + commit 进来的，commit 之后就漂了：
   后端加了 rules / foreshadowings / ai-assist-level / reimport-chapters /
-  strip-junk-headers 等 10+ 端点，openapi.json 都没记录。
+  等 10+ 端点，openapi.json 都没记录。
+  (注：strip-junk-headers 已在 security-2026-07-13 #5 删除。)
 
   本脚本从运行中的后端直接拉 /openapi.json 写到 frontend/，CI 可以独立
   校验漂移。

@@ -36,6 +36,34 @@ router = APIRouter(prefix="/projects/{project_id}/bridge", tags=["bridge"])
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent.parent
 
+
+def _kill_process_tree(pid: int, grace: bool = False) -> None:
+    """跨平台终止整个进程树 (security-2026-07-13 #3)。
+
+    POSIX: subprocess.Popen(start_new_session=True) 让子进程成为独立进程组组长，
+    用 os.killpg() 给整个进程组发信号——干净终止子 + 孙。
+    Windows: 没有 killpg 等价物；用 taskkill /F /T /PID <pid> 强制终止进程树。
+    grace=True 时优先发 SIGTERM（POSIX）/ taskkill without /F（Windows），
+    让子进程有机会清理；grace=False 直接 SIGKILL / taskkill /F。
+    """
+    import sys as _sys
+    import signal as _signal
+    try:
+        if _sys.platform == "win32":
+            # Windows 上 Popen(start_new_session=True) 设了 CREATE_NEW_PROCESS_GROUP，
+            # 但 os.kill 不能跨进程组边界；用 taskkill /T 终止子 + 孙。
+            import subprocess as _sp
+            args = ["taskkill", "/T", "/PID", str(pid)]
+            if not grace:
+                args.insert(1, "/F")
+            _sp.run(args, capture_output=True, timeout=10)
+        else:
+            sig = _signal.SIGTERM if grace else _signal.SIGKILL
+            os.killpg(pid, sig)
+    except (ProcessLookupError, PermissionError, OSError):
+        # 子进程已死 / 跨用户 / 不存在；都不影响主流程
+        pass
+
 _run_queues: dict[str, Queue] = {}
 # _project_locks 已删除（迭代 #30）：
 #   之前用 asyncio.Lock 做"同 project 重复 run"并发保护，但锁从未被 acquire
@@ -244,6 +272,8 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
 
     log.info("spawning engine subprocess: %s", " ".join(cmd[:3]))
     try:
+        # security-2026-07-13 #2: start_new_session 让 subprocess 独立进程组，
+        # 后续 killpg 能干净终止整个子进程树（避免孙进程泄漏）。
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -252,9 +282,50 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
             cwd=str(BACKEND_ROOT),
             text=True,
             bufsize=1,  # line buffered
+            start_new_session=True,
         )
         # 在独立线程读 stdout → put to queue
         import threading
+        # security-2026-07-13 #3: stdout 空闲看门狗。
+        # 子进程 LLM 卡死 / 网络重试死循环会卡在 stdout 不动；
+        # 没有看门狗 → BridgeRun 永久 running，SSE consumer 线程泄漏。
+        # 共享 last_stdout_ts dict：_drain_stdout 每次 readline 更新 ts，
+        # watchdog 线程每 30s 轮询检查 ts 超时则 killpg 终止整个进程组。
+        import time as _time
+        from app.config import settings as _settings
+        _activity = {"last_stdout_ts": _time.time(), "killed_by_watchdog": False}
+        def _watchdog():
+            """周期检查 stdout 空闲时间；超时 SIGTERM + 宽限期 SIGKILL。"""
+            timeout_sec = _settings.engine_timeout_min * 60
+            grace_sec = 30  # SIGTERM 后等 30s 再 SIGKILL
+            term_sent_at = None
+            while True:
+                _time.sleep(30)
+                if proc.poll() is not None:
+                    return  # 子进程已退出
+                idle = _time.time() - _activity["last_stdout_ts"]
+                if term_sent_at is None and idle > timeout_sec:
+                    # 第一次超时：SIGTERM 整个进程组（跨平台 helper）
+                    log.warning(
+                        "engine watchdog: idle %.0fs > %ds, terminating pid=%s run_id=%s",
+                        idle, timeout_sec, proc.pid, run_id,
+                    )
+                    _kill_process_tree(proc.pid, grace=True)
+                    term_sent_at = _time.time()
+                    _activity["killed_by_watchdog"] = True
+                    queue.put({
+                        "event": "log",
+                        "line": f"[watchdog] idle {int(idle)}s, sent termination signal to engine subprocess",
+                    })
+                    continue
+                if term_sent_at is not None and (_time.time() - term_sent_at) > grace_sec:
+                    # 宽限期结束：SIGKILL 强杀
+                    log.warning(
+                        "engine watchdog: grace period expired, force-killing pid=%s run_id=%s",
+                        proc.pid, run_id,
+                    )
+                    _kill_process_tree(proc.pid, grace=False)
+                    return
         def _drain_stdout():
             db = SessionLocal()
             stdout_chunks: list[str] = []
@@ -263,12 +334,18 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                 if not bridge_run:
                     return
                 bridge_run.status = "running"
+                # security-2026-07-13 #2: 把子进程 pid + 进程组 pgid 一并记下来，
+                # lifespan 回收时用 pid 探测活体——还活着就**不动**这条行。
+                bridge_run.pid = proc.pid
+                bridge_run.pgid = os.getpgid(proc.pid) if hasattr(os, "getpgid") else None
                 db.commit()
                 queue.put({"event": "start", "run_id": run_id, "command": command,
                            "outline_mode": outline_mode})
                 try:
                     for line in iter(proc.stdout.readline, ""):
                         stdout_chunks.append(line)
+                        # security-2026-07-13 #3: 每次 readline 视为子进程活跃
+                        _activity["last_stdout_ts"] = _time.time()
                         # 把 stdout 当作 log 事件转发给 SSE
                         queue.put({"event": "log", "line": line.rstrip()})
                         # 每 50 行 flush 到 DB（避免频繁 commit）
@@ -282,7 +359,13 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                         bridge_run.stdout_text = (bridge_run.stdout_text or "") + "".join(stdout_chunks)
                     bridge_run.exit_code = exit_code
                     bridge_run.finished_at = datetime.now(timezone.utc)
-                    bridge_run.status = "done" if exit_code == 0 else "failed"
+                    # security-2026-07-13 #3: 看门狗 SIGTERM/-KILL 终止 → 标 failed(timeout)
+                    if _activity["killed_by_watchdog"]:
+                        bridge_run.status = "failed"
+                        timeout_msg = f"engine subprocess killed by watchdog after {_settings.engine_timeout_min}min idle"
+                        bridge_run.stdout_text = (bridge_run.stdout_text or "") + f"\n[error] {timeout_msg}\n"
+                    else:
+                        bridge_run.status = "done" if exit_code == 0 else "failed"
                     db.commit()
                     queue.put({"event": "complete", "status": bridge_run.status,
                                "exit_code": exit_code})
@@ -306,6 +389,7 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                 queue.put({"event": "done", "exit_code": proc.returncode})
                 db.close()
         threading.Thread(target=_drain_stdout, daemon=True).start()
+        threading.Thread(target=_watchdog, daemon=True).start()
     except Exception as e:
         log.exception("spawn engine subprocess failed")
         queue.put({"event": "error", "message": str(e)})
@@ -384,29 +468,15 @@ async def reimport_chapters(project_id: str, request: Request, db: Session = Dep
     return await _force_reimport(project_id, binding.novel_ai_dir, db)
 
 
-@router.post("/strip-junk-headers")
-async def strip_junk_headers(project_id: str, request: Request, db: Session = Depends(get_db)):
-    """清理章节 txt 文件里的"假标题"残留头（【修改后正文】/【卷名】第N章 标题/重复第N章 行）。
-    一次跑 3 个常见 case：ch1 占位 / ch42 卷首 / ch50 重复标题。
-    修完 txt 后自动 reimport 把 DB 同步。"""
-    _current_user_or_401(request)
-    require_owned_project(db, project_id, get_current_user_optional(request))
-    import subprocess, sys
-    from pathlib import Path
-    # 调用 scripts.strip_chapter_headers
-    scripts_dir = Path(__file__).resolve().parents[2] / "scripts"
-    proc = subprocess.run(
-        [sys.executable, "-m", "scripts.strip_chapter_headers"],
-        cwd=scripts_dir.parent,  # backend dir
-        capture_output=True, text=True,
-    )
-    log.info("strip-junk-headers: rc=%s, stdout=%s",
-             proc.returncode, proc.stdout[:500])
-    return {
-        "return_code": proc.returncode,
-        "stdout": proc.stdout,
-        "stderr": proc.stderr,
-    }
+# security-2026-07-13 #5: 删除 POST /bridge/strip-junk-headers 端点
+# 历史：这是个一次性清理脚本的 HTTP 包装，硬编码 `data/engine/output/chapters`
+# 和 `../novel_AI/output/chapters` 路径，与传入的 project_id 完全无关——误
+# 点此按钮会改写固定目录的文件，破坏另一个项目。
+# 修法：删端点。需要清理章节假标题请直接跑
+#   python -m scripts.strip_chapter_headers
+# 或参考 docs/wiki/06-Dev-Setup.md "一次性修复脚本" 段。
+# （scripts/strip_chapter_headers.py 本身保留——它有更严格的目标文件过滤
+# 逻辑，不是问题。）
 
 
 @router.get("/status")

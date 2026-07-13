@@ -111,7 +111,6 @@ FastAPI 应用，端口 `8132`。入口 `backend/app/main.py`。
 | `POST /bridge/push-concept` | 项目配置 → 写入引擎 `config/novel_config.json` |
 | `POST /bridge/pull-setting` | 读取引擎 `output/setting_package.json`，Schema 校验后拆解落库（子表先删后插，保证外键安全） |
 | `POST /bridge/import-chapters` / `reimport-chapters` | 读取引擎输出章节 txt+meta，入库/覆写 |
-| `POST /bridge/strip-junk-headers` | 清洗章节标题脏数据后隐式触发 reimport |
 | `GET /bridge/status` / `pending` / `budget` | 读取引擎 `orchestrator_state.json` / `budget_log.jsonl` |
 | `POST /bridge/review` | 人工审核（accept/reject/edit）弹出的 `human_pending` 任务 |
 | `POST /bridge/set-audit-mode` | 持久化项目级 `audit_mode`（full/lite/draft），下次子进程启动时生效 |

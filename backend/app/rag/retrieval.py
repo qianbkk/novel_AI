@@ -15,6 +15,7 @@
 向量检索对这类任务并不可靠（参考调研里"多跳推理在长上下文/向量检索
 下都会衰减"的结论）。
 """
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models import Chapter, ChapterCharacter, Character, EmbeddingChunk
@@ -23,10 +24,42 @@ from .embedding import embed_text, cosine_similarity
 REPETITION_THRESHOLD = 0.85  # 经验阈值；接入真实 embedding 模型后需要按实际相似度分布重新校准
 
 
+class DuplicateChapterError(Exception):
+    """同一 project 下 chapter_no 已存在时抛出 (security-2026-07-13 #1)。
+
+    API 层捕获后返回 409 + 已有 chapter_id，提示前端做"跳到现有章节"或
+    "先删除再新建"的二选一决策，而不是撞 500 让用户误以为后端崩了。
+    """
+    def __init__(self, project_id: str, chapter_no: int, existing_chapter_id: str):
+        super().__init__(
+            f"chapter_no={chapter_no} already exists in project={project_id}"
+        )
+        self.project_id = project_id
+        self.chapter_no = chapter_no
+        self.existing_chapter_id = existing_chapter_id
+
+
 async def add_chapter(project_id: str, chapter_no: int, title: str, content: str, db: Session) -> dict:
     chapter = Chapter(project_id=project_id, chapter_no=chapter_no, title=title, content=content)
     db.add(chapter)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError as e:
+        db.rollback()
+        # 唯一约束 (project_id, chapter_no) 触发——并发 POST 或前端重复点击
+        # 都会撞这个。回滚后查已有记录 id，让上层给客户端一个有用的错误。
+        if "uq_chapters_project_chapter_no" in str(e.orig) or \
+           "UNIQUE constraint failed" in str(e.orig):
+            existing = (
+                db.query(Chapter)
+                .filter_by(project_id=project_id, chapter_no=chapter_no)
+                .first()
+            )
+            raise DuplicateChapterError(
+                project_id, chapter_no,
+                existing.id if existing else "",
+            ) from e
+        raise
 
     # 图谱侧：标记这一章出现了哪些人物。原型阶段用字符串匹配够用；
     # 真实场景下这一步应该由生成阶段顺手标注（模型知道自己写了谁），

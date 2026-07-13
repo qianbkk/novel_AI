@@ -116,16 +116,32 @@ def _check_backup_path() -> int:
     return 0
 
 
-def _recover_orphan_bridge_runs() -> int:
+def _recover_orphan_bridge_runs(project_id: str | None = None) -> int:
     """启动时清理孤儿 BridgeRun。
 
-    历史背景：并发保护是双重的（内存 asyncio.Lock + DB BridgeRun.status='running' 唯一约束）。
+    历史背景：并发保护是双重的（内存 asyncio.Lock + DB BridgeRun.status='running' 检查）。
     但如果后端进程在 run 进行中崩溃 / 被 kill / 部署重启，内存锁清空，
     DB 里那条 status='running' 且 finished_at IS NULL 的记录会永久卡住。
     下次任何 /bridge/run 调用 → 409 Conflict → 项目永久无法再生成。
 
     修法：启动时把所有未结束的 running 行标为 'failed'，写入 finished_at。
+
+    ─── security-2026-07-13 #2 ───
+    上一版有一个**严重缺陷**：subprocess 设计上独立于 uvicorn 存活（这样
+    `--reload` 重启不打断 in-flight run），但 DB 没存 PID，所以 lifespan
+    不区分"旧子进程仍活着" vs "子进程真死了"——一律标 failed。结果：
+    旧子进程没收到 SIGTERM 还在写磁盘 → 用户再点"运行" → 第二个子进程
+    起 → 两个子进程写同一个 novel_ai_dir → 双写数据损坏（setting_package.json
+    / orchestrator_state.json / 章节 txt 全部遭殃）。
+
+    新版：
+      - 用 os.kill(pid, 0) 探测活体（不真发信号，只查 PID 是否还在）
+      - 还活着 → 完全不动这条行（subprocess 仍在跑，状态保持 'running'），
+                 让 POST /bridge/run 因为 (pending, running) 检查自然 409
+      - 进程已死 → 标 failed，写 finished_at
+      - pid 是 NULL（老 schema 列不存在或迁移前插入的行）→ 保留旧行为标 failed
     """
+    import os as _os
     from datetime import datetime, timezone
     from .models import BridgeRun
     db = SessionLocal()
@@ -135,18 +151,45 @@ def _recover_orphan_bridge_runs() -> int:
             db.query(BridgeRun)
             .filter(BridgeRun.status == "running")
             .filter(BridgeRun.finished_at.is_(None))
-            .all()
         )
+        if project_id is not None:
+            stuck = stuck.filter(BridgeRun.project_id == project_id)
+        stuck = stuck.all()
+        recovered = 0
         for run in stuck:
+            alive = False
+            if run.pid:
+                try:
+                    _os.kill(run.pid, 0)  # signal 0 = 只探测，不真发
+                    alive = True
+                except ProcessLookupError:
+                    alive = False  # 进程已死
+                except PermissionError:
+                    # PID 存在但属于另一个用户（极端情况，容器/PID 复用）
+                    # 保守按"还活着"处理——避免错误终止别人的进程
+                    alive = True
+                except OSError:
+                    alive = False
+            if alive:
+                # 子进程还在跑！**不要动这条行**——让它继续写。
+                # POST /bridge/run 的 (pending, running) 检查会拒绝新启。
+                log.warning(
+                    "BridgeRun 仍是活的（pid=%s）— 跳过回收，保留 status=running："
+                    "id=%s project=%s command=%s started_at=%s",
+                    run.pid, run.id, run.project_id, run.command, run.started_at,
+                )
+                continue
             log.warning(
-                "recovering orphan BridgeRun: id=%s project=%s command=%s started_at=%s",
-                run.id, run.project_id, run.command, run.started_at,
+                "recovering orphan BridgeRun: id=%s project=%s command=%s "
+                "started_at=%s pid=%s",
+                run.id, run.project_id, run.command, run.started_at, run.pid,
             )
             run.status = "failed"
             run.finished_at = now
             # exit_code 留空（None），stdout_text 留空（None）— 与正常失败行字段一致
+            recovered += 1
         db.commit()
-        return len(stuck)
+        return recovered
     finally:
         db.close()
 

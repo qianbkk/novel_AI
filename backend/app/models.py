@@ -18,7 +18,8 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 from sqlalchemy import (
-    Column, String, Text, Integer, ForeignKey, DateTime, JSON, Float, Boolean
+    Column, String, Text, Integer, ForeignKey, DateTime, JSON, Float, Boolean,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -205,6 +206,11 @@ class Chapter(Base):
     有正文之后才能体现，光有世界观设定无法演示"重复度检测"这类场景。
     """
     __tablename__ = "chapters"
+    __table_args__ = (
+        # 同一 project 下 chapter_no 必须唯一——并发 POST 保护 (security-2026-07-13 #1)
+        # 同时也是 RAG 去重逻辑（chapter_import.py 依赖 chapter_no 幂等）的最后一道 SQL 兜底。
+        UniqueConstraint("project_id", "chapter_no", name="uq_chapters_project_chapter_no"),
+    )
 
     id = Column(String, primary_key=True, default=gen_id)
     project_id = Column(String, ForeignKey("projects.id"))
@@ -290,6 +296,14 @@ class BridgeRun(Base):
     stdout_text = Column(Text, nullable=True)
     started_at = Column(DateTime, default=_utcnow)
     finished_at = Column(DateTime, nullable=True)
+    # ─── security-2026-07-13 #2: 引擎子进程追踪 ───
+    # 历史：subprocess 设计上独立于 uvicorn（这样 --reload 不打断 in-flight run），
+    # 但 DB 没存 PID → uvicorn 重启后 lifespan 把所有 running 行标 failed，
+    # 旧子进程没收到 SIGTERM 还在写磁盘 → 用户重按运行 → 双写损坏。
+    # 修：spawn 时记 pid + pgid；lifespan 用 os.kill(pid, 0) 探测活体——
+    # 还活着就**不动**那条行（保护旧子进程），确保只有一个 writer 在跑。
+    pid = Column(Integer, nullable=True)
+    pgid = Column(Integer, nullable=True)
 
 
 class NovelAIBinding(Base):

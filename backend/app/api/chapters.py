@@ -5,7 +5,7 @@ from ..auth_scope import require_owned_project
 from ..database import get_db
 from ..models import Chapter, ChapterCharacter, Character
 from ..schemas import ChapterCreate, ChapterFull
-from ..rag.retrieval import add_chapter, semantic_search_chapters
+from ..rag.retrieval import add_chapter, semantic_search_chapters, DuplicateChapterError
 
 router = APIRouter(prefix="/projects/{project_id}/chapters", tags=["chapters"])
 
@@ -161,4 +161,16 @@ async def create_chapter(
 
     Phase 4：写入类更要校验 — 否则用户能直接往别人 project 里塞内容。
     """
-    return await add_chapter(project_id, payload.chapter_no, payload.title, payload.content, db)
+    try:
+        return await add_chapter(project_id, payload.chapter_no, payload.title, payload.content, db)
+    except DuplicateChapterError as e:
+        # security-2026-07-13 #1: 同一 (project_id, chapter_no) 唯一约束触发，
+        # 前端可以做"跳到已有章节 / 先删除再新建"二选一。
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "duplicate_chapter_no",
+                "message": f"chapter_no={e.chapter_no} already exists",
+                "existing_chapter_id": e.existing_chapter_id,
+            },
+        )

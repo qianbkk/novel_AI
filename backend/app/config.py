@@ -143,6 +143,12 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("NOVEL_OUTLINE_MODE"),
         description="Outline 模式：batch (传统批量) | card (3 候选抽卡) | talk (交互头脑风暴)",
     )
+    engine_timeout_min: int = Field(
+        default=120,
+        validation_alias=AliasChoices("NOVEL_ENGINE_TIMEOUT_MIN"),
+        description="security-2026-07-13 #3: 引擎子进程最大无 stdout 空闲时间（分钟）。"
+                    "超过此时间看门狗会 SIGTERM 整个进程组。",
+    )
 
     # Pydantic V3 会删 class-based config，迁到 SettingsConfigDict
     # 见 https://errors.pydantic.dev/2.9/migration/
