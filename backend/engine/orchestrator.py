@@ -266,6 +266,25 @@ def node_load_arc_tasks(state: OrchestratorState) -> OrchestratorState:
         for t in tasks:
             t["audit_mode"] = "draft"
         log(f"  📝 草稿模式覆盖：{len(tasks)} 个任务全部 audit_mode=draft", state)
+    else:
+        # 审计 P3：基于已收集的 quality_history / consecutive_low_score
+        # 自适应决定本 arc 的 audit_mode：
+        #   - 连续 LOW_GOOD_RUN 章 ≥ GOOD_SCORE → 该 arc 后续自动降级 lite
+        #     （节省每章 2 个交叉评 LLM 调用）
+        #   - 连续 LOW_BAD_RUN 章 < BAD_SCORE → 强制 full（甚至不允许降级）
+        #   - 中间档 → 保持 task 原始 audit_mode
+        # 不写到 env（避免污染测试），只覆盖 task 字段。
+        adaptive_mode = _decide_adaptive_audit_mode(
+            state.get("quality_history", []),
+            state.get("consecutive_low_score", 0),
+        )
+        if adaptive_mode:
+            for t in tasks:
+                t["audit_mode"] = adaptive_mode
+            log(f"  🎯 自适应审核覆盖（{adaptive_mode}）："
+                f"history_tail={state.get('quality_history', [])[-10:]} "
+                f"consecutive_low={state.get('consecutive_low_score', 0)}",
+                state)
 
     # Save task sheet
     out_path = OUTPUT_DIR / f"arc_{arc.get('arc_id', arc_idx+1)}_tasks.json"
@@ -285,6 +304,41 @@ def node_load_arc_tasks(state: OrchestratorState) -> OrchestratorState:
         }]
     save_state(state, str(STATE_PATH))
     return state
+
+
+# 审计 P3：自适应审核阈值。连续 LOW_GOOD_RUN 章分数 ≥ GOOD_SCORE →
+# 后续章节自动降级 lite（每章省 2 个交叉评 LLM 调用）；连续 LOW_BAD_RUN
+# 章 < BAD_SCORE → 强制 full（不允许降级）。中间档保持原 audit_mode。
+LOW_GOOD_RUN = 5      # 连续 5 章高分才能触发降级（避免早期数据不稳误判）
+LOW_BAD_RUN  = 2      # 连续 2 章低分立刻触发 full
+GOOD_SCORE   = 7.5    # 番茄网文口径"中上"门槛
+BAD_SCORE    = 5.5    # 低于此为质量压力信号
+
+
+def _decide_adaptive_audit_mode(
+    quality_history: list[float],
+    consecutive_low_score: int,
+) -> str | None:
+    """审计 P3：基于 quality_history / consecutive_low_score 自适应选 audit_mode。
+
+    返回值：
+      - "lite"  → 该 arc 所有任务用 lite（单模型评，省 2 个交叉评）
+      - "full"  → 强制 full（不允许降级）
+      - None    → 保持 task 原始 audit_mode
+
+    规则（按优先级）：
+      1. 连续 LOW_BAD_RUN 章 < BAD_SCORE → "full"（质量压力，加严）
+      2. 最近 LOW_GOOD_RUN 章分数全部 ≥ GOOD_SCORE → "lite"（稳定高分，省钱）
+      3. 否则 → None（保持原始 audit_mode）
+    """
+    if consecutive_low_score >= LOW_BAD_RUN:
+        return "full"
+
+    if len(quality_history) >= LOW_GOOD_RUN:
+        tail = quality_history[-LOW_GOOD_RUN:]
+        if all(s >= GOOD_SCORE for s in tail):
+            return "lite"
+    return None
 
 
 def _placeholder_task(arc_idx: int, i: int, arc: dict) -> dict:
@@ -593,6 +647,16 @@ def node_save_and_track(state: OrchestratorState) -> OrchestratorState:
 
 
 def node_human_escalation(state: OrchestratorState) -> OrchestratorState:
+    """人工介入节点：保存带 [待修订] 前缀的章节 + 更新 L2 记忆（审计 P1）。
+
+    历史问题：escalation 不调 run_tracker → L2 记忆缺失这一章。
+    在 100+ 章长篇里越往后漂移越严重——后续章节按"跳过了这一章"写。
+
+    修法（审计 P1，选项 b——保留"全自动"）：用现有 draft_text 给
+    run_tracker 喂一份「近似 track」，让 L2 至少反映这一章原本打算
+    发生什么。同时打 memory_gap 标记，下游 summarizer / arc_end 报告
+    能看到这个缺口，便于人工回头处理时定位。
+    """
     task = state["current_task"]
     cr   = task.get("_checker_result", {})
     log(f"  🚨 超过{MAX_REWRITE}次重写，需人工介入", state)
@@ -616,7 +680,38 @@ def node_human_escalation(state: OrchestratorState) -> OrchestratorState:
         "status":         "human_required",
         "score":          cr.get("score", 0),
         "word_count":     len(text),
+        "memory_gap":     True,   # 审计 P1：标缺口便于 observability
     })
+
+    # 审计 P1：即使 escalate，也喂一份 draft_text 给 run_tracker
+    # 让 L2 记忆反映这一章「原本要发生什么」（人物状态 / 剧情线 / 伏笔）。
+    # 这是「保留全自动 + 缩小一致性漂移」的折中——比完全跳过好很多。
+    # 用 try/except 跟 node_save_and_track 同样模式：tracker 失败不阻塞
+    # escalation（人工介入本身就是兜底，不该再因 tracker 失败阻塞）。
+    if text:
+        try:
+            memory = get_l2(state.get("novel_id", "default"))
+            _updated_mem, _cost = run_tracker(
+                text, task, memory, state.get("novel_id", "default")
+            )
+            _add_cost(state, _cost)
+            log(f"  📌 escalation 记忆已兜底（用 draft_text 喂 tracker）", state)
+        except Exception as e:
+            log(f"  ⚠️  escalation tracker 失败（不阻塞 escalate）: {e}", state)
+            state["error_log"] = (state.get("error_log", []) +
+                                  [f"escalation tracker failed ch{task['chapter_number']}: {e}"])
+
+    # 审计 P3：escalation 也算"连续低分"信号——把这一章标进 consecutive_low_score
+    # 让下游自适应审核能感知到「arc 里出现 escalation 是质量压力信号」。
+    state["consecutive_low_score"] = (
+        state.get("consecutive_low_score", 0) + 1
+    )
+    # memory_gap 也写到 state 级，便于 arc_end 报告 / 测试断言
+    state["memory_gaps"] = (state.get("memory_gaps", []) +
+                            [{"chapter": task["chapter_number"],
+                              "reason":  "human_escalation",
+                              "score":   cr.get("score", 0)}])
+
     save_state(state, str(STATE_PATH))
     return state
 

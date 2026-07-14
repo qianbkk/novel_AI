@@ -133,6 +133,17 @@ def run_summarizer(trigger: str, arc: dict, memory: dict, novel_id: str) -> tupl
         result["arc_summary"] = arc_summary
         print(f"  📚 [Summarizer] 弧{arc.get('arc_id','?')}档案完成，成本：${cost:.4f}")
 
+        # 审计 P4：弧末做「实际剧情 vs 原计划」diff 观察钩子——纯观测不重构。
+        # 抓的信号：每个章节 goal 在 tracker 实际记下的 recent_summaries 里
+        # 是否被覆盖。如果某章 goal 完全没在摘要里出现 → 说明大纲 vs 实际
+        # 发生了漂移（典型场景：escalation / rewrite 后文本走向变了）。
+        # 不调用 LLM（省钱），只做字符串匹配 + 比例统计。
+        plan_vs_actual = _observe_plan_vs_actual(arc, chapter_summaries)
+        result["plan_vs_actual"] = plan_vs_actual
+        coverage = plan_vs_actual.get("coverage_ratio", 0)
+        print(f"  🔍 [Summarizer] 弧计划覆盖率：{coverage:.0%}"
+              f"（{plan_vs_actual.get('matched_chapters')}/{plan_vs_actual.get('total_planned_chapters')} 章 goal 在实际摘要里出现）")
+
     if trigger == "every_50" or (trigger == "arc_end" and len(chapter_summaries) >= 30):
         compressed, cost = compress_history(chapter_summaries, novel_id)
         total_cost += cost
@@ -140,3 +151,72 @@ def run_summarizer(trigger: str, arc: dict, memory: dict, novel_id: str) -> tupl
         print(f"  📚 [Summarizer] 历史压缩完成，成本：${cost:.4f}")
 
     return result, total_cost
+
+
+def _observe_plan_vs_actual(arc: dict, chapter_summaries: list) -> dict:
+    """审计 P4：纯观测钩子——统计 arc 计划章节的 goal 字符串在 tracker
+    实际摘要里出现的比例。
+
+    为什么不调 LLM：单 arc 50-100 章 × 1 LLM call = $0.05-0.20，且当前
+    没有 ground truth 评估这个 diff 的质量。先用纯字符串匹配做粗粒度
+    信号，等真的看到长篇漂移实例再升级到 LLM 判断。
+
+    返回值：
+      {
+        "total_planned_chapters": int,    # arc 计划章节数
+        "matched_chapters": int,          # goal 字符串在摘要里出现的章数
+        "coverage_ratio": float,          # matched / planned
+        "missing_goals": list[str],       # 没匹配的 goal 字符串（前 10 条）
+      }
+    """
+    # arc.task_chapters / arc.chapters / arc.planned_chapters —— 不同版本 schema 兼容
+    planned = (arc.get("task_chapters") or
+               arc.get("chapters") or
+               arc.get("planned_chapters") or [])
+    if not planned:
+        return {
+            "total_planned_chapters": 0,
+            "matched_chapters": 0,
+            "coverage_ratio": 0.0,
+            "missing_goals": [],
+            "note": "arc 没找到 planned chapter 列表，跳过（不同 schema 版本兼容失败）",
+        }
+
+    # 把所有 chapter_summaries 拼成一个 corpus 方便子串查找
+    corpus_parts: list[str] = []
+    for s in chapter_summaries:
+        if isinstance(s, dict):
+            # 尝试多种字段名
+            for key in ("summary", "text", "content", "chapter_summary"):
+                if key in s and isinstance(s[key], str):
+                    corpus_parts.append(s[key])
+                    break
+            else:
+                # dict 但没找到摘要字段 → JSON 化
+                corpus_parts.append(json.dumps(s, ensure_ascii=False))
+        elif isinstance(s, str):
+            corpus_parts.append(s)
+    corpus = "\n".join(corpus_parts).lower()
+
+    matched = 0
+    missing: list[str] = []
+    for ch in planned:
+        if not isinstance(ch, dict):
+            continue
+        goal = (ch.get("chapter_goal") or ch.get("goal") or "").strip()
+        if not goal:
+            continue
+        # 简单子串匹配：取 goal 前 12 字符（避免太长难以精确命中）
+        probe = goal[:12].lower()
+        if probe and probe in corpus:
+            matched += 1
+        else:
+            missing.append(goal[:50])
+
+    total = len(planned)
+    return {
+        "total_planned_chapters": total,
+        "matched_chapters": matched,
+        "coverage_ratio": (matched / total) if total else 0.0,
+        "missing_goals": missing[:10],
+    }

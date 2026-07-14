@@ -177,3 +177,53 @@ def test_strip_fence_fence_on_first_line_only():
     resp = '哈喽 ```json\n{"a":1}\n```'
     out = strip_markdown_fence(resp)
     assert out.startswith("哈喽 ")  # 不会误认
+
+
+# ────────────────────────────────────────────────────────────
+# parse_llm_json_response — default=None 哨兵语义（P6 修复回归测试）
+# ────────────────────────────────────────────────────────────
+
+def test_parse_llm_json_response_none_default_dict_returns_dict():
+    """default=None + LLM 返 dict → 返回该 dict（正常路径）。"""
+    from engine.utils import parse_llm_json_response
+    out = parse_llm_json_response('{"a":1, "b":2}', None)
+    assert out == {"a": 1, "b": 2}
+
+
+def test_parse_llm_json_response_none_default_list_returns_none():
+    """default=None + LLM 返 list → 视为 parse 失败返回 None。
+
+    30 章实验发现：LLM 偶尔返 list 而不是 dict，下游 `updates.get(...)`
+    报 "'list' object has no attribute 'get'"。修法：非 dict 视为失败。
+    """
+    from engine.utils import parse_llm_json_response
+    out = parse_llm_json_response('[{"event":"x"}]', None)
+    assert out is None, f"非 dict 应返回 None，实际 {out!r}"
+
+
+def test_parse_llm_json_response_none_default_str_returns_none():
+    """default=None + LLM 返 str → 也视为 parse 失败返回 None。"""
+    from engine.utils import parse_llm_json_response
+    out = parse_llm_json_response('"just a plain string"', None)
+    assert out is None
+
+
+def test_parse_llm_json_response_none_default_int_returns_none():
+    """default=None + LLM 返 int → 也视为 parse 失败返回 None。"""
+    from engine.utils import parse_llm_json_response
+    out = parse_llm_json_response('42', None)
+    assert out is None
+
+
+def test_parse_llm_json_response_invalid_json_none_default_returns_none():
+    """default=None + parse 失败 → 返回 None（已有行为，不变）。"""
+    from engine.utils import parse_llm_json_response
+    out = parse_llm_json_response('not json at all', None)
+    assert out is None
+
+
+def test_parse_llm_json_response_dict_default_list_returns_empty_dict():
+    """default={} + LLM 返 list → 走 _coerce_type 类型不匹配分支返 {}（已有行为）。"""
+    from engine.utils import parse_llm_json_response
+    out = parse_llm_json_response('[1, 2, 3]', {})
+    assert out == {}, f"type mismatch 应回 default，实际 {out!r}"

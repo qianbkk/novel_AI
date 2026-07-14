@@ -98,6 +98,18 @@ def _coerce_type(parsed: Any, default: Any) -> Any:
     # 哨兵：default=None → 不做类型检查，parsed 是什么就返回什么
     # （让调用方用 None 检测 parse 失败，iter #40 tracker 用此机制）
     if default is None:
+        # 但 30 章实验发现：LLM 偶尔返回 list/str 而不是 dict（JSON shape
+        # 漂移），下游 `updates.get(...)` 会报 "'list' object has no attribute
+        # 'get'"。修法：default=None 的哨兵语义是「检测 parse 失败」，
+        # 而 parse 成功的语义应是「拿到一个结构化对象」。非 dict 视为
+        # parse 失败（返回 None），让下游走 meta 标记路径。
+        if not isinstance(parsed, dict):
+            log.warning(
+                "parse_llm_json_response: default=None 但 parsed 非 dict"
+                " (got %s) — 视为 parse 失败，返 None",
+                type(parsed).__name__,
+            )
+            return None
         return parsed
     # 类型匹配 → 直接返回（dict / list / str 分别检查，因为 isinstance(dict, object) 不会混淆）
     if isinstance(default, dict) and isinstance(parsed, dict):
