@@ -241,6 +241,19 @@ app.add_middleware(
 )
 # 速率限制中间件：仅写端点限速（防刷 /bridge/run 触发昂贵 LLM 调用）
 # 阈值收口到 app.config.settings.rate_limit_per_minute（默认 60）。
+#
+# 实测报告 finding（G-3）：之前 RATE_LIMIT_PER_MINUTE 是「装饰性配置」——
+# Settings 里定义了字段，但 middleware 直接 os.environ.get() 读，从不经过
+# Settings。修法：main.py 启动时把 Settings 的值写进 env，确保 middleware
+# 读到的就是 Settings 声明的（避免两套配置漂移）。env 没设时由 Settings
+# 默认 60 兜底；有 NOVEL_RATE_LIMIT_PER_MINUTE / RATE_LIMIT_PER_MINUTE 时
+# Settings 会读到并写回 env（幂等）。
+from .config import settings as _settings
+if "RATE_LIMIT_PER_MINUTE" not in os.environ and \
+   "NOVEL_RATE_LIMIT_PER_MINUTE" not in os.environ:
+    os.environ["RATE_LIMIT_PER_MINUTE"] = str(_settings.rate_limit_per_minute)
+log.info("RATE_LIMIT_PER_MINUTE=%s (来源 Settings.rate_limit_per_minute)",
+         os.environ.get("RATE_LIMIT_PER_MINUTE"))
 app.add_middleware(RateLimitMiddleware)
 
 app.include_router(auth.router)               # Phase 4: 多用户认证（register/login/me/change-password）

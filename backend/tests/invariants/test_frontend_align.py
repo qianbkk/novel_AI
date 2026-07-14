@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 import pytest
 
-BACKEND = Path(REPO_ROOT)
+BACKEND = Path(BACKEND_ROOT)
 sys.path.insert(0, str(BACKEND))
 
 # ── 原 test_invariants.py 顶部声明的 app.schema_validator 系列 ──
@@ -167,6 +167,8 @@ class TestFrontendBackendPortConsistency:
             "8123 经常被",        # client.ts 注释解释 8132 来历
             "Anchoring on the trailing space prevents \":8123\"",  # dev.bat findstr
             "from matching \":81230\"",  # dev.bat findstr
+            "锚定在尾部空格上是为了防止 \":8123\"",  # dev.bat:91 中文版锚点解释
+            "到 \":81230\" 之类的端口号",  # dev.bat:92 中文版锚点解释
         )
         violations: list[str] = []
         for path in targets:
@@ -178,13 +180,11 @@ class TestFrontendBackendPortConsistency:
                     continue
                 if any(frag in line for frag in ALLOWED_LINE_FRAGMENTS):
                     continue
-                # 排除纯注释行（REM 开头 / // 开头 / # 开头且包含 8132 解释）
+                # 排除纯注释行（dev.bat 用 REM / shell 用 # / frontend 用 //）——
+                # 注释里出现 ":8123" 通常是解释历史端口或锚定语义，
+                # 不是真正硬编码给用户的地址。
                 stripped = line.strip()
-                if stripped.startswith("REM") and "8132" in stripped:
-                    continue
-                if stripped.startswith("//") and "8132" in stripped:
-                    continue
-                if stripped.startswith("#") and "8132" in stripped:
+                if stripped.startswith(("REM", "//", "#")):
                     continue
                 violations.append(f"{path.relative_to(repo)}:{i}: {line.rstrip()}")
         assert not violations, (

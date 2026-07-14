@@ -34,13 +34,28 @@ _BENIGN_ALTER_PATTERNS = ("duplicate column name", "already exists")
 def _is_benign_alter_error(exc: BaseException) -> bool:
     """ALTER TABLE 失败但属于良性竞态（另一进程已加）→ 返回 True，外层吞。
 
-    用错误消息模式而非 sqlite_errorcode：sqlite_errorcode 对「语法错 /
-    类型不兼容 / 不支持的列约束」这些真错误返回 OperationalError 100=21
-    之类，业务侧无法可靠区分；只能靠消息里是否带 'duplicate column name'
-    或 'already exists' 字符串判断。
+    两层判定：
+      1. 类型预检：必须是 sqlite3.Error（或其子类 OperationalError /
+         IntegrityError 等），或 SQLAlchemy 包了 sqlite3 异常的
+         sqlalchemy.exc.DBAPIError（看 .orig）。排除 RuntimeError /
+         ValueError 等非 DB 异常（即使消息巧合含 'duplicate column
+         name' 也不误判）。
+         round 3 follow-up F-7：实测 test_migration_safety 加的 exc5
+         用例暴露了原实现没有类型检查。
+      2. 消息模式匹配：duplicate column name / already exists。不能用
+         sqlite_errorcode（对语法错 / 类型不兼容这些真错误返回
+         OperationalError 21，业务侧无法可靠区分）。
     """
-    msg = str(exc).lower()
-    return any(pat in msg for pat in _BENIGN_ALTER_PATTERNS)
+    from sqlalchemy.exc import DBAPIError
+    if isinstance(exc, sqlite3.Error):
+        msg = str(exc)
+    elif isinstance(exc, DBAPIError) and isinstance(exc.orig, sqlite3.Error):
+        # SQLAlchemy 包了 sqlite3 异常 → 取 .orig 的消息（消息更准确）
+        msg = str(exc.orig)
+    else:
+        return False
+    msg_lower = msg.lower()
+    return any(pat in msg_lower for pat in _BENIGN_ALTER_PATTERNS)
 
 
 # 增量迁移列表。每条是 (table, column, ddl_type)。
@@ -164,7 +179,15 @@ def _apply_one_migration(conn, table: str, column: str, ddl_type: str) -> bool:
 
 def _apply_one_index_migration(conn, table: str, index_name: str,
                                 columns_sql: str) -> bool:
-    """应用一条 CREATE UNIQUE INDEX 迁移。返回是否真的执行。"""
+    """应用一条 CREATE UNIQUE INDEX 迁移。返回是否真的执行。
+
+    IF NOT EXISTS 已处理「index 自身重复创建」的良性 race；
+    但**唯一约束违反**（数据层面，例如 chapters 表已存在重复
+    (project_id, chapter_no) 行时 CREATE UNIQUE INDEX 会抛
+    `IntegrityError: UNIQUE constraint failed`）仍会正常 propagate——
+    这是 fail-fast 设计的预期行为：数据完整性问题必须让 startup 暴露，
+    不能静默"成功"。run_migrations 外层不再吞任何异常。
+    """
     if not _table_exists(conn, table):
         log.debug("unique-index migration skipped (table missing): %s.%s",
                   table, index_name)
@@ -197,6 +220,14 @@ def run_migrations(target_engine: Engine | None = None) -> int:
     历史上这层 for-loop 套过 except Exception 来兜单条失败——但 `_apply_one_migration`
     已经把良性 race 单独识别并吞了，外层再 except 只会**反向把真 DDL 错也吞掉**，
     触发 test_migration_fail_fast_on_ddl_error 失败。删掉外层兜底。
+
+    ─── 事务回滚语义（重要）───
+    整个函数在 `with target_engine.begin() as conn:` 单事务里跑。
+    任何一条迁移抛出（即使是中间第 N 条），整事务 ROLLBACK——**包括
+    本次已成功执行的 #1 ~ #(N-1) 条 ALTER TABLE**。
+    下次启动时这 #1 ~ #(N-1) 条会重新执行（_column_exists 返回 False）
+    ——idempotent 设计保证重放安全，但日志会重复出现"migration applying"，
+    这是预期行为，不是 bug。
     """
     target_engine = target_engine or engine
     applied = 0

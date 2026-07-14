@@ -14,8 +14,15 @@
 class TestMigrationRacingSafety:
     """ALTER TABLE ADD COLUMN 撞 duplicate column 应被吞掉（TOCTOU race-loser）。"""
 
-    def test_duplicate_column_error_swallowed(self, db_bootstrap):
-        """模拟 race-loser 场景：列已存在（PRAGMA 没刷新过来），ALTER 抛错应被吞。"""
+    def test_duplicate_column_error_swallowed(self, db_bootstrap, caplog):
+        """模拟 race-loser 场景：列已存在（PRAGMA 没刷新过来），ALTER 抛错应被吞。
+
+        round 3 follow-up（commit 4be81b2 code-review F-3）：原断言只检查
+        applied >= 0 太弱——任何路径（包括 _table_exists 跳过）都让测试通过。
+        改用 caplog 验证 race-loser 路径真正触发："migration raced" log
+        出现 + 不抛 + applied = 0（被吞意味着既没真执行也没进外层兜底）。
+        """
+        import logging
         from app import migrations as mig_mod
 
         # 通过 monkeypatch _column_exists 让它返回 False，再跑迁移。
@@ -29,12 +36,72 @@ class TestMigrationRacingSafety:
             return original(conn, t, c)
         mig_mod._column_exists = fake_column_exists
         try:
-            # benign race 应被吞，不抛异常，return applied 数 ≥ 0
-            applied = mig_mod.run_migrations()
+            with caplog.at_level(logging.INFO, logger="novel_ai.migrations"):
+                applied = mig_mod.run_migrations()
             assert isinstance(applied, int)
             assert applied >= 0
+            # race-loser 路径真正被触发：log 含 "migration raced"
+            assert "migration raced" in caplog.text, (
+                f"race-loser 路径未触发（_is_benign_alter_error 可能已失效）："
+                f"caplog.text={caplog.text!r}"
+            )
         finally:
             mig_mod._column_exists = original
+
+    def test_is_benign_alter_error_classifies_duplicate_column(self):
+        """直接测 _is_benign_alter_error 分类逻辑（不依赖 SQLite 真实抛出）。
+
+        round 3 follow-up F-5：之前只有 monkeypatch 路径覆盖，分类函数
+        本身没被独立测。这里用 sqlite3.OperationalError 子类（真实
+        SQLite 异常类型）作为参数，验证两种模式都能识别，非 benign
+        异常不会被误判。
+
+        F-7：必须同时覆盖 SQLAlchemy 包了 sqlite3 异常的场景——这是
+        `_apply_one_migration` 里 conn.execute 实际抛出的形态。
+        """
+        import sqlite3
+        from sqlalchemy.exc import OperationalError as SAOperationalError
+        from app.migrations import _is_benign_alter_error
+
+        # 良性 race — duplicate column name（裸 sqlite3 异常）
+        exc1 = sqlite3.OperationalError("duplicate column name: foo")
+        assert _is_benign_alter_error(exc1), \
+            "duplicate column name 应被识别为 benign"
+
+        # 良性 race — already exists（裸 sqlite3 异常）
+        exc2 = sqlite3.OperationalError("index 'foo_idx' already exists")
+        assert _is_benign_alter_error(exc2), \
+            "already exists 应被识别为 benign"
+
+        # 良性 race — duplicate column（SQLAlchemy 包了 sqlite3 异常，
+        # 这是 _apply_one_migration 里 conn.execute 实际抛出的形态）
+        exc_sa = SAOperationalError(
+            "ALTER TABLE foo ADD COLUMN bar",
+            params=None,
+            orig=sqlite3.OperationalError("duplicate column name: bar"),
+        )
+        assert _is_benign_alter_error(exc_sa), \
+            "SQLAlchemy 包了 sqlite3 duplicate column 应被识别为 benign"
+
+        # 非良性 — 真 DDL 失败（语法错，裸 sqlite3 异常）
+        exc3 = sqlite3.OperationalError("near 'foo': syntax error")
+        assert not _is_benign_alter_error(exc3), \
+            "syntax error 不应被误判为 benign"
+
+        # 非良性 — 类型不兼容
+        exc4 = sqlite3.OperationalError("cannot store BLOB in column foo")
+        assert not _is_benign_alter_error(exc4), \
+            "type 不兼容错误不应被误判为 benign"
+
+        # 非 sqlite 异常
+        exc5 = RuntimeError("duplicate column name in some other context")
+        assert not _is_benign_alter_error(exc5), \
+            "非 sqlite3 异常不应被误判为 benign（即使消息巧合）"
+
+        # SQLAlchemy 包了非 sqlite3 异常（罕见但理论上可能）
+        exc6 = SAOperationalError("stmt", params=None, orig=RuntimeError("oops"))
+        assert not _is_benign_alter_error(exc6), \
+            "SQLAlchemy 包了非 sqlite3 异常不应被误判为 benign"
 
 
 class TestMigrationIsolatedFailure:
