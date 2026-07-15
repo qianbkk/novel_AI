@@ -65,6 +65,11 @@ def _build_state(args) -> dict:
     state["chapter_task_queue"] = [
         _placeholder_task(0, i, arc_plan) for i in range(args.chapters)
     ]
+    # 覆盖 placeholder_task 默认 audit_mode="full"——driver 直接喂 state 时
+    # 不会走 orchestrator.py:265 的 env-var override 分支（那个分支只在
+    # outline agent 实际产出 task 时跑）。手动覆盖保持与 CLI 一致。
+    for t in state["chapter_task_queue"]:
+        t["audit_mode"] = args.audit_mode
     state["total_chapters_planned"] = args.chapters
 
     return state

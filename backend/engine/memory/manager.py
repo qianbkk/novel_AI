@@ -118,9 +118,23 @@ def save_l5(novel_id: str, data: dict) -> None:
 # L2 maintenance helpers
 # ══════════════════════════════════════════════
 def expire_constraints(memory: dict, current_chapter: int) -> Tuple[dict, int]:
-    """Prune forbidden_constraints whose expires_at_chapter <= current_chapter."""
+    """Prune forbidden_constraints whose expires_at_chapter <= current_chapter.
+
+    /simplify-round3 follow-up P7-fix: 300 章 v2 测试发现 LLM 偶发返
+    expires_at_chapter=None，c.get("expires_at_chapter", 9999) 在 None
+    情况下默认 9999 不生效（dict.get 只在 key 不存在时用 default，key
+    存在但 value 是 None 时仍用 None）—— None > int 报 TypeError，
+    卡住整个 get_writer_context。
+
+    修法：显式 isinstance 检查 + 视 None 为「不约束」（return 9999 兜底）。
+    """
     forbidden = memory.get("constraints", {}).get("forbidden_constraints", [])
-    active = [c for c in forbidden if c.get("expires_at_chapter", 9999) > current_chapter]
+    def _safe_expires(c: dict) -> int:
+        v = c.get("expires_at_chapter")
+        if not isinstance(v, int) or v < 0:
+            return 9999  # None / 负数 / 非 int → 视作永不过期
+        return v
+    active = [c for c in forbidden if _safe_expires(c) > current_chapter]
     expired = len(forbidden) - len(active)
     if expired:
         memory.setdefault("constraints", {})["forbidden_constraints"] = active
@@ -285,7 +299,8 @@ def get_chapter_relevant_context(memory: dict, task: dict) -> dict:
     forbidden = constraints.get("forbidden_constraints", [])
     rel_forbidden = [c["desc"] for c in forbidden
                      if any(ch in c.get("desc", "") for ch in main_chars)
-                     or c.get("expires_at_chapter", 9999) > ch_num][:5]
+                     or (isinstance(c.get("expires_at_chapter"), int)
+                         and c["expires_at_chapter"] > ch_num)][:5]
     planted = constraints.get("foreshadowing_planted", [])
     due_soon = [f["desc"] for f in planted
                 if isinstance(f.get("target_arc"), int) and f.get("target_arc") <= ch_num + 30][:3]
