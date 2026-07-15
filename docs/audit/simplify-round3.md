@@ -122,7 +122,7 @@ pre-existing，与本次修复无关）。
 ### S3. 自述文档 #8-#17 的「暂不修」项
 - 来源：用户原文复核
 - 原因：判断合理（HttpOnly cookie 死代码、outline 抽卡已修、provider 无
-  鉴权等都是「等真要上线再处理」级别的项），按 `docs/security-fixes-2026-07-13.md`
+  鉴权等都是「等真要上线再处理」级别的项），按 `docs/audit/security-fixes.md`
   的计划表顺序处理。
 
 ## Commit

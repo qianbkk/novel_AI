@@ -29,7 +29,7 @@
 | A4 | `migrations.py` TOCTOU 启动崩溃 → 单条失败隔离 | ✅ | 52492ce |
 | A5 | 删除 `strip-junk-headers` 硬编码端点 | ✅ | 52492ce |
 
-详见 `docs/security-fixes-2026-07-13.md`。
+详见 `docs/audit/security-fixes.md`。
 
 ---
 
@@ -44,7 +44,7 @@
 | B3 | truncate_preserving_ends 加 head+tail >= threshold 护栏 | ✅ | 90dbf62 |
 | B4 | strip_markdown_fence 类型 + 行为一致化 | ✅ | 90dbf62 |
 
-详见 `docs/code-review-action-2026-07-13.md`。
+详见 `docs/audit/code-review-action.md`。
 
 ---
 
@@ -56,7 +56,7 @@
 
 ## D. Simplify Round 2（0fcf0bc — 4 cleanup agents, 13 项应用 / 7 项跳过）
 
-应用清单见 `docs/simplify-2026-07-13-round2.md`。
+应用清单见 `docs/audit/simplify-round2.md`。
 
 跳过的 7 项按 memory "prioritize real risks" 原则搁置：
 - D-S1 `_watchdog` 抽通用类 — 单 caller，提早抽象违背原则
@@ -74,7 +74,7 @@
 核心修复：`_is_benign_alter_error` helper 单独分类良性 race；外层
 try/except 一刀切删掉；真 DDL 错原样 raise。
 
-详见 `docs/simplify-2026-07-13-round3.md`。
+详见 `docs/audit/simplify-round3.md`。
 
 **Test 修复**（test_migration_safety.py round 1 baked-in 错合同修正）：
 - ✅ `test_missing_table_does_not_crash_run`（原 test_bad_migration_does_not_crash_run）
@@ -253,7 +253,7 @@ fdfe414  feat(audit-P1-P4+P6): escalation memory gap + reconcile + adaptive audi
 ## M. 300章 v3 大规模验证（commit 91a2758 之后）
 
 300 章端到端生成于 `gen_300ch_v3_1784116188`，draft 模式 + MiniMax-M3。
-详见 `docs/300ch-v3-run-report.md`。
+详见 `docs/runs/300ch-v3.md`。
 
 - **30 / 50 / 300 章**：3 次 experiment 均 **0 orchestrator error**
 - **LLM JSON shape 漂移**：~96% 章节 tracker JSON 解析失败（LLM 返 null/str
