@@ -812,7 +812,7 @@ def run_orchestrator(state: OrchestratorState, max_chapters: int = 10) -> Orches
     # 否则 LangGraph 报 "Checkpointer requires one or more of the following
     # 'configurable' keys: thread_id, ..." → exit_code=1（你独立验证）
     thread_id = state.get("novel_id") or "default"
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 1500}
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 2500}
     for event in app.stream(state, config):
         node_name = list(event.keys())[0]
         new_state = event[node_name]

@@ -37,6 +37,9 @@ export default function Chapters() {
   const [searchResults, setSearchResults] = useState<ChapterSearchResult[] | null>(null);
   const [searching, setSearching] = useState(false);
 
+  // 跳到指定章节号（输入 chapter_no 一键查看全文）
+  const [jumpChapterNo, setJumpChapterNo] = useState("");
+
   // 单章详情抽屉：缓存展开时加载的完整章节内容
   const [chapterDetail, setChapterDetail] = useState<ChapterFull | null>(null);
   const [chapterDetailLoading, setChapterDetailLoading] = useState(false);
@@ -283,7 +286,50 @@ export default function Chapters() {
         </div>
         <h3 className="card__title">已保存章节 · 衔接锁</h3>
         <div className="text-muted" style={{ fontSize: 11.5, marginTop: -10, marginBottom: 12 }}>
-          点击章节号可展开"章节衔接锁"：场景布置 / 角色登场（来自真实图谱） / 物品状态 / 前章收尾
+          点击章节号可展开"章节衔接锁"：场景布置 / 角色登场（来自真实图谱） / 物品状态 / 前章收尾；每行右侧「查看全文」按钮直接打开章节全文 Dialog
+        </div>
+
+        {/* 跳到指定章节号 — 输入 chapter_no 一键查看全文 */}
+        <div className="form-grid" style={{ marginBottom: 16, alignItems: "end" }}>
+          <div className="field" style={{ marginBottom: 0 }}>
+            <label>跳到章节</label>
+            <input
+              type="number"
+              min={1}
+              placeholder="如 42"
+              value={jumpChapterNo}
+              onChange={(e) => setJumpChapterNo(e.target.value)}
+            />
+          </div>
+          <button
+            className="btn btn-primary"
+            style={{ marginBottom: 0 }}
+            disabled={!jumpChapterNo.trim() || !chapters.length}
+            onClick={() => {
+              const target = chapters.find((c) => c.chapter_no === Number(jumpChapterNo));
+              if (target) {
+                openChapterDetail(target.id);
+              } else {
+                toast.warn("找不到该章节号", `已保存 ${chapters.length} 章（${chapters[0]?.chapter_no ?? "-"} - ${chapters[chapters.length - 1]?.chapter_no ?? "-"}）`);
+              }
+            }}
+          >
+            查看
+          </button>
+          <button
+            className="btn btn-ghost"
+            style={{ marginBottom: 0 }}
+            disabled={!chapters.length}
+            onClick={() => {
+              const last = [...chapters].sort((a, b) => b.chapter_no - a.chapter_no)[0];
+              if (last) {
+                setJumpChapterNo(String(last.chapter_no));
+                openChapterDetail(last.id);
+              }
+            }}
+          >
+            最新章全文
+          </button>
         </div>
         {chapters.length === 0 ? (
           <div className="empty-state">
@@ -326,6 +372,20 @@ export default function Chapters() {
                   <div className="chapter-row__title">{c.title || "（无标题）"}</div>
                   <div className="chapter-row__preview">{c.content_preview}…</div>
                   <div className="chapter-row__meta">{c.word_count.toLocaleString()} 字</div>
+                  {/* 章节全文按钮 — 让用户能直接从列表进入全章预览 Dialog
+                      而不必走「手动保存 → 查看完整正文」的间接路径。 */}
+                  <button
+                    className="btn btn-ghost"
+                    style={{ marginLeft: 8, fontSize: 12, padding: "2px 10px" }}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      openChapterDetail(c.id);
+                    }}
+                    aria-label={`查看第${c.chapter_no}章全文`}
+                  >
+                    查看全文
+                  </button>
                 </summary>
                 <span className="lock-mark" />
                 <div className="conn-lock" style={{ margin: "0 0 14px 56px" }}>
