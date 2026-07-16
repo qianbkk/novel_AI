@@ -188,6 +188,57 @@ class TestDeriveTitle:
         title = _derive_title(99, {}, "")
         assert title == "第99章"
 
+    # 修订 2026-07-16 第二轮：placeholder goal 现在走内容首句路径
+    def test_placeholder_goal_uses_content_first_line(self):
+        """300 章测试暴露：chapter_goal 是「第N章：推进剧情」placeholder，
+        应该从正文首句抽真实标题，不应该返回「第N章·发展·第N章：推进剧情」。"""
+        meta = {"chapter_role": "发展", "chapter_goal": "第270章：推进剧情"}
+        content = "陆承把U盘里的表格拉到第三屏。"
+        title = _derive_title(270, meta, content)
+        assert title == "第270章·陆承把U盘里的表格拉到第三屏"
+        # 不应该包含 "推进剧情" 这种 placeholder 词
+        assert "推进剧情" not in title
+        # 不应该有重复的章节号
+        assert title.count("第270章") == 1
+
+    def test_placeholder_goal_variations(self):
+        """各种 placeholder goal 变体都应该走首句。"""
+        content = "U盘里密密麻麻的时间戳。"
+        for goal in ["第10章：推进剧情", "第10章 推进剧情", "推进剧情"]:
+            meta = {"chapter_role": "爽点", "chapter_goal": goal}
+            title = _derive_title(10, meta, content)
+            assert "U盘" in title, f"goal={goal!r} got title={title!r}"
+            assert "推进剧情" not in title
+
+    def test_real_goal_still_used(self):
+        """非 placeholder goal（有意义的具体描述）应该优先使用。"""
+        meta = {
+            "chapter_role": "爽点",
+            "chapter_goal": "陆承击败孟浩，证据呈堂",  # 真实有意义的目标
+        }
+        content = "法庭上，U盘里..."
+        title = _derive_title(50, meta, content)
+        assert "陆承击败孟浩" in title
+
+    def test_content_title_junk_skipped(self):
+        """内容首句是 markdown heading 时应该跳过找下一行。"""
+        meta = {"chapter_role": "发展", "chapter_goal": "第5章：推进剧情"}
+        content = "# 第五章 真正的标题\n陆承冲进法庭。\n第二行。"
+        title = _derive_title(5, meta, content)
+        # 应该跳过头部 markdown heading 和"陆承冲进法庭"短句，找到"陆承冲进法庭"
+        assert "陆承" in title
+
+    def test_meta_title_still_priority(self):
+        """meta.title（来自 LLM 输出）仍然优先级最高。"""
+        meta = {
+            "title": "觉醒之夜",
+            "chapter_role": "发展",
+            "chapter_goal": "第1章：推进剧情",
+        }
+        content = "陆承冲进法庭。"
+        title = _derive_title(1, meta, content)
+        assert title == "第1章·觉醒之夜"
+
 
 # ──────────────────── Integration: full pipeline ────────────────────
 

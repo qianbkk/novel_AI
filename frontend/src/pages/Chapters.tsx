@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
   ChapterListItem, ChapterFull, ChapterCharacter,
@@ -7,7 +7,6 @@ import type {
 } from "../types";
 import { useReveal } from "../hooks/useReveal";
 import { useToast } from "../components/Toast";
-import { Dialog } from "../components/Dialog";
 
 // 衔接锁四个字段：场景布置 / 角色登场 / 物品状态 / 前章收尾
 function deriveSceneLayout(text: string): string {
@@ -31,6 +30,7 @@ function deriveStatus(c: ChapterListItem): ChapterStatus {
 
 export default function Chapters() {
   const { projectId } = useParams<{ projectId: string }>();
+  const navigate = useNavigate();
   const [chapters, setChapters] = useState<ChapterListItem[]>([]);
   const [characters, setCharacters] = useState<Character[]>([]);
 
@@ -49,9 +49,8 @@ export default function Chapters() {
   // 跳到指定章节号（输入 chapter_no 一键查看全文）
   const [jumpChapterNo, setJumpChapterNo] = useState("");
 
-  // 单章详情抽屉：缓存展开时加载的完整章节内容
-  const [chapterDetail, setChapterDetail] = useState<ChapterFull | null>(null);
-  const [chapterDetailLoading, setChapterDetailLoading] = useState(false);
+  // 单章详情 → 改为独立 ChapterReader 页（见 App.tsx 路由），
+// 不再用 Dialog 弹窗模式（2026-07-16 Issue #11）
 
   const [expandedLock, setExpandedLock] = useState<string | null>(null);
   const [charactersByChapter, setCharactersByChapter] = useState<Record<string, ChapterCharacter[]>>({});
@@ -97,17 +96,27 @@ export default function Chapters() {
       });
   }, [expandedLock, projectId, charactersByChapter]);
 
-  // 打开单章详情
-  async function openChapterDetail(chapterId: string) {
+  // 打开单章详情 — 修订 2026-07-16：跳到独立 ChapterReader 页（替代 Dialog）
+  function openChapterDetail(chapterNo: number) {
     if (!projectId) return;
-    setChapterDetailLoading(true);
+    navigate(`/projects/${projectId}/chapter/${chapterNo}`);
+  }
+
+  // 重新导入章节：从 output/chapters 重新派生 title/summary（用于修旧标题）
+  // 修订 2026-07-16：用户报告「300 章标题还是错的」 — 加这个按钮让用户手动触发
+  const [reimporting, setReimporting] = useState(false);
+  async function handleReimport() {
+    if (!projectId) return;
+    if (!confirm("重新导入所有章节的标题？从输出目录重新派生（基于内容首句），不会动章节正文。")) return;
+    setReimporting(true);
     try {
-      const full = await api.getChapter(projectId, chapterId);
-      setChapterDetail(full);
+      const updated = await api.reimportChapters(projectId);
+      toast.success("重新导入完成", `${updated.length} 章标题已更新`);
+      await refreshChapters();
     } catch (e) {
-      toast.error("章节详情加载失败", String(e));
+      toast.error("重新导入失败", String(e));
     } finally {
-      setChapterDetailLoading(false);
+      setReimporting(false);
     }
   }
 
@@ -165,21 +174,9 @@ export default function Chapters() {
     return chaptersDesc.filter((c) => deriveStatus(c) === statusFilter);
   }, [chaptersDesc, statusFilter]);
 
-  // 修订 2026-07-16：前后章翻页（在 Dialog 内）
-  function openAdjacentChapter(delta: number) {
-    if (!chapterDetail) return;
-    const idx = chapters.findIndex((c) => c.id === chapterDetail.id);
-    if (idx < 0) return;
-    const target = chapters[idx + delta];
-    if (target) openChapterDetail(target.id);
-  }
-
-  // 修订 2026-07-16：第一章 / 末章快跳
+  // 修订 2026-07-16：第一章 / 末章快跳（修订：跳独立 ChapterReader 页）
   const firstChapter = chapters.length > 0 ? [...chapters].sort((a, b) => a.chapter_no - b.chapter_no)[0] : null;
   const lastChapter = chapters.length > 0 ? chaptersDesc[0] : null;
-  const currentDetailIdx = chapterDetail ? chapters.findIndex((c) => c.id === chapterDetail.id) : -1;
-  const hasPrevDetail = currentDetailIdx > 0 && currentDetailIdx < chapters.length - 1;
-  const hasNextDetail = currentDetailIdx >= 0 && currentDetailIdx < chapters.length - 1;
 
   return (
     <div ref={rootRef}>
@@ -192,6 +189,18 @@ export default function Chapters() {
               : "从写作控制台写入后会自动入库"}
           </div>
         </div>
+        {chapters.length > 0 && (
+          <div className="page-header__actions">
+            <button
+              className="btn btn-ghost"
+              onClick={handleReimport}
+              disabled={reimporting}
+              title="从输出目录重新派生所有章节标题（基于内容首句）"
+            >
+              {reimporting ? "重新导入中…" : "🔄 重新派生标题"}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* ============ 阅读导航（最显眼位置） ============ */}
@@ -204,7 +213,7 @@ export default function Chapters() {
           <button
             className="btn btn-ghost"
             disabled={!firstChapter}
-            onClick={() => firstChapter && openChapterDetail(firstChapter.id)}
+            onClick={() => firstChapter && openChapterDetail(firstChapter.chapter_no)}
           >
             ⏮ 第一章
           </button>
@@ -218,7 +227,7 @@ export default function Chapters() {
               onKeyDown={(e) => {
                 if (e.key === "Enter" && jumpChapterNo.trim()) {
                   const target = chapters.find((c) => c.chapter_no === Number(jumpChapterNo));
-                  if (target) openChapterDetail(target.id);
+                  if (target) openChapterDetail(target.chapter_no);
                   else toast.warn("找不到该章节号", `已保存 ${chapters[0]?.chapter_no ?? "-"} - ${chapters[chapters.length - 1]?.chapter_no ?? "-"}`);
                 }
               }}
@@ -228,7 +237,7 @@ export default function Chapters() {
               disabled={!jumpChapterNo.trim() || !chapters.length}
               onClick={() => {
                 const target = chapters.find((c) => c.chapter_no === Number(jumpChapterNo));
-                if (target) openChapterDetail(target.id);
+                if (target) openChapterDetail(target.chapter_no);
                 else toast.warn("找不到该章节号");
               }}
             >
@@ -238,7 +247,7 @@ export default function Chapters() {
           <button
             className="btn btn-ghost"
             disabled={!lastChapter}
-            onClick={() => lastChapter && openChapterDetail(lastChapter.id)}
+            onClick={() => lastChapter && openChapterDetail(lastChapter.chapter_no)}
           >
             最新章 ⏭
           </button>
@@ -355,14 +364,14 @@ export default function Chapters() {
                   {statusBadge}
                   <button
                     className="chapter-row__no chapter-row__no--btn"
-                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); openChapterDetail(c.id); }}
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); openChapterDetail(c.chapter_no); }}
                     aria-label={`阅读第${c.chapter_no}章`}
                   >
                     第{c.chapter_no}章
                   </button>
                   <button
                     className="chapter-row__title chapter-row__title--btn"
-                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); openChapterDetail(c.id); }}
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); openChapterDetail(c.chapter_no); }}
                   >
                     {c.title || "（无标题 — 点击阅读）"}
                   </button>
@@ -469,7 +478,7 @@ export default function Chapters() {
             {lastSavedChapterId && !repetitionWarnings.length && (
               <div className="banner banner-success" style={{ fontSize: 12 }}>
                 ✅ 已保存第{chapterNo - 1}章 ·{" "}
-                <a onClick={() => openChapterDetail(lastSavedChapterId)}
+                <a onClick={() => openChapterDetail((chapters.find(c => c.id === lastSavedChapterId)?.chapter_no) ?? 1)}
                    style={{ cursor: "pointer", textDecoration: "underline" }}>
                   查看完整正文
                 </a>
@@ -535,59 +544,7 @@ export default function Chapters() {
         </div>
       </details>
 
-      {/* 单章详情 Dialog — 修订 2026-07-16：加前后章翻页 + 加宽 */}
-      <Dialog
-        open={!!chapterDetail || chapterDetailLoading}
-        onClose={() => setChapterDetail(null)}
-        title={chapterDetail ? `第 ${chapterDetail.chapter_no} 章 · ${chapterDetail.title || "（无标题）"}` : "加载中…"}
-        sub={chapterDetail ? `${chapterDetail.content.length.toLocaleString()} 字 · ${chapterDetail.created_at}` : undefined}
-        wide
-        actions={
-          <>
-            <button
-              className="btn btn-ghost"
-              disabled={!hasPrevDetail}
-              onClick={() => openAdjacentChapter(-1)}
-              title="上一章"
-            >
-              ← 上一章
-            </button>
-            <button
-              className="btn btn-ghost"
-              disabled={!hasNextDetail}
-              onClick={() => openAdjacentChapter(1)}
-              title="下一章"
-            >
-              下一章 →
-            </button>
-            <button className="btn" onClick={() => setChapterDetail(null)}>关闭</button>
-          </>
-        }
-      >
-        {chapterDetailLoading && (
-          <div className="loading-text">加载章节详情…</div>
-        )}
-        {chapterDetail && !chapterDetailLoading && (
-          <>
-            {chapterDetail.characters.length > 0 && (
-              <div style={{ marginBottom: 12, display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
-                <span className="text-faint" style={{ fontSize: 12 }}>出场人物：</span>
-                {chapterDetail.characters.map((cc) => (
-                  <span key={cc.id} className="legislation-card__chip">
-                    {cc.character_name}
-                    {cc.character_role ? ` · ${cc.character_role}` : ""}
-                  </span>
-                ))}
-              </div>
-            )}
-            <pre className="log-console" style={{
-              maxHeight: "65vh", whiteSpace: "pre-wrap",
-              fontFamily: "var(--font-body)", lineHeight: 1.9, fontSize: 14.5,
-              padding: "20px 24px",
-            }}>{chapterDetail.content}</pre>
-          </>
-        )}
-      </Dialog>
+
     </div>
   );
 }

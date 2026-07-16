@@ -167,6 +167,13 @@ export const api = {
     return request<ChapterSearchResult[]>(`/projects/${projectId}/chapters/search?${params.toString()}`);
   },
 
+  // ─── 2026-07-16：重新导入 chapters（修正旧标题从内容首句派生） ───
+  reimportChapters: (projectId: string) =>
+    request<Array<{ chapter_no: number; title: string; mode: string }>>(
+      `/projects/${projectId}/bridge/reimport-chapters`,
+      { method: "POST" }
+    ),
+
   listProviders: () => request<Provider[]>("/providers"),
 
   createProvider: (payload: ProviderCreate) =>

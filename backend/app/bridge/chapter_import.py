@@ -23,51 +23,106 @@ log = get_logger("novel_ai.chapter_import")
 def _derive_title(n: int, meta: dict, content: str) -> str:
     """派生章节标题。
 
-    修订 2026-07-16：优先级改成
+    修订 2026-07-16（第二轮）：
       1. meta.title（writer 2026-07-16 后会写）
-      2. role + chapter_goal 派生
-      3. 正文首句
-    旧版本会产出「第N章·发展·第N章：推进剧情」这种重复 placeholder，
-    现在 title 直接来自 LLM 输出，避免重复。
+      2. 内容首句抽取 — 即使有 chapter_goal，若 goal 是 placeholder 模板
+         （「第N章：推进剧情」「发展·第N章：推进剧情」之类）就走首句
+      3. role + 真实 chapter_goal 派生
+      4. 兜底"第N章"
+
+    旧版本对 placeholder goal 直接返回「第N章·发展·第N章：推进剧情」（重复 placeholder），
+    第二轮 fix 让 placeholder 也走首句路径——已存在的 300 章测试小说因此能
+    拿到基于真实内容的标题（如「第270章·陆承把U盘里的表格拉到第三屏」）。
     """
     # 1) meta.title（writer 直接给的最准）
     raw_title = (meta.get("title") or "").strip()
     if raw_title and raw_title not in ("未命名章节",):
         return f"第{n}章·{raw_title[:40]}"
 
-    role = (meta.get("chapter_role") or "").strip()
+    # 2) 内容首句抽取（跳过 junk 行）—— 即使有 chapter_goal，
+    #    若 goal 是 placeholder 模板（无意义）也走这条路径拿真实标题
+    content_title = _extract_title_from_content(content)
     goal = (meta.get("chapter_goal") or "").strip()
-    # 2) role + chapter_goal 派生（兼容老 meta 文件）
-    if role or goal:
-        # 兼容占位 goal「第N章：推进剧情」 — 只取 role
-        if goal.startswith("第") and "推进剧情" in goal:
-            return f"第{n}章·{role or '正文'}"
+    is_placeholder_goal = _is_placeholder_goal(goal)
+
+    if content_title and (is_placeholder_goal or not goal):
+        return f"第{n}章·{content_title[:40]}"
+
+    # 3) role + 真实 chapter_goal 派生
+    role = (meta.get("chapter_role") or "").strip()
+    if goal and not is_placeholder_goal:
         goal_short = goal[:30] + ("…" if len(goal) > 30 else "")
         return f"第{n}章·{role or '正文'}·{goal_short}"
-    # 兜底：从正文第一句「真正的话」摘——跳过：
-    #   1. 空行
-    #   2. 纯 scene label 行（"【xxx】"，不带正文的）
-    #   3. 「第N章 标题」/「第N卷 xxx」类重复标题（包括"【卷名】第N章 标题"复合形式）
-    #   4. Markdown 标题行（"# 第七章 xxx"）
-    import re
-    # 章节标题的 4 种已知 junk 形式
+
+    # 4) 兜底：仅 role 或仅内容
+    if role and content_title:
+        return f"第{n}章·{role}·{content_title[:30]}"
+    if content_title:
+        return f"第{n}章·{content_title[:40]}"
+    if role:
+        return f"第{n}章·{role}"
+    return f"第{n}章"
+
+
+def _is_placeholder_goal(goal: str) -> bool:
+    """判断 chapter_goal 是否是 placeholder 模板（无信息量）。
+
+    已知 placeholder 模式：
+      - "第N章：推进剧情"
+      - "第N章·xxx：推进剧情"（orchestrator placeholder_task 早期版）
+      - "...：推进剧情"（变体）
+    """
+    import re as _re
+    if not goal:
+        return True
+    g = goal.strip()
+    # "推进剧情" 是 placeholder 的核心信号
+    if "推进剧情" in g:
+        return True
+    # "第N章：xxx" / "第N章 xxx" 且长度很短（≤15 字）
+    if _re.match(r"^第\d+[章卷][\s::：]\S{0,8}$", g):
+        return True
+    return False
+
+
+def _extract_title_from_content(content: str) -> str:
+    """从正文首段抽取一个像样的标题（≤ 30 字）。
+
+    跳过：
+      1. 空行 / 太短的行
+      2. 纯 scene label 行（"【xxx】"，不带正文的）
+      3. 「第N章 标题」/「第N卷 xxx」类重复标题（包括"【卷名】第N章 标题"复合形式）
+      4. Markdown 标题行（"# 第七章 xxx"）
+      5. "[待修订]" / "[未通过]" 前缀
+    """
+    import re as _re
+    if not content:
+        return ""
     junk_patterns = [
-        re.compile(r"^第\d+[章卷]\s*\S+"),                       # "第N章 标题"
-        re.compile(r"^【[^】]+】第\d+[章卷]\s*\S+"),              # "【卷名】第N章 标题"
-        re.compile(r"^#{1,6}\s+第?\d*[章卷]?\s*\S*"),             # "# 第七章 标题" / "## 标题"
-        re.compile(r"^#{1,6}\s+\S+"),                            # 通用 markdown heading
-        re.compile(r"^---+$"),                                    # "---" 分隔线
+        _re.compile(r"^第\d+[章卷]\s*\S+"),
+        _re.compile(r"^【[^】]+】第\d+[章卷]\s*\S+"),
+        _re.compile(r"^#{1,6}\s+第?\d*[章卷]?\s*\S*"),
+        _re.compile(r"^#{1,6}\s+\S+"),
+        _re.compile(r"^---+$"),
+        _re.compile(r"^\[待修订\]"),
+        _re.compile(r"^\[未通过\]"),
     ]
     for line in content.splitlines():
-        line = line.strip()
-        if not line or len(line) <= 4:
+        s = line.strip()
+        if not s or len(s) <= 4:
             continue
-        if line.startswith("【") and line.endswith("】") and " " not in line and len(line) <= 30:
+        if s.startswith("【") and s.endswith("】") and " " not in s and len(s) <= 30:
             continue
-        if any(p.match(line) for p in junk_patterns):
+        if any(p.match(s) for p in junk_patterns):
             continue
-        return f"第{n}章·{line[:24]}"
-    return f"第{n}章"
+        # 去掉 markdown heading 前缀
+        s = _re.sub(r"^#{1,6}\s+", "", s)
+        # 截到第一个句号/问号/感叹号
+        s = _re.split(r"[。！？!?]", s)[0].strip()
+        if not s or len(s) <= 2:
+            continue
+        return s[:30]
+    return ""
 
 
 def _build_summary(meta: dict, content: str) -> str:

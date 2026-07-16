@@ -10,6 +10,7 @@ import BridgeConsole from "./pages/BridgeConsole";
 import RuleCenter from "./pages/RuleCenter";
 import CharacterCard from "./pages/CharacterCard";
 import Outline from "./pages/Outline";  // 2026-07-16：弧级大纲管理（Issue #4）
+import ChapterReader from "./pages/ChapterReader";  // 2026-07-16：章节阅读器（Issue #11）
 import { LoginDialog } from "./components/LoginDialog";
 import { api, getStoredToken } from "./api/client";
 
@@ -210,6 +211,8 @@ export default function App() {
           <Route path="/projects/:projectId/characters/:characterId" element={<CharacterCard />} />
           {/* 2026-07-16：弧级大纲管理（Issue #4） */}
           <Route path="/projects/:projectId/outline" element={<Outline />} />
+          {/* 2026-07-16：章节阅读器（Issue #11） — 独立页面替代 Dialog */}
+          <Route path="/projects/:projectId/chapter/:chapterNo" element={<ChapterReader />} />
         </Routes>
         </div>
       </main>
