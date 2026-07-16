@@ -1,7 +1,13 @@
 # 架构现状速览
 
-> 这是一份「现在长什么样 + 为什么」的速览入口，与 [CHANGELOG.md](../CHANGELOG.md) 时序累积分开。
+> 这是一份「现在长什么样 + 为什么」的速览入口，与 [CHANGELOG.md](../../CHANGELOG.md) 时序累积分开。
 > 任何改动涉及核心路径时，先查这里；改完有结构性影响时，回来更新这里。
+>
+> **本文件只讲现状**——架构的来龙去脉、子模块细节、API 端点列表、数据模型 schema，请看：
+> - [01-Architecture.md](01-Architecture.md) — 三层拓扑 + 进程边界 + 失败模式
+> - [02-Backend-API.md](02-Backend-API.md) — FastAPI 路由清单
+> - [03-Writing-Engine.md](03-Writing-Engine.md) — 9-Agent orchestrator
+> - [05-Data-Model.md](05-Data-Model.md) — SQLAlchemy ORM + 4 套存储
 
 ---
 
