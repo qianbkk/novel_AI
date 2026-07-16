@@ -24,16 +24,11 @@ from app.schema_validator import validate_setting_package, SchemaError
 
 
 def _find_novel_config() -> Path:
-    """novel_config.json 的真实落盘位置（多种候选，命中即返回）。"""
-    candidates = [
-        Path("novel_AI/config/novel_config.json"),
-        Path("../novel_AI/config/novel_config.json"),
-        Path(NOVEL_CONFIG_PATH),
-    ]
-    for c in candidates:
-        if c.exists():
-            return c
-    return candidates[0]
+    """novel_config.json 的真实落盘位置（backend 自己的路径，已通过 config.paths 集中管理）。
+
+    历史：早期版本曾 fallback 到 novel_AI/config/ 兼容旧 CLI 引擎；该目录已于 2026-07-16 删除。
+    """
+    return Path(NOVEL_CONFIG_PATH)
 
 
 def _load_novel_config() -> dict:

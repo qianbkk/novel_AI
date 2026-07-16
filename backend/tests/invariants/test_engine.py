@@ -158,7 +158,7 @@ class TestOrchestratorNoFakePass:
     def test_compliance_failure_marks_task(self, orch, monkeypatch):
         """compliance 抛异常 → task._compliance_check_failed=True + 提前 return"""
         def fake_writer(task, memory, setting):
-            return "ok 2000字 真实文本 " * 200, 0.0
+            return "ok 2000字 真实文本 " * 200, "fake_title", 0.0
         def fake_normalizer(text, task):
             return text, [], 0.0
         def fake_compliance(text, platform):
@@ -180,7 +180,7 @@ class TestOrchestratorNoFakePass:
     def test_checker_failure_marks_task(self, orch, monkeypatch):
         """checker 抛异常 → task._checker_failed=True + 提前 return"""
         def fake_writer(task, memory, setting):
-            return "ok text " * 200, 0.0
+            return "ok text " * 200, "fake_title", 0.0
         def fake_normalizer(text, task):
             return text, [], 0.0
         def fake_compliance(text, platform):
@@ -962,7 +962,7 @@ class TestPlannerAtomicWrite:
         assert 'open(out_path, "w"' not in src, \
             "planner.py 不能再用 raw open(w) 写 out_path（半写损坏风险）"
 
-    def test_planner_setting_write_actually_atomic(self, tmp_path):
+    def test_planner_setting_write_actually_atomic(self, tmp_path, monkeypatch):
         """实际跑 run_planner 的写入路径（mock 掉 LLM）验证 atomic_write_json 被调用。"""
         from unittest.mock import patch, MagicMock
         from engine.agents import planner as planner_mod
@@ -970,6 +970,14 @@ class TestPlannerAtomicWrite:
         # mock LLM 返回 valid JSON
         mock_router = MagicMock()
         mock_router.call.return_value = ('{"novel_id":"x","arc_outline":[],"key_characters":[],"power_system":{"levels":[]}}', 0.001)
+        # 写一个最小 novel_config.json 到 tmp_path，monkeypatch 覆盖 planner 自己 import 进来的常量
+        # （修订 2026-07-16：之前依赖 backend/data/engine/config/novel_config.json 真实存在，
+        # 跟外部状态耦合，环境 clean 时 fail。planner.py 在 import 时把 NOVEL_CONFIG_PATH
+        # 拷到了自己命名空间，所以要 patch planner_mod 而不是 paths_mod）
+        fake_cfg = tmp_path / "novel_config.json"
+        fake_cfg.write_text('{"novel_id":"x","platform":"fanqie","genre":"都市","setting_concept":"","budget_limit_usd":1.0}',
+                            encoding="utf-8")
+        monkeypatch.setattr(planner_mod, "NOVEL_CONFIG_PATH", fake_cfg)
         with patch.object(planner_mod, "get_active_router", return_value=mock_router), \
              patch.object(planner_mod, "validate_setting_package"):
             out_dir = tmp_path / "out"

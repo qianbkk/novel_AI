@@ -22,15 +22,6 @@ vite.config.d.ts
 
 # Local data and runtime output
 backend/data/
-novel-assistant/backend/data/
-novel_AI/logs/
-novel_AI/output/
-novel_AI/memory/l2/
-novel_AI/.omc/
-
-# Local reference projects; keep on disk, do not publish in this repo
-novel_AI/
-novel-assistant/
 
 # Personal tooling scratch dirs (本地自查，不入库)
 .claude-viz/

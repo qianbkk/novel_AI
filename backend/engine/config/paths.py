@@ -1,8 +1,12 @@
 """Path constants shared across engine modules.
 
-All paths are derived from backend/ as the root, mirroring the original
-novel_AI/ layout so data files written by the new engine land in the
-same logical places (backend/data/engine/{output,memory,style_samples}).
+All paths are derived from backend/ as the root. Engine data files
+(chapters / state / setting / memory / style samples) live under
+backend/data/engine/, layout centralized here so all modules import
+from a single source of truth.
+
+修订 2026-07-16：删除 novel_AI/ 之后，本文件不再需要「mirror novel_AI
+layout」的注释——backend 路径就是唯一的真实落盘位置。
 """
 from __future__ import annotations
 import os
@@ -30,7 +34,7 @@ L5_DIR     = MEMORY_DIR / "l5"
 # ── Style samples ──
 STYLE_SAMPLES_DIR = OUTPUT_DIR / "style_samples"
 
-# ── Compliance rule files (mirrors novel_AI/config/compliance_rules_*.json) ──
+# ── Compliance rule files ──
 COMPLIANCE_RULES_DIR = ENGINE_DIR / "config" / "compliance_rules"
 
 # ── Make sure all dirs exist ──
