@@ -25,13 +25,16 @@ type StageStatus = "pending" | "active" | "done";
 // 修订 2026-07-16：top-level tabs 扩展为 8 个（合并原「世界立法」6 个 subtab）
 // 用户的反馈：世界构建内容太简陋 — 把 6 个 subtab 提升为 top-level 后，
 // 每个分类独立 tab，每个 tab 有自己的统计 + 详情视图 + 空状态。
+//
+// 修订 2026-07-16 v2：删掉「势力」tab（跟「人物阵营」重复，用户认知里
+// 「人物阵营」就是 factions / 阵营，已合并到「人物阵营」tab 的 M04.3）。
+// 旧的「势力」tab 路由保留作为 fallback（避免外部链接 404，但内容是 banner）。
 const TOP_TABS = [
   "世界观",      // 7 段世界观 + 4 段故事核心 + 历史时间线
-  "人物阵营",    // 角色卡 + 关系图 + 关系网
+  "人物阵营",    // 角色卡 + 关系图 + 关系网 + 势力阵营（factions）
   "地图",        // GIS 层级地图（原 GIS 地图 subtab）
   "力量体系",    // 境界 tier rail（原 力量体系 subtab）
   "货币物权",    // 货币 + 物品（原 货币物权 subtab）
-  "势力",        // 阵营 + FactionGraph（原 势力 subtab）
   "伏笔",        // 伏笔系统（原 伏笔 subtab）
   "一致性校验",  // 一致性问题（原 一致性校验 subtab）
 ] as const;
@@ -364,6 +367,88 @@ export default function WorldBuild() {
                   </div>
                 );
               })}
+              {/* 修订 2026-07-16：把 factions（势力）搬进「人物阵营」tab，让 tab 名实相符。
+                  修复前 factions 只在「势力」tab，但用户认知里「人物阵营」= 阵营。
+                  关系网 → 势力阵营 自然延续（关系 → 阵营归属）。 */}
+              <h3 className="module-heading">
+                <span className="module-heading__index">M04.3</span>
+                势力阵营
+                <span className="module-heading__sub">
+                  {result.factions.length} 个阵营
+                  {result.factions.length === 0 && " · 尚未生成"}
+                </span>
+              </h3>
+              {result.factions.length === 0 ? (
+                <EmptyTab
+                  icon="⚔️"
+                  title="还没有阵营数据"
+                  hint={
+                    result.characters.length === 0
+                      ? "需要先运行「世界构建」生成角色和势力基础数据。"
+                      : `已有 ${result.characters.length} 个角色，但势力生成失败。点击下方按钮重新运行。`
+                  }
+                  actionLabel="重新运行世界构建"
+                  onAction={handleStart}
+                />
+              ) : (
+                <>
+                  {result.characters.length > 0 && (
+                    <FactionGraph
+                      factions={result.factions}
+                      characters={result.characters}
+                    />
+                  )}
+                  <div className="legislation-grid">
+                    {result.factions.map((f) => {
+                      const dj = (f.detail_json || {}) as Record<string, unknown>;
+                      const detail = typeof dj.detail === "string" ? dj.detail : "";
+                      const structure = typeof dj.structure === "string" ? dj.structure : "";
+                      const goals = typeof dj.goals === "string" ? dj.goals : "";
+                      const territory = typeof dj.territory === "string" ? dj.territory : "";
+                      const allies = (dj.allies as string[] | undefined) || [];
+                      const enemies = (dj.enemies as string[] | undefined) || [];
+                      return (
+                        <div key={f.id} className="legislation-card">
+                          <div className="legislation-card__head">
+                            <span className="legislation-card__title">{f.name}</span>
+                            <span className="legislation-card__kicker">势力</span>
+                          </div>
+                          {detail && <span className="legislation-card__desc">{detail}</span>}
+                          <div className="legislation-card__chips" style={{ marginTop: 8 }}>
+                            {structure && (
+                              <span className="legislation-card__chip" title={structure}>
+                                结构 · {structure.length > 20 ? structure.slice(0, 20) + "…" : structure}
+                              </span>
+                            )}
+                            {goals && (
+                              <span className="legislation-card__chip" title={goals}>
+                                目标 · {goals.length > 20 ? goals.slice(0, 20) + "…" : goals}
+                              </span>
+                            )}
+                            {territory && (
+                              <span className="legislation-card__chip">地盘 · {territory}</span>
+                            )}
+                          </div>
+                          {(allies.length > 0 || enemies.length > 0) && (
+                            <div className="legislation-card__chips" style={{ marginTop: 6 }}>
+                              {allies.map((a) => (
+                                <span key={a} className="legislation-card__chip" style={{ color: "var(--color-moss)" }}>
+                                  盟友 · {a}
+                                </span>
+                              ))}
+                              {enemies.map((e) => (
+                                <span key={e} className="legislation-card__chip" style={{ color: "var(--color-stamp)" }}>
+                                  敌对 · {e}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -534,60 +619,8 @@ export default function WorldBuild() {
             </div>
           )}
 
-          {/* ===================== 势力 tab（提升自 subtab，Issue #3 修复） ===================== */}
-          {topTab === "势力" && (
-            <div>
-              <h3 className="module-heading">
-                <span className="module-heading__index">M02.4</span>
-                势力阵营
-                <span className="module-heading__sub">{result.factions.length} 个阵营 · {result.relations.length} 条关系</span>
-              </h3>
-              {result.factions.length === 0 ? (
-                /* 修订 2026-07-16：factions 空状态 + 重新构建 CTA（Issue #3） */
-                <EmptyTab
-                  icon="⚔️"
-                  title="还没有阵营数据"
-                  hint={
-                    result.characters.length === 0
-                      ? "需要先运行「世界构建」生成角色和势力基础数据。"
-                      : `已有 ${result.characters.length} 个角色，但势力生成失败。点击下方按钮重新运行。`
-                  }
-                  actionLabel="重新运行世界构建"
-                  onAction={handleStart}
-                />
-              ) : (
-                <>
-                  {result.characters.length > 0 && (
-                    <FactionGraph
-                      factions={result.factions}
-                      characters={result.characters}
-                    />
-                  )}
-                  <div className="legislation-grid">
-                    {result.factions.map((f) => (
-                      <div key={f.id} className="legislation-card">
-                        <div className="legislation-card__head">
-                          <span className="legislation-card__title">{f.name}</span>
-                          <span className="legislation-card__kicker">势力</span>
-                        </div>
-                        <span className="legislation-card__desc">{(() => {
-                              const fDetail = typeof f.detail_json?.detail === "string" ? f.detail_json.detail : "";
-                              if (fDetail) return fDetail;
-                              const fRaw = f.detail_json?.raw;
-                              if (fRaw) return String(fRaw);
-                              try {
-                                return JSON.stringify(f.detail_json || {}) || "—";
-                              } catch {
-                                return "—";
-                              }
-                            })() || "—"}</span>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-          )}
+          {/* 「势力」tab 已合并到「人物阵营」tab（M04.3），此处不再渲染。
+              旧路由兼容：topTab 不再含 "势力"，如果有人老链接直跳 default。 */}
 
           {/* ===================== 伏笔 tab（提升自 subtab） ===================== */}
           {topTab === "伏笔" && (

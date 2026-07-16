@@ -85,6 +85,14 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
       .finally(() => setLoading(false));
   }, [projectId]);
 
+  // 修订 2026-07-16：把 useMemo 提到所有 early return 之前，避免 hooks 顺序错乱
+  // （之前 data=null 时跳过了 useMemo，data 到了又调用 → "Rendered more hooks" 崩溃 → 黑屏）。
+  // data 为空时 collectMutualNodes([]) 立即返回空 Set，零开销。
+  const mutualNodeIds = useMemo(
+    () => collectMutualNodes(data?.edges || []),
+    [data?.edges],
+  );
+
   if (loading) return <p className="loading-text">关系图加载中…</p>;
   if (error) return <div className="banner banner-danger">关系图加载失败：{error}</div>;
   if (!data || data.nodes.length === 0) {
@@ -101,13 +109,6 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
   const cx = W / 2;
   const cy = H / 2;
   const r = Math.min(W, H) * 0.34;
-
-  // Mutual 检查：一次性扫出所有 mutual 节点（O(E)），
-  // 渲染时直接 set lookup（O(1)），避免节点×边的嵌套扫。
-  const mutualNodeIds = useMemo(
-    () => collectMutualNodes(data.edges),
-    [data.edges],
-  );
 
   // 1. 找主角（fallback 到第一个节点）
   const protagonist = data.nodes.find(n => n.role === "主角") || data.nodes[0];
