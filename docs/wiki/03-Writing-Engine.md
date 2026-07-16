@@ -96,6 +96,23 @@ LangGraph 状态机驱动的多 Agent 网文写作引擎，被后端以子进程
 | `acceptance_tests.py` | 五大验收标准（AC-1~5） |
 | `system_test.py` | 集成测试套件（含 Mock LLM） |
 
-## `backend/engine` 相对独立版 `novel_AI/` 的关键加固
+## `backend/engine` 移植自独立版 `novel_AI/` 的关键加固
 
-详见 [07-Standalone-Engine.md](07-Standalone-Engine.md#与-backendengine-的差异)。概括：去除模块级全局状态（改为按实例的 `LLMRouter`）、新增 DB 驱动配置层（`engine/llm_router.py` 从 `Provider`/`RoleAssignment` 表注入）、新增子进程隔离入口（`workers/run_bridge_subprocess.py`）、新增 Mock Provider（CI/测试免费跑）、大量以"迭代 #NN"注释标记的生产事故修复（原子 JSON 写入、fail-loud 替代假通过、去重感知的记忆合并、`human_escalation` 死路修复、成本重复计算修复）。`dashboard` 命令尚未移植（`graph.py:456` 显式标注为 P3 待办）。
+修订 2026-07-16：`novel_AI/` 独立版仓库已删除（gitignored 历史参考实现），所有逻辑迁移到 `backend/engine/`。下表是迁移时同步引入的关键加固：
+
+| 维度 | 独立版 `novel_AI/` | `backend/engine` | 加固目的 |
+|------|--------------------|------------------|----------|
+| **LLM 路由状态** | `api_client.py` 用模块级全局变量 | `LLMRouter` 改为按实例，支持多项目/多线程互不干扰 | 后端多租户并发隔离 |
+| **API Key 来源** | 纯环境变量（`.env` 文件） | `engine/llm_router.py` 从 `Provider` / `RoleAssignment` 表读加密 API Key + 代理配置，注入 router | Web 配置化，运行时切换 Provider |
+| **进程隔离** | `run.py` 普通 CLI 入口 | `workers/run_bridge_subprocess.py` 子进程入口 | uvicorn 重启/热重载不杀 in-flight run |
+| **Mock Provider** | 无 | `llm/router.py:_mock()` 含完整按 Agent 分类的 mock 响应 | CI/测试免费跑全流程 |
+| **JSON 写入** | 部分文件用 raw `open(w)` | 全部走 `atomic_write_json` | 半写损坏防护（ch_0064 等假通过 bug 根因之一） |
+| **故障行为** | fail-silent（用 `except: pass` 兜底） | fail-loud（`log.exception` + 标记 `meta._xxx_failed`） | 让运维能定位真实失败原因 |
+| **路由死路** | `human_escalation → END`（运行提前终止） | `human_escalation → load_arc_tasks`（循环回下一章） | 300 章实测暴露的真实 bug |
+| **记忆合并** | 无去重感知 | `memory/manager.py` 去重感知合并 | 防止 L5 摘要重复吃预算 |
+| **成本追踪** | 各处 `cost += x` 散落 | `_record()` 统一入口，hash-by-token 防重复计费 | 300 章实测 `$15`，重复扣费曾导致硬停阈值失效 |
+| **Checker 校准** | hardcoded 阈值 | `calibrate_checker.py` + `calibration/` 标注样本 | 阈值可调，不靠拍脑袋 |
+
+`dashboard` 命令尚未移植（`graph.py:456` 显式标注为 P3 待办——Web BridgeConsole 已取代大部分功能）；`card`/`talk` 大纲模式和 `run_draft`/`set_audit_mode` 命令是 backend 独有的新增能力，独立版 `run.py` 中没有。
+
+> 历史溯源：迁移时每个文件头部注释都标注 "Migrated from novel_AI/..."。可 `git log --follow <file>` 追溯到迁移 commit（最早是 phaseD 的 `2e80fec`，后续 phase9 / phaseA / phaseB / phaseC 持续加固）。
