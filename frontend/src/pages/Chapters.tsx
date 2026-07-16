@@ -120,6 +120,46 @@ export default function Chapters() {
     }
   }
 
+  // 修订 2026-07-16（Issue #12）：调 LLM 真正生成章节标题
+  // 区别于 handleReimport：那个从内容首句机械截，这个走 LLM 读章节内容生成标题。
+  const [aiGenerating, setAiGenerating] = useState(false);
+  const [aiResult, setAiResult] = useState<{
+    processed: number;
+    updated: number;
+    cost: number;
+    sample: { chapter_no: number; old_title: string | null; new_title: string }[];
+  } | null>(null);
+  async function handleAiGenerateTitles(mode: "all" | "missing" | "sample5") {
+    if (!projectId) return;
+    const onlyMissing = mode !== "all";
+    const limit = mode === "sample5" ? 5 : undefined;
+    const sample = mode === "sample5";
+    if (mode === "all" && !confirm("调 LLM 为所有章节生成标题？大约每章 ~$0.002，300 章约 $0.6。")) return;
+    setAiGenerating(true);
+    setAiResult(null);
+    try {
+      const res = await api.regenerateTitles(projectId, {
+        limit, only_missing: onlyMissing, sample,
+      });
+      setAiResult({
+        processed: res.processed,
+        updated: res.updated,
+        cost: res.total_cost_usd,
+        sample: res.changes.slice(0, 5),
+      });
+      if (sample) {
+        toast.info("样例生成完成", `样本 5 章 / 成本 $${res.total_cost_usd.toFixed(4)}`);
+      } else {
+        toast.success("AI 标题生成完成", `${res.updated} 章已更新 / 成本 $${res.total_cost_usd.toFixed(4)}`);
+        await refreshChapters();
+      }
+    } catch (e) {
+      toast.error("生成失败", String(e));
+    } finally {
+      setAiGenerating(false);
+    }
+  }
+
   async function handleSave() {
     if (!projectId || !content.trim()) return;
     setSaving(true);
@@ -194,14 +234,83 @@ export default function Chapters() {
             <button
               className="btn btn-ghost"
               onClick={handleReimport}
-              disabled={reimporting}
+              disabled={reimporting || aiGenerating}
               title="从输出目录重新派生所有章节标题（基于内容首句）"
             >
-              {reimporting ? "重新导入中…" : "🔄 重新派生标题"}
+              {reimporting ? "重新导入中…" : "🔄 重新派生（首句）"}
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={() => handleAiGenerateTitles("sample5")}
+              disabled={aiGenerating || reimporting}
+              title="调 LLM 读章节内容生成真正像样的标题（先看 5 章样例）"
+              style={{ marginLeft: 6 }}
+            >
+              {aiGenerating ? "生成中…" : "✨ AI 生成标题"}
             </button>
           </div>
         )}
       </div>
+
+      {/* AI 生成结果面板 */}
+      {aiResult && (
+        <div className="card mt-16" style={{ borderColor: "var(--color-accent)" }}>
+          <div className="flex-between" style={{ marginBottom: 8 }}>
+            <h3 className="card__title" style={{ margin: 0 }}>
+              ✨ AI 标题生成结果
+            </h3>
+            <button className="btn btn-ghost" onClick={() => setAiResult(null)}>×</button>
+          </div>
+          <div className="text-muted" style={{ fontSize: 12, marginBottom: 12 }}>
+            处理 {aiResult.processed} 章 · 更新 {aiResult.updated} 章 · 成本 ${aiResult.cost.toFixed(4)}
+          </div>
+          {aiResult.sample.length > 0 && (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th style={{ width: 60 }}>章</th>
+                  <th>旧标题</th>
+                  <th>新标题（LLM 生成）</th>
+                </tr>
+              </thead>
+              <tbody>
+                {aiResult.sample.map((s) => (
+                  <tr key={s.chapter_no}>
+                    <td className="mono">Ch{s.chapter_no}</td>
+                    <td className="text-faint" style={{ fontSize: 12 }}>
+                      {s.old_title || "（无）"}
+                    </td>
+                    <td style={{ fontFamily: "var(--font-display)", fontWeight: 600, color: "var(--color-accent)" }}>
+                      第{s.chapter_no}章·{s.new_title}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {!aiResult.sample.length && (
+            <div className="empty-state">没有章节需要更新标题</div>
+          )}
+          <div className="button-row" style={{ marginTop: 12 }}>
+            <button
+              className="btn"
+              onClick={() => handleAiGenerateTitles("missing")}
+              disabled={aiGenerating}
+              title="为所有缺标题的章节生成"
+            >
+              生成全部缺失
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={() => handleAiGenerateTitles("all")}
+              disabled={aiGenerating}
+              title="覆盖所有章节标题（包括已有的）"
+            >
+              强制重新生成全部
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ============ 阅读导航（最显眼位置） ============ */}
       <div className="card reading-navigator">

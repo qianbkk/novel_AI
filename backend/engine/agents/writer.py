@@ -230,7 +230,7 @@ def _extract_title(raw: str, fallback_goal: str = "") -> tuple[str, str]:
                 # 给了 title 但没 body → title 用 JSON 的，body 用原文本
                 return title[:50], text
             if body and not title:
-                # 给了 body 但没给 title → 用正文首句
+                # 给了 body 但没给 title（或者 LLM 给了空 title） → 用正文首句
                 return _first_line_as_title(body), body
     except _json.JSONDecodeError:
         pass
@@ -271,18 +271,23 @@ def _first_line_as_title(text: str) -> str:
     import re as _re
     for line in text.splitlines():
         s = line.strip()
-        if not s or len(s) <= 4:
+        # 跳过空行 / 太短的纯符号行（如 "----" / "***"）
+        if not s or len(s) <= 1:
+            continue
+        if s in ("---", "***", "===", "___", "----", "****", "####"):
             continue
         # 跳过 markdown heading
         s = _re.sub(r"^#{1,6}\s+", "", s)
         # 跳过「第N章 标题」这种自身带章节号的
         s = _re.sub(r"^第\d+[章卷]\s*", "", s)
         # 跳过 scene label 【xxx】
-        if s.startswith("【") and s.endswith("】"):
+        if s.startswith("【") and s.endswith("】") and len(s) <= 30:
             continue
         # 截断到第一个句号/问号/感叹号
-        s = _re.split(r"[。！？!?]", s)[0]
-        return s[:30].strip() or "未命名章节"
+        s = _re.split(r"[。！？!?]", s)[0].strip()
+        if not s:
+            continue
+        return s[:30]
     return "未命名章节"
 
 

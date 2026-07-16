@@ -174,6 +174,24 @@ export const api = {
       { method: "POST" }
     ),
 
+  // ─── 2026-07-16（Issue #12）：LLM 生成章节标题 ───
+  regenerateTitles: (projectId: string, payload: {
+    limit?: number;
+    only_missing?: boolean;
+    chapter_nos?: number[];
+    sample?: boolean;
+  }) =>
+    request<{
+      processed: number;
+      updated: number;
+      total_cost_usd: number;
+      changes: Array<{ chapter_no: number; old_title: string | null; new_title: string; cost: number }>;
+      sample: boolean;
+    }>(`/projects/${projectId}/regenerate-titles`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
   listProviders: () => request<Provider[]>("/providers"),
 
   createProvider: (payload: ProviderCreate) =>
