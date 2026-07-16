@@ -9,14 +9,13 @@
 | 文档 | 路径 | 用途 | 最后更新 |
 |------|------|------|----------|
 | 用户手册 | [`novel-ai-guide.html`](novel-ai-guide.html) | 给最终用户的操作指南 | commit `7310743` |
-| Wiki 首页 | [`wiki/00-Home.md`](wiki/00-Home.md) | Wiki 入口，链接所有子章节 | commit `7310743` |
+| Wiki 首页 | [`wiki/00-Home.md`](wiki/00-Home.md) | Wiki 入口，链接所有子章节 | commit `b426b34` |
 | 架构总览 | [`wiki/01-Architecture.md`](wiki/01-Architecture.md) | 三层拓扑（frontend/backend/engine） | commit `7310743` |
 | 后端 API | [`wiki/02-Backend-API.md`](wiki/02-Backend-API.md) | FastAPI 路由 + 端点 | commit `7310743` |
-| 写作引擎 | [`wiki/03-Writing-Engine.md`](wiki/03-Writing-Engine.md) | orchestrator + 9 个 agent | commit `7310743` |
+| 写作引擎 | [`wiki/03-Writing-Engine.md`](wiki/03-Writing-Engine.md) | orchestrator + 9 个 agent + 移植加固历史 | commit `99707c3` |
 | 前端 | [`wiki/04-Frontend.md`](wiki/04-Frontend.md) | React + Vite 组件 | commit `7310743` |
 | 数据模型 | [`wiki/05-Data-Model.md`](wiki/05-Data-Model.md) | SQLAlchemy ORM + 4 套存储 | commit `7310743` |
-| 开发环境 | [`wiki/06-Dev-Setup.md`](wiki/06-Dev-Setup.md) | dev.bat + npm run dev | commit `7310743` |
-| 独立引擎 | [`wiki/07-Standalone-Engine.md`](wiki/07-Standalone-Engine.md) | novel_AI 子目录用法 | commit `7310743` |
+| 开发环境 | [`wiki/06-Dev-Setup.md`](wiki/06-Dev-Setup.md) | dev.bat + npm run dev | commit `d9daabc` |
 | 架构现状速览 | [`wiki/ARCHITECTURE.md`](wiki/ARCHITECTURE.md) | 速览入口 + CHANGELOG 链接 | commit `4d3b7c9` |
 
 ## 二、审计追踪（按 commit 时序）
