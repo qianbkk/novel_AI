@@ -33,11 +33,11 @@ npm install
 npm run dev
 ```
 
-写作引擎依赖（NovelAI 项目根目录）：
+写作引擎依赖（backend 内置，无需额外安装）：
 
 ```bash
-cd novel_AI
-pip install langgraph anthropic httpx jieba
+cd backend
+pip install -r requirements.txt
 ```
 
 打开 `http://localhost:5293`。
@@ -47,7 +47,7 @@ pip install langgraph anthropic httpx jieba
 1. 在 Provider 页面配置模型供应商。
 2. 在角色配置页面为 15 个写作角色绑定 Provider 和模型。
 3. 新建项目并完成世界构建。
-4. 在写作引擎控制台绑定 `novel_AI` 目录。
+4. 在写作引擎控制台绑定 engine 输出目录（默认 `backend/data/engine/output/`）。
 5. 推送设定、生成设定包、运行章节写作，并导入章节。
 
 ## 一键 MVP 脚本（CLI）
@@ -66,10 +66,6 @@ python -m scripts.run_mvp <project_id>
 ```
 
 流式打印 SSE 日志 + node 事件，结束给摘要 + 列落盘章节。
-
-## novel_AI Bug 修复
-
-`novel_AI/` 在 `.gitignore`，跨机器需手动 apply。详见 `patches/2026-06-28-novel_ai-mvp-fixes.md`（修复 HTTP 连接池、node_rewrite 漏 compliance、预算阈值、网络重试）。
 
 ## 注意
 
