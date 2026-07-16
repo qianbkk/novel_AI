@@ -49,12 +49,14 @@
 | 300 章 v3 实测报告 | [`runs/300ch-v3.md`](runs/300ch-v3.md) | 300 ch / $15 / 6h | P1-P7 修复在大规模下 0 orchestrator error |
 | 300 章 v3 深度复盘 | [`runs/300ch-retrospective.md`](runs/300ch-retrospective.md) | 反思 + 优化建议 | Critical: concept 漂移 + ch_0300 整章[待修订] |
 
-## 四、历史目录（归档中）
+## 四、历史目录（已完成 phase 的归档文档，不更新）
 
 | 目录 | 用途 | 状态 |
 |------|------|------|
-| [`superpowers/plans/`](superpowers/plans/) | 早期规划文档 | 归档，不更新 |
-| [`superpowers/specs/`](superpowers/specs/) | 早期 spec 文档 | 归档，不更新 |
+| [`superpowers/_archive_plans/`](superpowers/_archive_plans/) | Phase 1 / 1.5 / 3 / 4 规划文档（已完成） | 历史归档，不更新 |
+| [`superpowers/_archive_specs/`](superpowers/_archive_specs/) | Phase 1.5 / Phase 4 设计 spec（已完成） | 历史归档，不更新 |
+
+> 这些文档对应的工程 phase 已合并到代码。新读者**不需要读**，写在这里避免 git log 检索漏掉 + 给历史审计留索引。
 
 ---
 
