@@ -30,12 +30,7 @@ npm run dev
 
 ### 3. 写作引擎依赖
 
-引擎代码内嵌在 `backend/engine/`，作为 `engine.*` Python 包被后端子进程导入，依赖已包含在 `backend/requirements.txt`。若单独跑独立版 `novel_AI/`（见 [07-Standalone-Engine.md](07-Standalone-Engine.md)），需要：
-
-```bash
-cd novel_AI
-pip install langgraph anthropic httpx jieba
-```
+引擎代码内嵌在 `backend/engine/`，作为 `engine.*` Python 包被后端子进程导入，依赖已包含在 `backend/requirements.txt`。无需额外安装步骤。
 
 打开浏览器访问 `http://localhost:5293`。
 
@@ -48,7 +43,7 @@ pip install langgraph anthropic httpx jieba
 1. **Provider 页面**（`/settings/providers`）配置模型供应商（Anthropic/DeepSeek/Gemini/Kimi/MiniMax/自定义）
 2. **角色配置页面**（`/settings/roles`）为 15 个写作角色绑定 Provider 和模型
 3. **新建项目**并完成 10 阶段世界构建向导
-4. **写作引擎控制台**绑定 `novel_AI` 工作目录（`NovelAIBinding`）
+4. **写作引擎控制台**绑定 engine 输出目录（默认 `backend/data/engine/output/`）
 5. 推送设定（push-concept）→ 生成设定包（planner）→ 拉取设定（pull-setting）→ 黄金三章（bootstrap）→ 选定版本（select）→ 正式写作（run N）→ 导入章节（import-chapters）
 
 ## 一键 MVP 脚本（CLI）
@@ -80,10 +75,6 @@ python -m scripts.run_mvp <project_id> --chapters 3 --select B
 | `cleanup_test_projects.py` | 清理测试项目数据 |
 | `strip_chapter_headers.py` / `fixup_50ch_audit.py` | 章节文本一次性清洗修复 |
 | `rewrite_length.py` | 用 LLM 把章节字数规整到 1800-2700 |
-
-## novel_AI Bug 修复补丁
-
-`novel_AI/` 目录本身在 `.gitignore` 中，跨机器需手动 apply 补丁。详见 `patches/2026-06-28-novel_ai-mvp-fixes.md`（修复 HTTP 连接池、`node_rewrite` 漏跑 compliance、预算阈值、网络重试）以及 `patches/apply_patches.py`。
 
 ## 测试
 
