@@ -114,7 +114,12 @@ WRITER_CACHE_PREFIX = """\
 
 
 def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, str]:
-    """Build (cached_system_prefix, dynamic_user_prompt)."""
+    """Build (cached_system_prefix, dynamic_user_prompt).
+
+    修订 2026-07-16：让 LLM 输出 JSON {title, body} 而不是纯文本，
+    解决 300 章实测暴露的"标题全是「第N章·发展·第N章：推进剧情」"问题。
+    JSON 输出更鲁棒：避免 LLM 漂移输出 markdown fence / 多余前缀。
+    """
     mc      = setting.get("protagonist", {}) or {}
     genre   = setting.get("genre", "都市")
     mc_name = mc.get("name", "主角")
@@ -180,13 +185,124 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 {('【历史背景参考】\n' + cold_str) if cold_str else ''}
 {style_block}
 
-现在开始写第{task.get('chapter_number', 0)}章正文（直接输出正文，无需标题）："""
+现在开始写第{task.get('chapter_number', 0)}章。
+
+【输出格式】严格 JSON，不要任何 markdown fence 或额外文字：
+{{"title": "本章标题（4-15字，含本章核心冲突或转折）", "body": "正文第一段...", "title_alts": ["备选标题 1", "备选标题 2"]}}
+
+约束：
+- title 必须是本章独特的事件 / 决策 / 转折（不能是「发展」「推进剧情」这种通用词）
+- title 不要写「第N章」前缀
+- body 直接写正文，不要任何"以下是..."等元描述
+- 若 LLM 忘了 JSON 格式，我会从你的文本里兜底提取，所以内容质量优先"""
 
     return system_dynamic, user_prompt
 
 
-def run_writer(task: dict, memory: dict, setting_core: dict) -> tuple[str, float]:
-    """Generate chapter body. Returns (text, cost_usd).
+def _extract_title(raw: str, fallback_goal: str = "") -> tuple[str, str]:
+    """从 writer 输出里提取 (title, body)。
+
+    三级降级，最大限度容忍 LLM 漂移：
+    1. 严格 JSON 解析（首选）
+    2. markdown fence 包着的 JSON
+    3. 「【标题】: xxx」前缀 + 正文
+    4. 正文首句压缩成标题（兜底）
+
+    失败时用 chapter_goal 派生占位标题，避免下游报 "NoneType has no attribute"。
+    """
+    import json as _json
+    import re as _re
+
+    if not raw or not raw.strip():
+        return _goal_to_title(fallback_goal), ""
+
+    text = raw.strip()
+
+    # 1) 尝试直接 JSON 解析
+    try:
+        d = _json.loads(text)
+        if isinstance(d, dict):
+            title = (d.get("title") or "").strip()
+            body = (d.get("body") or "").strip()
+            if title and body:
+                return title[:50], body
+            if title and not body:
+                # 给了 title 但没 body → title 用 JSON 的，body 用原文本
+                return title[:50], text
+            if body and not title:
+                # 给了 body 但没给 title → 用正文首句
+                return _first_line_as_title(body), body
+    except _json.JSONDecodeError:
+        pass
+
+    # 2) markdown fence 包裹的 JSON
+    fence = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, _re.DOTALL)
+    if fence:
+        try:
+            d = _json.loads(fence.group(1))
+            title = (d.get("title") or "").strip()
+            body = (d.get("body") or "").strip()
+            if body:
+                return (title or _first_line_as_title(body))[:50], body
+        except _json.JSONDecodeError:
+            pass
+
+    # 3) "【标题】: xxx" 前缀（兼容半角/全角冒号）
+    m = _re.match(r"【标题】\s*[:：]\s*(.+?)(?:\n|$)", text)
+    if m:
+        title = m.group(1).strip()[:50]
+        body = text[m.end():].strip()
+        if body:
+            return title, body
+    # 也支持 "标题: xxx"（无书名号）
+    m = _re.match(r"^标题\s*[:：]\s*(.+?)(?:\n|$)", text)
+    if m:
+        title = m.group(1).strip()[:50]
+        body = text[m.end():].strip()
+        if body:
+            return title, body
+
+    # 4) 兜底：用正文首句作为标题
+    return _first_line_as_title(text), text
+
+
+def _first_line_as_title(text: str) -> str:
+    """从正文首行提取一个简洁标题（去掉 markdown heading / scene label / 第N章 前缀）。"""
+    import re as _re
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or len(s) <= 4:
+            continue
+        # 跳过 markdown heading
+        s = _re.sub(r"^#{1,6}\s+", "", s)
+        # 跳过「第N章 标题」这种自身带章节号的
+        s = _re.sub(r"^第\d+[章卷]\s*", "", s)
+        # 跳过 scene label 【xxx】
+        if s.startswith("【") and s.endswith("】"):
+            continue
+        # 截断到第一个句号/问号/感叹号
+        s = _re.split(r"[。！？!?]", s)[0]
+        return s[:30].strip() or "未命名章节"
+    return "未命名章节"
+
+
+def _goal_to_title(goal: str) -> str:
+    """从 chapter_goal 派生标题。goal 为空时返回「未命名章节」。"""
+    if not goal or not goal.strip():
+        return "未命名章节"
+    s = goal.strip()
+    # 去掉「第N章」前缀
+    import re as _re
+    s = _re.sub(r"^第\d+[章卷][\s::：]*", "", s)
+    return s[:30] if len(s) <= 30 else s[:27] + "…"
+
+
+def run_writer(task: dict, memory: dict, setting_core: dict) -> tuple[str, str, float]:
+    """Generate chapter body + title. Returns (text, title, cost_usd).
+
+    修订 2026-07-16：3 元组返回，让 orchestrator 把 title 写进 meta.json，
+    chapter_import 从 meta.title 派生数据库的 Chapter.title，
+    修复「章节标题全是 placeholder」的 bug。
 
     P3: 字数控制已接入生成路径（不再是事后校验）。
     - 从 task.target_length（如 "2000-2200"）取中位数作为 target_chars
@@ -223,7 +339,7 @@ def run_writer(task: dict, memory: dict, setting_core: dict) -> tuple[str, float
         target_chars = int(target) if target.isdigit() else 2200
 
     # 写入路径 length-budget call（替代原 router.call()）
-    return _call_with_budget(
+    raw_text, cost = _call_with_budget(
         agent_name="writer",
         system=system_dynamic,
         user=user_prompt,
@@ -232,3 +348,7 @@ def run_writer(task: dict, memory: dict, setting_core: dict) -> tuple[str, float
         tolerance=200,
         max_continues=2,
     )
+
+    # 提取 title（JSON / markdown fence / 标题前缀 / 首句 4 级降级）
+    title, body = _extract_title(raw_text, fallback_goal=task.get("chapter_goal", ""))
+    return body, title, cost

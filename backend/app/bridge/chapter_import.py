@@ -21,11 +21,27 @@ log = get_logger("novel_ai.chapter_import")
 
 
 def _derive_title(n: int, meta: dict, content: str) -> str:
-    """派生章节标题：优先 meta 的 chapter_role + chapter_goal，
-    都没有再从正文首行抓。"""
+    """派生章节标题。
+
+    修订 2026-07-16：优先级改成
+      1. meta.title（writer 2026-07-16 后会写）
+      2. role + chapter_goal 派生
+      3. 正文首句
+    旧版本会产出「第N章·发展·第N章：推进剧情」这种重复 placeholder，
+    现在 title 直接来自 LLM 输出，避免重复。
+    """
+    # 1) meta.title（writer 直接给的最准）
+    raw_title = (meta.get("title") or "").strip()
+    if raw_title and raw_title not in ("未命名章节",):
+        return f"第{n}章·{raw_title[:40]}"
+
     role = (meta.get("chapter_role") or "").strip()
     goal = (meta.get("chapter_goal") or "").strip()
+    # 2) role + chapter_goal 派生（兼容老 meta 文件）
     if role or goal:
+        # 兼容占位 goal「第N章：推进剧情」 — 只取 role
+        if goal.startswith("第") and "推进剧情" in goal:
+            return f"第{n}章·{role or '正文'}"
         goal_short = goal[:30] + ("…" if len(goal) > 30 else "")
         return f"第{n}章·{role or '正文'}·{goal_short}"
     # 兜底：从正文第一句「真正的话」摘——跳过：

@@ -342,11 +342,55 @@ def _decide_adaptive_audit_mode(
 
 
 def _placeholder_task(arc_idx: int, i: int, arc: dict) -> dict:
-    """Minimal ChapterTask used when outline agent is a stub."""
+    """Minimal ChapterTask used when outline agent is a stub.
+
+    修订 2026-07-16：chapter_goal 不再用「第N章：推进剧情」6字占位，
+    改用 arc.arc_goal + arc_name + 弧位置 派生一个有意义的目标。
+    这样即使 outline 没真跑（gen_chapters_direct.py 走 placeholder 路径），
+    LLM 也能拿到「这本书讲什么 + 现在在弧的什么阶段」做参考。
+
+    chapter_role 按 30 章为一周期的弧布局分配（铺垫/发展/爽点/弧高潮/过渡），
+    比全部都是"发展"更合理。
+    """
+    arc_name = (arc.get("arc_name") or "").strip()
+    arc_goal = (arc.get("arc_goal") or "").strip()
+    arc_len  = max(1, int(arc.get("estimated_chapters", 30)))
+
+    # 弧内位置百分比 0~1 → 决定 chapter_role
+    pos = i / arc_len
+    if pos < 0.10:
+        role = "铺垫"
+    elif pos < 0.40:
+        role = "发展"
+    elif pos < 0.50:
+        role = "爽点"
+    elif pos < 0.55:
+        role = "弧高潮"
+    else:
+        role = "发展"
+
+    # chapter_goal 用 arc_goal 拼接位置描述
+    if arc_goal:
+        goal_base = arc_goal
+    elif arc_name:
+        goal_base = f"{arc_name}的故事"
+    else:
+        goal_base = "主角继续推进"
+
+    # 让每章 goal 都不同，避免全是「推进剧情」
+    goal_variants = [
+        f"{goal_base}：埋下关键伏笔",
+        f"{goal_base}：建立核心冲突",
+        f"{goal_base}：面对第一个挑战",
+        f"{goal_base}：引入关键配角",
+        f"{goal_base}：推进主线，回收旧线索",
+    ]
+    goal = goal_variants[i % len(goal_variants)]
+
     return {
         "chapter_number": arc_idx * 30 + i + 1,
-        "chapter_role":   "发展",
-        "chapter_goal":   f"第{i+1}章：推进剧情",
+        "chapter_role":   role,
+        "chapter_goal":   goal,
         "main_characters": ["主角"],
         "shuang_type":    None,
         "shuang_description": "",
@@ -356,7 +400,7 @@ def _placeholder_task(arc_idx: int, i: int, arc: dict) -> dict:
         "forbidden_actions": [],
         "target_length": "2000-2200",
         "audit_mode":    "full",
-        "is_arc_climax": False,
+        "is_arc_climax": role == "弧高潮",
     }
 
 
@@ -381,7 +425,8 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
 
     log("  ✍️  Writer生成中...", state)
     try:
-        raw_text, cost = run_writer(task, {}, setting)
+        # 修订 2026-07-16：3 元组返回 (text, title, cost) — 让 orchestrator 捕获 title
+        raw_text, draft_title, cost = run_writer(task, {}, setting)
         _add_cost(state, cost)
     except Exception as e:
         # 之前：写 "[writer-stub] {goal}" 占位并继续 pipeline → checker 给
@@ -403,6 +448,17 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
         log(f"ERR normalizer failed: {e}", state)
         clean_text, fmt_issues, cost = raw_text, [], 0.0
     _add_cost(state, cost)
+
+    # 修订 2026-07-16：normalizer 之后再次提取 title，避免 normalizer 把 JSON
+    # 包装剥掉后 title 跟 body 揉在一起。_extract_title 是幂等的，重复调无副作用。
+    if not draft_title or draft_title == "未命名章节":
+        try:
+            from .agents.writer import _extract_title
+            _t, clean_text = _extract_title(clean_text, fallback_goal=task.get("chapter_goal", ""))
+            if _t and _t != "未命名章节":
+                draft_title = _t
+        except Exception:
+            pass
 
     # 草稿模式（个人试错）：跳过 compliance + checker，只保留 writer+normalizer+tracker。
     # 设计动机：用户在试不同开篇 / 调试 prompt 时，不想为每章花 6-9 次 LLM 调用的全
@@ -480,6 +536,7 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
     log(f"  📊 {score:.1f}分 | {checker_result.get('verdict','')}", state)
 
     task["_draft_text"]        = clean_text
+    task["_draft_title"]       = draft_title  # 修订 2026-07-16：保存 title 给 save_and_track
     task["_checker_result"]    = checker_result
     task["_compliance_failed"] = False
     state["current_task"]      = task
@@ -506,6 +563,7 @@ def node_rewrite(state: OrchestratorState) -> OrchestratorState:
     log(f"  ♻️  第{state['rewrite_count_current']}次重写（{rewrite_lvl}）", state)
 
     try:
+        # rewriter 不返回 title — 保留原 _draft_title（重写只改 body 不改 title）
         new_text, cost = run_rewriter(draft_text, rewrite_lvl, feedback, task, cr, memory, setting)
         _add_cost(state, cost)
     except Exception as e:
@@ -591,6 +649,7 @@ def node_save_and_track(state: OrchestratorState) -> OrchestratorState:
         "chapter_number": task["chapter_number"],
         "chapter_role":   task.get("chapter_role", ""),
         "chapter_goal":   task.get("chapter_goal", ""),
+        "title":          task.get("_draft_title", "") or "",  # 修订 2026-07-16
         "score":          cr.get("score", 0),
         "verdict":        cr.get("verdict", ""),
         "dimensions":     cr.get("dimensions", {}),

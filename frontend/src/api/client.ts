@@ -20,6 +20,10 @@ import type {
   PostProcessResult,
   ForeshadowingRow,
   AiAssistLevel,
+  // 2026-07-16：弧级大纲
+  OutlineOut,
+  OutlineCreatePayload,
+  ArcGeneratePayload,
   // Phase 4 新增
   CharacterSummary,
   CharacterCardOut,
@@ -303,6 +307,33 @@ export const api = {
 
   getRelationsGraph: (projectId: string) =>
     request<RelationGraph>(`/projects/${projectId}/relations/graph`),
+
+  // ─── 2026-07-16：弧级大纲管理（Issue #4） ───
+  listOutlines: (projectId: string) =>
+    request<OutlineOut[]>(`/projects/${projectId}/outlines`),
+
+  createOutline: (projectId: string, payload: OutlineCreatePayload) =>
+    request<OutlineOut>(`/projects/${projectId}/outlines`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
+
+  updateOutline: (projectId: string, outlineId: string, payload: Partial<OutlineCreatePayload> & { status?: string }) =>
+    request<OutlineOut>(`/projects/${projectId}/outlines/${outlineId}`, {
+      method: "PATCH",
+      body: JSON.stringify(payload),
+    }),
+
+  deleteOutline: (projectId: string, outlineId: string) =>
+    request<{ ok: boolean; deleted_id: string }>(`/projects/${projectId}/outlines/${outlineId}`, {
+      method: "DELETE",
+    }),
+
+  generateOutline: (projectId: string, payload: ArcGeneratePayload) =>
+    request<OutlineOut>(`/projects/${projectId}/outlines/generate`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }),
 
   // ─── Phase 4：多用户认证 ───
   // dev 模式（默认）：上面所有端点在没有 token 时仍可访问（兼容旧用户）

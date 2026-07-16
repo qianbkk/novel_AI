@@ -348,6 +348,33 @@ class RuleConfig(Base):
     project = relationship("Project")
 
 
+class Outline(Base):
+    """弧级大纲：一条 arc 对应一行，outline_json 存该弧拆解出的章节任务单。
+
+    对应 engine.agents.outline.run_outline() 的产物——之前 outline agent 存在但
+    没有落库/API/UI 入口，用户写小说看不到"大纲"这一步。这张表把 arc 定义 +
+    LLM 拆出的 chapter task 列表持久化，前端 Outline 页读它。
+    """
+    __tablename__ = "outlines"
+
+    id = Column(String, primary_key=True, default=gen_id)
+    project_id = Column(String, ForeignKey("projects.id"), index=True)
+    arc_id = Column(Integer, nullable=False)                     # 第几条 arc
+    arc_name = Column(String, nullable=False)
+    arc_goal = Column(Text, nullable=True)
+    arc_estimated_chapters = Column(Integer, default=30)
+    arc_climax_description = Column(Text, nullable=True)
+    arc_climax_chapter_offset = Column(Integer, default=15)
+    arc_ending_state = Column(Text, nullable=True)
+    emotion_curve = Column(String, default="上升")
+    status = Column(String, default="draft")                     # draft / approved / in_progress / done
+    outline_json = Column(JSON, nullable=True)                   # 章节任务单（run_outline 产物）
+    created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
+    project = relationship("Project")
+
+
 # ─── Phase 4: 多用户认证 ───
 class User(Base):
     """应用层 user 表。email 唯一登录。

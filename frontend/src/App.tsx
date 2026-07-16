@@ -9,6 +9,7 @@ import RoleAssignments from "./pages/RoleAssignments";
 import BridgeConsole from "./pages/BridgeConsole";
 import RuleCenter from "./pages/RuleCenter";
 import CharacterCard from "./pages/CharacterCard";
+import Outline from "./pages/Outline";  // 2026-07-16：弧级大纲管理（Issue #4）
 import { LoginDialog } from "./components/LoginDialog";
 import { api, getStoredToken } from "./api/client";
 
@@ -148,6 +149,16 @@ export default function App() {
               <span className="sidebar-link__dot" />
               世界构建
             </NavLink>
+            {/* 2026-07-16：弧级大纲管理（Issue #4） */}
+            <NavLink
+              to={`/projects/${projectId}/outline`}
+              className={({ isActive }) =>
+                `sidebar-link${isActive ? " is-active" : ""}`
+              }
+            >
+              <span className="sidebar-link__dot" />
+              大纲管理
+            </NavLink>
             <NavLink
               to={`/projects/${projectId}/bridge`}
               className={({ isActive }) =>
@@ -197,6 +208,8 @@ export default function App() {
           <Route path="/projects/:projectId/rules" element={<RuleCenter />} />
           {/* Phase 4: 角色卡详情页 */}
           <Route path="/projects/:projectId/characters/:characterId" element={<CharacterCard />} />
+          {/* 2026-07-16：弧级大纲管理（Issue #4） */}
+          <Route path="/projects/:projectId/outline" element={<Outline />} />
         </Routes>
         </div>
       </main>

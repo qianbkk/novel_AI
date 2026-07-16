@@ -27,10 +27,45 @@ sys.path.insert(0, str(BACKEND))
 os.environ.setdefault("ANTHROPIC_BASE_URL", "https://api.minimaxi.com/anthropic")
 
 
+def _try_outline_tasks(args, arc_plan: dict) -> list | None:
+    """Try to call outline agent for real chapter_goal values.
+
+    修订 2026-07-16：300 章实测暴露 concept drift bug —— placeholder task
+    的 chapter_goal 全是「第N章：推进剧情」，LLM 不知道要写什么题材，
+    直接 fallback 到默认题材（修真 → 实际产出都市悬疑）。
+    修复：默认调 run_outline()，让 LLM 基于 args.concept 生成真实 chapter_goal。
+    --skip-outline 可关闭用于快速冒烟。
+    """
+    if args.skip_outline:
+        return None
+    try:
+        from engine.agents.outline import run_outline
+        from engine.memory.manager import get_l2
+
+        # 拼一个 minimal setting，足够 outline agent 读
+        setting = {
+            "novel_id": args.novel_id,
+            "genre": args.genre,
+            "title": args.title,
+            "protagonist": {"name": "主角"},
+            "key_characters": [],
+            "power_system": {"levels": []},
+        }
+        memory = get_l2(args.novel_id) if hasattr(get_l2, "__call__") else {}
+        tasks, _cost = run_outline(arc_plan, 1, setting, memory)
+        if tasks and len(tasks) >= args.chapters:
+            print(f"📋 outline agent 生成 {len(tasks)} 个真实 chapter_goal（截取前 {args.chapters} 个）")
+            return tasks[:args.chapters]
+    except Exception as e:
+        print(f"⚠️  outline agent 调用失败（{e}），fallback 到 placeholder task")
+    return None
+
+
 def _build_state(args) -> dict:
     """构造一个最小 OrchestratorState —— 含 1 个 arc、N 个 chapter_task_queue。
 
-    arc 结构：使用 _placeholder_task helper（已在 orchestrator.py 验证可用）。
+    修订 2026-07-16：默认调 outline agent 生成真实 chapter_goal（不再用占位）。
+    --skip-outline 可关闭用于快速冒烟。
     """
     from engine.state import create_initial_state
     from engine.orchestrator import _placeholder_task
@@ -61,13 +96,16 @@ def _build_state(args) -> dict:
     state["total_arcs_planned"] = 1
     state["current_arc"] = 0
 
-    # 关键：直接预填 chapter_task_queue，node_load_arc_tasks 看到非空会跳过
-    state["chapter_task_queue"] = [
-        _placeholder_task(0, i, arc_plan) for i in range(args.chapters)
-    ]
-    # 覆盖 placeholder_task 默认 audit_mode="full"——driver 直接喂 state 时
-    # 不会走 orchestrator.py:265 的 env-var override 分支（那个分支只在
-    # outline agent 实际产出 task 时跑）。手动覆盖保持与 CLI 一致。
+    # 默认调 outline；失败 / --skip-outline 时 fallback 到 placeholder
+    real_tasks = _try_outline_tasks(args, arc_plan)
+    if real_tasks:
+        state["chapter_task_queue"] = real_tasks
+    else:
+        state["chapter_task_queue"] = [
+            _placeholder_task(0, i, arc_plan) for i in range(args.chapters)
+        ]
+
+    # 覆盖 audit_mode（driver 直接喂 state 时不会走 orchestrator.py 的 env-var override）
     for t in state["chapter_task_queue"]:
         t["audit_mode"] = args.audit_mode
     state["total_chapters_planned"] = args.chapters
@@ -88,6 +126,9 @@ def main() -> int:
     parser.add_argument("--budget", type=float, default=500.0)
     parser.add_argument("--resume", action="store_true",
                         help="从已有 state 恢复（断点续跑）")
+    parser.add_argument("--skip-outline", action="store_true",
+                        help="跳过 outline agent 直接用 placeholder task（仅用于冒烟测试，"
+                             "正式跑别加，避免 300 章实测那种 concept drift）")
     args = parser.parse_args()
 
     os.environ["NOVEL_AUDIT_MODE"] = args.audit_mode

@@ -469,6 +469,19 @@ export default function Dashboard() {
                 <div className="project-card__foot" style={{ marginTop: 14 }}>
                   {statusBadge(p.status)}
                   <span className="text-faint text-mono">{p.id.slice(0, 8)}</span>
+                  {recent.length > 0 && (
+                    <button
+                      className="btn btn-ghost"
+                      style={{ marginLeft: 8, fontSize: 12, padding: "2px 10px" }}
+                      onClick={(e) => {
+                        e.stopPropagation();  // 不触发 project card onClick
+                        navigate(`/projects/${p.id}/chapters`);
+                      }}
+                      aria-label={`查看 ${p.title} 全部 ${chs.length} 章`}
+                    >
+                      打开 {chs.length} 章
+                    </button>
+                  )}
                 </div>
               </div>
             );

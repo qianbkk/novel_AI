@@ -17,9 +17,13 @@ interface DialogProps {
   onClose: () => void;
   children: ReactNode;
   actions?: ReactNode;
+  /** 修订 2026-07-16：宽屏模式（章节详情用），自动加 dialog-wide class。 */
+  wide?: boolean;
+  /** 额外 className 拼到 <dialog> 上，用来切换宽度（如 dialog-wide）。 */
+  className?: string;
 }
 
-export function Dialog({ open, title, sub, onClose, children, actions }: DialogProps) {
+export function Dialog({ open, title, sub, onClose, children, actions, wide, className }: DialogProps) {
   const ref = useRef<HTMLDialogElement | null>(null);
 
   useEffect(() => {
@@ -41,8 +45,9 @@ export function Dialog({ open, title, sub, onClose, children, actions }: DialogP
     return () => el.removeEventListener("close", handleClose);
   }, [onClose]);
 
+  const finalClass = ["ink-dialog", wide ? "dialog-wide" : "", className || ""].filter(Boolean).join(" ");
   return (
-    <dialog ref={ref} className="ink-dialog" aria-labelledby="ink-dialog-title">
+    <dialog ref={ref} className={finalClass} aria-labelledby="ink-dialog-title">
       {title && <h3 id="ink-dialog-title" className="ink-dialog__title">{title}</h3>}
       {sub && <p className="ink-dialog__sub">{sub}</p>}
       <div className="ink-dialog__body">{children}</div>

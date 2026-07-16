@@ -20,6 +20,15 @@ function deriveItemState(text: string): string {
   return matched.length > 0 ? matched.join("、") : "—";
 }
 
+// 修订 2026-07-16：判定章节状态用于筛选 / 状态指示器
+type ChapterStatus = "ok" | "incomplete" | "escalate";
+function deriveStatus(c: ChapterListItem): ChapterStatus {
+  const preview = c.content_preview || "";
+  if (preview.startsWith("[待修订]") || (c.title || "").includes("[待修订]")) return "escalate";
+  if (!c.title || /^第\d+章$/.test(c.title)) return "incomplete";
+  return "ok";
+}
+
 export default function Chapters() {
   const { projectId } = useParams<{ projectId: string }>();
   const [chapters, setChapters] = useState<ChapterListItem[]>([]);
@@ -46,6 +55,9 @@ export default function Chapters() {
 
   const [expandedLock, setExpandedLock] = useState<string | null>(null);
   const [charactersByChapter, setCharactersByChapter] = useState<Record<string, ChapterCharacter[]>>({});
+
+  // 修订 2026-07-16：章节状态筛选（全部/完整/待修订/无标题）
+  const [statusFilter, setStatusFilter] = useState<"all" | ChapterStatus>("all");
 
   const rootRef = useRef<HTMLDivElement | null>(null);
   const toast = useToast();
@@ -139,6 +151,36 @@ export default function Chapters() {
 
   const chaptersDesc = useMemo(() => [...chapters].sort((a, b) => b.chapter_no - a.chapter_no), [chapters]);
 
+  // 修订 2026-07-16：状态分组 + 筛选
+  const statusCounts = useMemo(() => {
+    const counts = { all: chapters.length, ok: 0, incomplete: 0, escalate: 0 };
+    for (const c of chapters) {
+      counts[deriveStatus(c)]++;
+    }
+    return counts;
+  }, [chapters]);
+
+  const filteredChapters = useMemo(() => {
+    if (statusFilter === "all") return chaptersDesc;
+    return chaptersDesc.filter((c) => deriveStatus(c) === statusFilter);
+  }, [chaptersDesc, statusFilter]);
+
+  // 修订 2026-07-16：前后章翻页（在 Dialog 内）
+  function openAdjacentChapter(delta: number) {
+    if (!chapterDetail) return;
+    const idx = chapters.findIndex((c) => c.id === chapterDetail.id);
+    if (idx < 0) return;
+    const target = chapters[idx + delta];
+    if (target) openChapterDetail(target.id);
+  }
+
+  // 修订 2026-07-16：第一章 / 末章快跳
+  const firstChapter = chapters.length > 0 ? [...chapters].sort((a, b) => a.chapter_no - b.chapter_no)[0] : null;
+  const lastChapter = chapters.length > 0 ? chaptersDesc[0] : null;
+  const currentDetailIdx = chapterDetail ? chapters.findIndex((c) => c.id === chapterDetail.id) : -1;
+  const hasPrevDetail = currentDetailIdx > 0 && currentDetailIdx < chapters.length - 1;
+  const hasNextDetail = currentDetailIdx >= 0 && currentDetailIdx < chapters.length - 1;
+
   return (
     <div ref={rootRef}>
       <div className="page-header">
@@ -152,118 +194,55 @@ export default function Chapters() {
         </div>
       </div>
 
-      <div className="card">
-        <h3 className="card__title">手动新增一章</h3>
-        <div className="form-grid" style={{ marginBottom: 0 }}>
-          <div className="field">
-            <label>章节号</label>
+      {/* ============ 阅读导航（最显眼位置） ============ */}
+      <div className="card reading-navigator">
+        <h3 className="card__title">📖 阅读导航</h3>
+        <div className="text-muted" style={{ fontSize: 12, marginTop: -8, marginBottom: 14 }}>
+          点按钮直接打开章节全文 Dialog。章节正文在主区域列表里点章节号也能进。
+        </div>
+        <div className="reading-navigator__row">
+          <button
+            className="btn btn-ghost"
+            disabled={!firstChapter}
+            onClick={() => firstChapter && openChapterDetail(firstChapter.id)}
+          >
+            ⏮ 第一章
+          </button>
+          <div className="reading-navigator__jump">
             <input
               type="number"
-              value={chapterNo}
-              onChange={(e) => setChapterNo(Number(e.target.value))}
+              min={1}
+              placeholder="如 42"
+              value={jumpChapterNo}
+              onChange={(e) => setJumpChapterNo(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && jumpChapterNo.trim()) {
+                  const target = chapters.find((c) => c.chapter_no === Number(jumpChapterNo));
+                  if (target) openChapterDetail(target.id);
+                  else toast.warn("找不到该章节号", `已保存 ${chapters[0]?.chapter_no ?? "-"} - ${chapters[chapters.length - 1]?.chapter_no ?? "-"}`);
+                }
+              }}
             />
+            <button
+              className="btn btn-primary"
+              disabled={!jumpChapterNo.trim() || !chapters.length}
+              onClick={() => {
+                const target = chapters.find((c) => c.chapter_no === Number(jumpChapterNo));
+                if (target) openChapterDetail(target.id);
+                else toast.warn("找不到该章节号");
+              }}
+            >
+              阅读第 N 章
+            </button>
           </div>
-          <div className="field">
-            <label>标题</label>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="第N章 标题"
-            />
-          </div>
-        </div>
-        <div className="field">
-          <div className="flex-between" style={{ marginBottom: 6 }}>
-            <label style={{ marginBottom: 0 }}>正文</label>
-            <span className="text-mono text-faint tabular-nums" style={{ fontSize: 11.5 }}>
-              {content.length.toLocaleString()} 字
-            </span>
-          </div>
-          <textarea
-            rows={12}
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            placeholder="粘贴或输入这一章的正文…保存后会自动标记出场人物、embed 全文并跑一次重复度检测"
-            style={{ fontFamily: "var(--font-body)", lineHeight: 1.8 }}
-          />
-        </div>
-
-        {repetitionWarnings.length > 0 && (
-          <div className="banner banner-warn">
-            检测到与 {repetitionWarnings.length} 章高度相似（语义重复度 ≥ 0.85）：
-            {repetitionWarnings.map((w) => (
-              <div key={w.compared_chapter_id} className="mono" style={{ marginTop: 4 }}>
-                {chapterLabel(w.compared_chapter_id)} · 相似度 {w.similarity}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {lastSavedChapterId && !repetitionWarnings.length && (
-          <div className="banner banner-success" style={{ fontSize: 12 }}>
-            ✅ 已保存第{chapterNo - 1}章 ·{" "}
-            <a onClick={() => openChapterDetail(lastSavedChapterId)}
-               style={{ cursor: "pointer", textDecoration: "underline" }}>
-              查看完整正文
-            </a>
-          </div>
-        )}
-
-        <button
-          className="btn btn-primary"
-          onClick={handleSave}
-          disabled={saving || !content.trim()}
-        >
-          {saving ? "保存中…" : "保存这一章"}
-        </button>
-      </div>
-
-      <div className="card mt-24">
-        <h3 className="card__title">语义检索</h3>
-        <div className="form-grid" style={{ alignItems: "end" }}>
-          <div className="field" style={{ marginBottom: 0 }}>
-            <label>检索意图</label>
-            <input
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="如：重生回到答辩现场"
-            />
-          </div>
-          <div className="field" style={{ marginBottom: 0 }}>
-            <label>角色过滤</label>
-            <select value={characterId} onChange={(e) => setCharacterId(e.target.value)}>
-              <option value="">不限角色</option>
-              {characters.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <div className="button-row" style={{ marginTop: 12 }}>
           <button
-            className="btn btn-primary"
-            onClick={handleSearch}
-            disabled={searching || !query.trim()}
+            className="btn btn-ghost"
+            disabled={!lastChapter}
+            onClick={() => lastChapter && openChapterDetail(lastChapter.id)}
           >
-            {searching ? "检索中…" : "开始检索"}
+            最新章 ⏭
           </button>
         </div>
-
-        {searchResults && (
-          <div className="mt-24">
-            {searchResults.length === 0 ? (
-              <div className="empty-state">没有匹配的章节。</div>
-            ) : (
-              searchResults.map((r) => (
-                <div className="entity-card" key={r.chapter_id}>
-                  <span className="entity-card__name font-display">{chapterLabel(r.chapter_id)}</span>
-                  <span className="entity-card__meta mono">相似度 {r.similarity}</span>
-                  <div className="entity-card__desc">{r.snippet}…</div>
-                </div>
-              ))
-            )}
-          </div>
-        )}
       </div>
 
       {/* ============ 已保存章节 + 衔接锁 ============ */}
@@ -284,53 +263,40 @@ export default function Chapters() {
             />
           </svg>
         </div>
-        <h3 className="card__title">已保存章节 · 衔接锁</h3>
-        <div className="text-muted" style={{ fontSize: 11.5, marginTop: -10, marginBottom: 12 }}>
-          点击章节号可展开"章节衔接锁"：场景布置 / 角色登场（来自真实图谱） / 物品状态 / 前章收尾；每行右侧「查看全文」按钮直接打开章节全文 Dialog
+        <h3 className="card__title">已保存章节 · {chapters.length} 章</h3>
+
+        {/* 修订 2026-07-16：状态筛选 chips */}
+        <div className="chapter-filter">
+          <button
+            className={`chapter-filter__chip ${statusFilter === "all" ? "is-active" : ""}`}
+            onClick={() => setStatusFilter("all")}
+          >
+            全部 <span className="chapter-filter__count">{statusCounts.all}</span>
+          </button>
+          <button
+            className={`chapter-filter__chip chapter-filter__chip--ok ${statusFilter === "ok" ? "is-active" : ""}`}
+            onClick={() => setStatusFilter("ok")}
+          >
+            ✓ 完整 <span className="chapter-filter__count">{statusCounts.ok}</span>
+          </button>
+          <button
+            className={`chapter-filter__chip chapter-filter__chip--warn ${statusFilter === "incomplete" ? "is-active" : ""}`}
+            onClick={() => setStatusFilter("incomplete")}
+          >
+            ⚠ 无标题 <span className="chapter-filter__count">{statusCounts.incomplete}</span>
+          </button>
+          <button
+            className={`chapter-filter__chip chapter-filter__chip--escalate ${statusFilter === "escalate" ? "is-active" : ""}`}
+            onClick={() => setStatusFilter("escalate")}
+          >
+            🚨 待修订 <span className="chapter-filter__count">{statusCounts.escalate}</span>
+          </button>
         </div>
 
-        {/* 跳到指定章节号 — 输入 chapter_no 一键查看全文 */}
-        <div className="form-grid" style={{ marginBottom: 16, alignItems: "end" }}>
-          <div className="field" style={{ marginBottom: 0 }}>
-            <label>跳到章节</label>
-            <input
-              type="number"
-              min={1}
-              placeholder="如 42"
-              value={jumpChapterNo}
-              onChange={(e) => setJumpChapterNo(e.target.value)}
-            />
-          </div>
-          <button
-            className="btn btn-primary"
-            style={{ marginBottom: 0 }}
-            disabled={!jumpChapterNo.trim() || !chapters.length}
-            onClick={() => {
-              const target = chapters.find((c) => c.chapter_no === Number(jumpChapterNo));
-              if (target) {
-                openChapterDetail(target.id);
-              } else {
-                toast.warn("找不到该章节号", `已保存 ${chapters.length} 章（${chapters[0]?.chapter_no ?? "-"} - ${chapters[chapters.length - 1]?.chapter_no ?? "-"}）`);
-              }
-            }}
-          >
-            查看
-          </button>
-          <button
-            className="btn btn-ghost"
-            style={{ marginBottom: 0 }}
-            disabled={!chapters.length}
-            onClick={() => {
-              const last = [...chapters].sort((a, b) => b.chapter_no - a.chapter_no)[0];
-              if (last) {
-                setJumpChapterNo(String(last.chapter_no));
-                openChapterDetail(last.id);
-              }
-            }}
-          >
-            最新章全文
-          </button>
+        <div className="text-muted" style={{ fontSize: 11.5, marginTop: 8, marginBottom: 12 }}>
+          点击章节号 / 标题直接打开章节全文 Dialog（ESC 关闭）；点击 ▸ 展开章节衔接锁。
         </div>
+
         {chapters.length === 0 ? (
           <div className="empty-state">
             <div className="empty-state__icon" aria-hidden="true">
@@ -346,8 +312,10 @@ export default function Chapters() {
               从写作控制台点「写 N 章」，写完会自动出现在这里
             </div>
           </div>
+        ) : filteredChapters.length === 0 ? (
+          <div className="empty-state">当前筛选下没有章节。</div>
         ) : (
-          chaptersDesc.map((c) => {
+          filteredChapters.map((c) => {
             const prev = chapters.find((x) => x.chapter_no === c.chapter_no - 1);
             const text = c.content_preview || "";
             const sceneLayout = deriveSceneLayout(text);
@@ -357,6 +325,11 @@ export default function Chapters() {
             const isOpen = expandedLock === c.id;
             const realChars = charactersByChapter[c.id];
             const characterNames = realChars?.map((cc) => cc.character_name).filter(Boolean) as string[] | undefined;
+            const status = deriveStatus(c);
+            const statusBadge =
+              status === "ok" ? <span className="chapter-row__status chapter-row__status--ok">✓</span> :
+              status === "incomplete" ? <span className="chapter-row__status chapter-row__status--warn">⚠</span> :
+              <span className="chapter-row__status chapter-row__status--escalate">🚨</span>;
             return (
               <details
                 key={c.id}
@@ -367,25 +340,34 @@ export default function Chapters() {
                   setExpandedLock(target.open ? c.id : null);
                 }}
               >
-                <summary className={`chapter-row ${isOpen ? "is-locked" : ""}`}>
-                  <span className="chapter-row__no">第{c.chapter_no}章</span>
-                  <div className="chapter-row__title">{c.title || "（无标题）"}</div>
+                <summary
+                  className={`chapter-row chapter-row--clickable ${isOpen ? "is-locked" : ""}`}
+                  onClick={(e) => {
+                    // 修订 2026-07-16：整行可点击打开 Dialog（除了 ▸ 和右侧按钮）
+                    const tag = (e.target as HTMLElement).tagName;
+                    if (tag === "DETAILS" || tag === "SUMMARY") {
+                      // SUMMARY 的默认行为是切换 details，让 details toggle 自然发生
+                      return;
+                    }
+                  }}
+                >
+                  <span className="chapter-row__chevron" aria-hidden="true">▸</span>
+                  {statusBadge}
+                  <button
+                    className="chapter-row__no chapter-row__no--btn"
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); openChapterDetail(c.id); }}
+                    aria-label={`阅读第${c.chapter_no}章`}
+                  >
+                    第{c.chapter_no}章
+                  </button>
+                  <button
+                    className="chapter-row__title chapter-row__title--btn"
+                    onClick={(e) => { e.preventDefault(); e.stopPropagation(); openChapterDetail(c.id); }}
+                  >
+                    {c.title || "（无标题 — 点击阅读）"}
+                  </button>
                   <div className="chapter-row__preview">{c.content_preview}…</div>
                   <div className="chapter-row__meta">{c.word_count.toLocaleString()} 字</div>
-                  {/* 章节全文按钮 — 让用户能直接从列表进入全章预览 Dialog
-                      而不必走「手动保存 → 查看完整正文」的间接路径。 */}
-                  <button
-                    className="btn btn-ghost"
-                    style={{ marginLeft: 8, fontSize: 12, padding: "2px 10px" }}
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      openChapterDetail(c.id);
-                    }}
-                    aria-label={`查看第${c.chapter_no}章全文`}
-                  >
-                    查看全文
-                  </button>
                 </summary>
                 <span className="lock-mark" />
                 <div className="conn-lock" style={{ margin: "0 0 14px 56px" }}>
@@ -430,14 +412,156 @@ export default function Chapters() {
         )}
       </div>
 
-      {/* 单章详情 Dialog */}
+      {/* ============ 高级操作（折叠）：手动录入 + 语义检索 ============ */}
+      <details className="card mt-24 advanced-section">
+        <summary className="advanced-section__summary">
+          <span>▼ 高级操作：手动新增 / 语义检索</span>
+          <span className="text-faint" style={{ fontSize: 12 }}>手动录入章节、跨章检索</span>
+        </summary>
+        <div className="advanced-section__body">
+          <div className="card__subsection">
+            <h4 className="card__title" style={{ fontSize: 14 }}>手动新增一章</h4>
+            <div className="form-grid" style={{ marginBottom: 0 }}>
+              <div className="field">
+                <label>章节号</label>
+                <input
+                  type="number"
+                  value={chapterNo}
+                  onChange={(e) => setChapterNo(Number(e.target.value))}
+                />
+              </div>
+              <div className="field">
+                <label>标题</label>
+                <input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="第N章 标题"
+                />
+              </div>
+            </div>
+            <div className="field">
+              <div className="flex-between" style={{ marginBottom: 6 }}>
+                <label style={{ marginBottom: 0 }}>正文</label>
+                <span className="text-mono text-faint tabular-nums" style={{ fontSize: 11.5 }}>
+                  {content.length.toLocaleString()} 字
+                </span>
+              </div>
+              <textarea
+                rows={8}
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                placeholder="粘贴或输入这一章的正文…保存后会自动标记出场人物、embed 全文并跑一次重复度检测"
+                style={{ fontFamily: "var(--font-body)", lineHeight: 1.8 }}
+              />
+            </div>
+
+            {repetitionWarnings.length > 0 && (
+              <div className="banner banner-warn">
+                检测到与 {repetitionWarnings.length} 章高度相似（语义重复度 ≥ 0.85）：
+                {repetitionWarnings.map((w) => (
+                  <div key={w.compared_chapter_id} className="mono" style={{ marginTop: 4 }}>
+                    {chapterLabel(w.compared_chapter_id)} · 相似度 {w.similarity}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {lastSavedChapterId && !repetitionWarnings.length && (
+              <div className="banner banner-success" style={{ fontSize: 12 }}>
+                ✅ 已保存第{chapterNo - 1}章 ·{" "}
+                <a onClick={() => openChapterDetail(lastSavedChapterId)}
+                   style={{ cursor: "pointer", textDecoration: "underline" }}>
+                  查看完整正文
+                </a>
+              </div>
+            )}
+
+            <button
+              className="btn btn-primary"
+              onClick={handleSave}
+              disabled={saving || !content.trim()}
+            >
+              {saving ? "保存中…" : "保存这一章"}
+            </button>
+          </div>
+
+          <div className="card__subsection">
+            <h4 className="card__title" style={{ fontSize: 14 }}>语义检索</h4>
+            <div className="form-grid" style={{ alignItems: "end" }}>
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label>检索意图</label>
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="如：重生回到答辩现场"
+                />
+              </div>
+              <div className="field" style={{ marginBottom: 0 }}>
+                <label>角色过滤</label>
+                <select value={characterId} onChange={(e) => setCharacterId(e.target.value)}>
+                  <option value="">不限角色</option>
+                  {characters.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div className="button-row" style={{ marginTop: 12 }}>
+              <button
+                className="btn btn-primary"
+                onClick={handleSearch}
+                disabled={searching || !query.trim()}
+              >
+                {searching ? "检索中…" : "开始检索"}
+              </button>
+            </div>
+
+            {searchResults && (
+              <div className="mt-24">
+                {searchResults.length === 0 ? (
+                  <div className="empty-state">没有匹配的章节。</div>
+                ) : (
+                  searchResults.map((r) => (
+                    <div className="entity-card" key={r.chapter_id}>
+                      <span className="entity-card__name font-display">{chapterLabel(r.chapter_id)}</span>
+                      <span className="entity-card__meta mono">相似度 {r.similarity}</span>
+                      <div className="entity-card__desc">{r.snippet}…</div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      </details>
+
+      {/* 单章详情 Dialog — 修订 2026-07-16：加前后章翻页 + 加宽 */}
       <Dialog
         open={!!chapterDetail || chapterDetailLoading}
         onClose={() => setChapterDetail(null)}
         title={chapterDetail ? `第 ${chapterDetail.chapter_no} 章 · ${chapterDetail.title || "（无标题）"}` : "加载中…"}
         sub={chapterDetail ? `${chapterDetail.content.length.toLocaleString()} 字 · ${chapterDetail.created_at}` : undefined}
+        wide
         actions={
-          <button className="btn" onClick={() => setChapterDetail(null)}>关闭</button>
+          <>
+            <button
+              className="btn btn-ghost"
+              disabled={!hasPrevDetail}
+              onClick={() => openAdjacentChapter(-1)}
+              title="上一章"
+            >
+              ← 上一章
+            </button>
+            <button
+              className="btn btn-ghost"
+              disabled={!hasNextDetail}
+              onClick={() => openAdjacentChapter(1)}
+              title="下一章"
+            >
+              下一章 →
+            </button>
+            <button className="btn" onClick={() => setChapterDetail(null)}>关闭</button>
+          </>
         }
       >
         {chapterDetailLoading && (
@@ -457,8 +581,9 @@ export default function Chapters() {
               </div>
             )}
             <pre className="log-console" style={{
-              maxHeight: "60vh", whiteSpace: "pre-wrap",
-              fontFamily: "var(--font-body)", lineHeight: 1.8, fontSize: 13.5,
+              maxHeight: "65vh", whiteSpace: "pre-wrap",
+              fontFamily: "var(--font-body)", lineHeight: 1.9, fontSize: 14.5,
+              padding: "20px 24px",
             }}>{chapterDetail.content}</pre>
           </>
         )}

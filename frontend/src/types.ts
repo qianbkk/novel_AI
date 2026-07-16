@@ -290,6 +290,64 @@ export interface ChapterFull {
   characters: ChapterCharacter[];
 }
 
+// ─── 2026-07-16：弧级大纲（Issue #4） ───
+export interface ChapterTask {
+  chapter_number: number;
+  chapter_role: string;
+  chapter_goal: string;
+  main_characters: string[];
+  shuang_type: string | null;
+  shuang_description: string;
+  ending_hook_type: string;
+  ending_hook_description: string;
+  setting_constraints: string[];
+  forbidden_actions: string[];
+  target_length: string;
+  audit_mode: string;
+  is_arc_climax: boolean;
+}
+
+export interface OutlineOut {
+  id: string;
+  project_id: string;
+  arc_id: number;
+  arc_name: string;
+  arc_goal: string | null;
+  arc_estimated_chapters: number;
+  arc_climax_description: string | null;
+  arc_climax_chapter_offset: number;
+  arc_ending_state: string | null;
+  emotion_curve: string;
+  status: string;
+  outline_json: ChapterTask[] | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OutlineCreatePayload {
+  arc_id: number;
+  arc_name: string;
+  arc_goal?: string | null;
+  arc_estimated_chapters?: number;
+  arc_climax_description?: string | null;
+  arc_climax_chapter_offset?: number;
+  arc_ending_state?: string | null;
+  emotion_curve?: string;
+  outline_json?: ChapterTask[] | null;
+}
+
+export interface ArcGeneratePayload {
+  arc_id: number;
+  arc_name: string;
+  arc_goal: string;
+  arc_estimated_chapters?: number;
+  arc_climax_description?: string | null;
+  arc_climax_chapter_offset?: number;
+  arc_ending_state?: string | null;
+  emotion_curve?: string;
+  genre?: string | null;
+}
+
 // ─── 伏笔状态 ───
 export interface ForeshadowingRow {
   id: string;

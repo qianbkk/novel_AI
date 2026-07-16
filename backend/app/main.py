@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import Base, SessionLocal, engine
-from .api import auth, bridge, chapters, projects, providers, role_assignments, worldbuild, rules, foreshadowings, ai_assist, world
+from .api import auth, bridge, chapters, projects, providers, role_assignments, worldbuild, rules, foreshadowings, ai_assist, world, outline
 from .api.role_assignments import seed_role_assignments
 from .backup_db import take_all_snapshots
 from .config import get_allowed_origins_list
@@ -268,6 +268,7 @@ app.include_router(rules.router)
 app.include_router(foreshadowings.router)
 app.include_router(ai_assist.router)
 app.include_router(world.router)  # Phase 3: 5 个新 endpoint（worldview/rich + characters list/card/relations + relations/graph）
+app.include_router(outline.router)  # 2026-07-16：弧级大纲 CRUD + LLM 生成（Issue #4）
 
 
 @app.get("/health")

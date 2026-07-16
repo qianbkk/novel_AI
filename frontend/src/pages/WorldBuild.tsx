@@ -22,11 +22,22 @@ const FALLBACK_STAGES: { key: string; label: string }[] = [
 
 type StageStatus = "pending" | "active" | "done";
 
-// 顶层三大立法视图：世界、人物、立法
-const TOP_TABS = ["世界观", "人物阵营", "世界立法"] as const;
+// 修订 2026-07-16：top-level tabs 扩展为 8 个（合并原「世界立法」6 个 subtab）
+// 用户的反馈：世界构建内容太简陋 — 把 6 个 subtab 提升为 top-level 后，
+// 每个分类独立 tab，每个 tab 有自己的统计 + 详情视图 + 空状态。
+const TOP_TABS = [
+  "世界观",      // 7 段世界观 + 4 段故事核心 + 历史时间线
+  "人物阵营",    // 角色卡 + 关系图 + 关系网
+  "地图",        // GIS 层级地图（原 GIS 地图 subtab）
+  "力量体系",    // 境界 tier rail（原 力量体系 subtab）
+  "货币物权",    // 货币 + 物品（原 货币物权 subtab）
+  "势力",        // 阵营 + FactionGraph（原 势力 subtab）
+  "伏笔",        // 伏笔系统（原 伏笔 subtab）
+  "一致性校验",  // 一致性问题（原 一致性校验 subtab）
+] as const;
 type TopTab = (typeof TOP_TABS)[number];
 
-// 世界立法下的子标签
+// 保留类型以便老引用还能编译（虽然不再使用，但避免 import error）
 type LegislationTab = "GIS 地图" | "力量体系" | "货币物权" | "势力" | "伏笔" | "一致性校验";
 const LEGISLATION_TABS: LegislationTab[] = ["GIS 地图", "力量体系", "货币物权", "势力", "伏笔", "一致性校验"];
 
@@ -41,7 +52,6 @@ export default function WorldBuild() {
   const [building, setBuilding] = useState(false);
   const [result, setResult] = useState<WorldBuildResult | null>(null);
   const [topTab, setTopTab] = useState<TopTab>("世界观");
-  const [legislationTab, setLegislationTab] = useState<LegislationTab>("GIS 地图");
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
 
@@ -235,15 +245,53 @@ export default function WorldBuild() {
 
       {result && (
         <>
+          {/* 修订 2026-07-16：worldbuilding 摘要统计卡 */}
+          <div className="card worldbuild-summary">
+            <div className="worldbuild-summary__grid">
+              <div className="worldbuild-summary__stat">
+                <span className="worldbuild-summary__num">{result.characters.length}</span>
+                <span className="worldbuild-summary__label">角色</span>
+              </div>
+              <div className="worldbuild-summary__stat">
+                <span className="worldbuild-summary__num">{result.factions.length}</span>
+                <span className="worldbuild-summary__label">势力</span>
+              </div>
+              <div className="worldbuild-summary__stat">
+                <span className="worldbuild-summary__num">{result.power_systems.reduce((sum, p) => sum + (p.tiers_json?.length || 0), 0)}</span>
+                <span className="worldbuild-summary__label">境界层级</span>
+              </div>
+              <div className="worldbuild-summary__stat">
+                <span className="worldbuild-summary__num">{result.map_nodes.length}</span>
+                <span className="worldbuild-summary__label">地图节点</span>
+              </div>
+              <div className="worldbuild-summary__stat">
+                <span className="worldbuild-summary__num">{result.foreshadowings.length}</span>
+                <span className="worldbuild-summary__label">伏笔</span>
+              </div>
+              <div className="worldbuild-summary__stat">
+                <span className="worldbuild-summary__num">{result.currencies.length}</span>
+                <span className="worldbuild-summary__label">货币</span>
+              </div>
+              <div className="worldbuild-summary__stat">
+                <span className="worldbuild-summary__num">{result.relations.length}</span>
+                <span className="worldbuild-summary__label">人物关系</span>
+              </div>
+              <div className={`worldbuild-summary__stat ${result.consistency_warnings.length > 0 ? "is-warn" : ""}`}>
+                <span className="worldbuild-summary__num">{result.consistency_warnings.length}</span>
+                <span className="worldbuild-summary__label">一致性告警</span>
+              </div>
+            </div>
+          </div>
+
           {result.consistency_warnings.length > 0 && (
             <div className="banner banner-warn">
               ⚠ 一致性校验发现 {result.consistency_warnings.length} 条待复核（重名/孤儿节点/悬空引用），
-              详见"世界立法 → 一致性校验"。
+              详见「一致性校验」tab。
             </div>
           )}
 
-          {/* 顶层三大 tab */}
-          <div className="tabs">
+          {/* 顶层 8 个 tab（修订 2026-07-16：原 3 个 + 6 个 subtab 全部提升） */}
+          <div className="tabs tabs--scrollable">
             {TOP_TABS.map((t) => (
               <button
                 key={t}
@@ -319,73 +367,65 @@ export default function WorldBuild() {
             </div>
           )}
 
-          {/* ===================== 世界立法 tab ===================== */}
-          {topTab === "世界立法" && (
+          {/* ===================== 地图 tab（提升自 GIS 地图） ===================== */}
+          {topTab === "地图" && (
             <div>
               <h3 className="module-heading">
-                <span className="module-heading__index">M02</span>
-                世界立法
-                <span className="module-heading__sub">把设定转化为 AI 必须执行的底层法律</span>
+                <span className="module-heading__index">M02.1</span>
+                地理信息系统 · 路径规划
+                <span className="module-heading__sub">{result.map_nodes.length} 个子节点 · 世界 → 大陆 → 城市</span>
               </h3>
-
-              <div className="subtabs">
-                {LEGISLATION_TABS.map((t) => (
-                  <button
-                    key={t}
-                    className={`subtabs__btn ${legislationTab === t ? "is-active" : ""}`}
-                    onClick={() => setLegislationTab(t)}
-                  >
-                    {t}
-                    {t === "一致性校验" && result.consistency_warnings.length > 0 && (
-                      <span style={{ marginLeft: 4, opacity: 0.7 }}>({result.consistency_warnings.length})</span>
-                    )}
-                  </button>
-                ))}
-              </div>
-
-              {/* --- GIS 地图：层级路径 + 子节点 --- */}
-              {legislationTab === "GIS 地图" && (
-                <div>
-                  <h3 className="module-heading">
-                    <span className="module-heading__index">M02.1</span>
-                    地理信息系统 · 路径规划
-                    <span className="module-heading__sub">{result.map_nodes.length} 个子节点 · 世界 → 大陆 → 城市</span>
-                  </h3>
-                  {groupMapByLevel(result.map_nodes).map((group) => (
-                    <div key={group.level} style={{ marginBottom: 14 }}>
-                      <div className="gis-crumbs" style={{ marginBottom: 6 }}>
-                        <strong style={{ color: "var(--accent-strong)" }}>{group.level}</strong>
-                        <span className="gis-crumbs__sep">·</span>
-                        共 {group.nodes.length} 个节点
-                      </div>
-                      <div className="legislation-grid">
-                        {group.nodes.map((m) => (
-                          <div key={m.id} className="legislation-card">
-                            <div className="legislation-card__head">
-                              <span className="legislation-card__title">{m.name}</span>
-                              <span className="legislation-card__kicker">{m.level}</span>
-                            </div>
-                            <span className="legislation-card__desc">{m.description || "—"}</span>
-                          </div>
-                        ))}
-                      </div>
+              {result.map_nodes.length === 0 ? (
+                <EmptyTab
+                  icon="🗺️"
+                  title="还没有地图节点"
+                  hint="世界构建未生成地图数据，或项目尚未运行世界构建。"
+                  actionLabel="重新运行世界构建"
+                  onAction={handleStart}
+                />
+              ) : (
+                groupMapByLevel(result.map_nodes).map((group) => (
+                  <div key={group.level} style={{ marginBottom: 14 }}>
+                    <div className="gis-crumbs" style={{ marginBottom: 6 }}>
+                      <strong style={{ color: "var(--accent-strong)" }}>{group.level}</strong>
+                      <span className="gis-crumbs__sep">·</span>
+                      共 {group.nodes.length} 个节点
                     </div>
-                  ))}
-                  {result.map_nodes.length === 0 && (
-                    <div className="empty-state">还没有地图节点</div>
-                  )}
-                </div>
+                    <div className="legislation-grid">
+                      {group.nodes.map((m) => (
+                        <div key={m.id} className="legislation-card">
+                          <div className="legislation-card__head">
+                            <span className="legislation-card__title">{m.name}</span>
+                            <span className="legislation-card__kicker">{m.level}</span>
+                          </div>
+                          <span className="legislation-card__desc">{m.description || "—"}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))
               )}
+            </div>
+          )}
 
-              {/* --- 力量体系：tier rail（Phase 7: hover 弹详情）--- */}
-              {legislationTab === "力量体系" && (
-                <div>
-                  <h3 className="module-heading">
-                    <span className="module-heading__index">M02.2</span>
-                    社会规则 · 力量等级
-                    <span className="module-heading__sub">突破事件触发阶梯同步 · 鼠标悬停看突破条件</span>
-                  </h3>
-                  {result.power_systems.map((p) => (
+          {/* ===================== 力量体系 tab（提升自 subtab） ===================== */}
+          {topTab === "力量体系" && (
+            <div>
+              <h3 className="module-heading">
+                <span className="module-heading__index">M02.2</span>
+                社会规则 · 力量等级
+                <span className="module-heading__sub">突破事件触发阶梯同步 · 鼠标悬停看突破条件</span>
+              </h3>
+              {result.power_systems.length === 0 ? (
+                <EmptyTab
+                  icon="⚔️"
+                  title="还没有力量体系数据"
+                  hint="世界构建未生成 tier 数据。运行世界构建后会自动生成境界 / 层级。"
+                  actionLabel="重新运行世界构建"
+                  onAction={handleStart}
+                />
+              ) : (
+                result.power_systems.map((p) => (
                     <div className="entity-card" key={p.id}>
                       <div className="entity-card__name">{p.name}</div>
                       <div className="entity-card__desc">{p.description}</div>
@@ -424,81 +464,105 @@ export default function WorldBuild() {
                         </div>
                       )}
                     </div>
-                  ))}
-                </div>
+                  ))
               )}
+            </div>
+          )}
 
-              {/* --- 货币物权（Phase 7: 结构化展示）--- */}
-              {legislationTab === "货币物权" && (
-                <div>
-                  <h3 className="module-heading">
-                    <span className="module-heading__index">M02.3</span>
-                    货币与物权追踪
-                    <span className="module-heading__sub">支持汇率核算 · 物品流转自动同步</span>
-                  </h3>
-                  <div className="legislation-grid">
-                    {result.currencies.map((c) => {
-                      // Phase 7: 结构化 detail_json
-                      const dj = (c.detail_json || {}) as Record<string, unknown>;
-                      const detail = dj.detail as string | undefined;
-                      const exchange = dj.exchange_rate as string | undefined;
-                      const issuers = (dj.issuers as string[] | undefined) || [];
-                      const scope = dj.scope as string | undefined;
-                      const hasRich = !!(exchange || issuers.length || scope);
-                      return (
-                        <div key={c.id} className="legislation-card">
-                          <div className="legislation-card__head">
-                            <span className="legislation-card__title">{c.name}</span>
-                            <span className="legislation-card__kicker">货币</span>
-                          </div>
-                          <span className="legislation-card__desc">{(() => {
-                            if (typeof detail === "string" && detail) return detail;
-                            const psName = typeof dj.power_system_name === "string" ? dj.power_system_name : "";
-                            if (psName) return `来源：${psName}`;
-                            const src = typeof dj.source === "string" ? dj.source : "";
-                            if (src) return `来源：${src}`;
-                            try {
-                              return JSON.stringify(dj) || "—";
-                            } catch {
-                              return "—";
-                            }
-                          })()}</span>
-                          {hasRich && (
-                            <div className="legislation-card__chips" style={{ marginTop: 8 }}>
-                              {exchange && (
-                                <span className="legislation-card__chip">汇率 · {exchange}</span>
-                              )}
-                              {issuers.length > 0 && (
-                                <span className="legislation-card__chip">发行 · {issuers.join(" / ")}</span>
-                              )}
-                              {scope && (
-                                <span className="legislation-card__chip">范围 · {scope}</span>
-                              )}
-                            </div>
-                          )}
+          {/* ===================== 货币物权 tab（提升自 subtab） ===================== */}
+          {topTab === "货币物权" && (
+            <div>
+              <h3 className="module-heading">
+                <span className="module-heading__index">M02.3</span>
+                货币与物权追踪
+                <span className="module-heading__sub">支持汇率核算 · 物品流转自动同步</span>
+              </h3>
+              {result.currencies.length === 0 ? (
+                <EmptyTab
+                  icon="💰"
+                  title="还没有货币 / 物权数据"
+                  hint="世界构建未生成货币 / 物权数据。"
+                  actionLabel="重新运行世界构建"
+                  onAction={handleStart}
+                />
+              ) : (
+                <div className="legislation-grid">
+                  {result.currencies.map((c) => {
+                    // Phase 7: 结构化 detail_json
+                    const dj = (c.detail_json || {}) as Record<string, unknown>;
+                    const detail = dj.detail as string | undefined;
+                    const exchange = dj.exchange_rate as string | undefined;
+                    const issuers = (dj.issuers as string[] | undefined) || [];
+                    const scope = dj.scope as string | undefined;
+                    const hasRich = !!(exchange || issuers.length || scope);
+                    return (
+                      <div key={c.id} className="legislation-card">
+                        <div className="legislation-card__head">
+                          <span className="legislation-card__title">{c.name}</span>
+                          <span className="legislation-card__kicker">货币</span>
                         </div>
-                      );
-                    })}
-                  </div>
+                        <span className="legislation-card__desc">{(() => {
+                          if (typeof detail === "string" && detail) return detail;
+                          const psName = typeof dj.power_system_name === "string" ? dj.power_system_name : "";
+                          if (psName) return `来源：${psName}`;
+                          const src = typeof dj.source === "string" ? dj.source : "";
+                          if (src) return `来源：${src}`;
+                          try {
+                            return JSON.stringify(dj) || "—";
+                          } catch {
+                            return "—";
+                          }
+                        })()}</span>
+                        {hasRich && (
+                          <div className="legislation-card__chips" style={{ marginTop: 8 }}>
+                            {exchange && (
+                              <span className="legislation-card__chip">汇率 · {exchange}</span>
+                            )}
+                            {issuers.length > 0 && (
+                              <span className="legislation-card__chip">发行 · {issuers.join(" / ")}</span>
+                            )}
+                            {scope && (
+                              <span className="legislation-card__chip">范围 · {scope}</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               )}
+            </div>
+          )}
 
-              {/* --- 势力 --- */}
-              {legislationTab === "势力" && (
-                <div>
-                  <h3 className="module-heading">
-                    <span className="module-heading__index">M02.4</span>
-                    势力阵营
-                    <span className="module-heading__sub">{result.factions.length} 个阵营 · {result.relations.length} 条关系</span>
-                  </h3>
-
-                  {result.factions.length > 0 && result.characters.length > 0 && (
+          {/* ===================== 势力 tab（提升自 subtab，Issue #3 修复） ===================== */}
+          {topTab === "势力" && (
+            <div>
+              <h3 className="module-heading">
+                <span className="module-heading__index">M02.4</span>
+                势力阵营
+                <span className="module-heading__sub">{result.factions.length} 个阵营 · {result.relations.length} 条关系</span>
+              </h3>
+              {result.factions.length === 0 ? (
+                /* 修订 2026-07-16：factions 空状态 + 重新构建 CTA（Issue #3） */
+                <EmptyTab
+                  icon="⚔️"
+                  title="还没有阵营数据"
+                  hint={
+                    result.characters.length === 0
+                      ? "需要先运行「世界构建」生成角色和势力基础数据。"
+                      : `已有 ${result.characters.length} 个角色，但势力生成失败。点击下方按钮重新运行。`
+                  }
+                  actionLabel="重新运行世界构建"
+                  onAction={handleStart}
+                />
+              ) : (
+                <>
+                  {result.characters.length > 0 && (
                     <FactionGraph
                       factions={result.factions}
                       characters={result.characters}
                     />
                   )}
-
                   <div className="legislation-grid">
                     {result.factions.map((f) => (
                       <div key={f.id} className="legislation-card">
@@ -520,102 +584,132 @@ export default function WorldBuild() {
                       </div>
                     ))}
                   </div>
-                </div>
+                </>
               )}
+            </div>
+          )}
 
-              {/* --- 伏笔 --- */}
-              {legislationTab === "伏笔" && (
-                <div>
-                  <h3 className="module-heading">
-                    <span className="module-heading__index">M03</span>
-                    伏笔系统
-                    <span className="module-heading__sub">回收提醒 · 重要性分级 · 状态流转</span>
-                  </h3>
-                  {result.foreshadowings.length === 0 && (
-                    <div className="empty-state">还没有伏笔</div>
-                  )}
-                  {result.foreshadowings.map((f) => {
-                    const STATUS_FLOW: Array<{ key: ForeshadowingRow["status"]; label: string; color: string }> = [
-                      { key: "未铺垫", label: "未铺垫", color: "badge-soft" },
-                      { key: "已铺垫", label: "已铺垫", color: "badge-soft" },
-                      { key: "已回收", label: "已回收", color: "badge-stamp" },
-                    ];
-                    return (
-                      <div className="entity-card" key={f.id} style={{ marginBottom: 10 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                          <span className={`badge ${f.importance === "high" ? "badge-stamp" : "badge-soft"}`}>
-                            {f.importance || "中"}
+          {/* ===================== 伏笔 tab（提升自 subtab） ===================== */}
+          {topTab === "伏笔" && (
+            <div>
+              <h3 className="module-heading">
+                <span className="module-heading__index">M03</span>
+                伏笔系统
+                <span className="module-heading__sub">回收提醒 · 重要性分级 · 状态流转</span>
+              </h3>
+              {result.foreshadowings.length === 0 ? (
+                <EmptyTab
+                  icon="🎯"
+                  title="还没有伏笔"
+                  hint="伏笔由世界构建生成或写作时由 tracker 自动追加。"
+                  actionLabel="重新运行世界构建"
+                  onAction={handleStart}
+                />
+              ) : (
+                result.foreshadowings.map((f) => {
+                  const STATUS_FLOW: Array<{ key: ForeshadowingRow["status"]; label: string; color: string }> = [
+                    { key: "未铺垫", label: "未铺垫", color: "badge-soft" },
+                    { key: "已铺垫", label: "已铺垫", color: "badge-soft" },
+                    { key: "已回收", label: "已回收", color: "badge-stamp" },
+                  ];
+                  return (
+                    <div className="entity-card" key={f.id} style={{ marginBottom: 10 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                        <span className={`badge ${f.importance === "high" ? "badge-stamp" : "badge-soft"}`}>
+                          {f.importance || "中"}
+                        </span>
+                        <span className={`badge ${STATUS_FLOW.find((s) => s.key === f.status)?.color || "badge-soft"}`}>
+                          {f.status || "未铺垫"}
+                        </span>
+                        {f.planted_chapter_hint && (
+                          <span className="text-faint" style={{ fontSize: 11 }}>
+                            铺垫 {f.planted_chapter_hint}
                           </span>
-                          <span className={`badge ${STATUS_FLOW.find((s) => s.key === f.status)?.color || "badge-soft"}`}>
-                            {f.status || "未铺垫"}
+                        )}
+                        {f.payoff_chapter_hint && (
+                          <span className="text-faint" style={{ fontSize: 11 }}>
+                            回收 {f.payoff_chapter_hint}
                           </span>
-                          {f.planted_chapter_hint && (
-                            <span className="text-faint" style={{ fontSize: 11 }}>
-                              铺垫 {f.planted_chapter_hint}
-                            </span>
-                          )}
-                          {f.payoff_chapter_hint && (
-                            <span className="text-faint" style={{ fontSize: 11 }}>
-                              回收 {f.payoff_chapter_hint}
-                            </span>
-                          )}
-                        </div>
-                        <div className="entity-card__desc" style={{ marginTop: 6 }}>{f.content}</div>
-                        <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
-                          {STATUS_FLOW.filter((s) => s.key !== f.status).map((s) => (
-                            <button
-                              key={s.key}
-                              className="btn btn-ghost"
-                              style={{ fontSize: 11, padding: "4px 10px" }}
-                              onClick={async () => {
-                                if (!projectId) return;
-                                try {
-                                  await api.updateForeshadowingStatus(projectId, f.id, s.key);
-                                  // 局部更新 result
-                                  setResult((prev) => prev ? {
-                                    ...prev,
-                                    foreshadowings: prev.foreshadowings.map((x) =>
-                                      x.id === f.id ? { ...x, status: s.key } : x
-                                    ),
-                                  } : prev);
-                                } catch (e) {
-                                  setError(`伏笔状态更新失败：${String(e)}`);
-                                }
-                              }}
-                            >
-                              → {s.label}
-                            </button>
-                          ))}
-                        </div>
+                        )}
                       </div>
-                    );
-                  })}
-                </div>
+                      <div className="entity-card__desc" style={{ marginTop: 6 }}>{f.content}</div>
+                      <div style={{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+                        {STATUS_FLOW.filter((s) => s.key !== f.status).map((s) => (
+                          <button
+                            key={s.key}
+                            className="btn btn-ghost"
+                            style={{ fontSize: 11, padding: "4px 10px" }}
+                            onClick={async () => {
+                              if (!projectId) return;
+                              try {
+                                await api.updateForeshadowingStatus(projectId, f.id, s.key);
+                                setResult((prev) => prev ? {
+                                  ...prev,
+                                  foreshadowings: prev.foreshadowings.map((x) =>
+                                    x.id === f.id ? { ...x, status: s.key } : x
+                                  ),
+                                } : prev);
+                              } catch (e) {
+                                setError(`伏笔状态更新失败：${String(e)}`);
+                              }
+                            }}
+                          >
+                            → {s.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })
               )}
+            </div>
+          )}
 
-              {/* --- 一致性校验 --- */}
-              {legislationTab === "一致性校验" && (
-                <div>
-                  <h3 className="module-heading">
-                    <span className="module-heading__index">M02.5</span>
-                    一致性校验
-                    <span className="module-heading__sub">重名 / 孤儿节点 / 悬空引用</span>
-                  </h3>
-                  {result.consistency_warnings.length === 0 ? (
-                    <div className="empty-state">没有发现明显的结构性问题 ✓</div>
-                  ) : (
-                    result.consistency_warnings.map((w, i) => (
-                      <div className="entity-card" key={i}>
-                        <span className="entity-card__name mono">{w.type}</span>
-                        <div className="entity-card__desc">{w.detail.join("、")}</div>
-                      </div>
-                    ))
-                  )}
-                </div>
+          {/* ===================== 一致性校验 tab（提升自 subtab） ===================== */}
+          {topTab === "一致性校验" && (
+            <div>
+              <h3 className="module-heading">
+                <span className="module-heading__index">M02.5</span>
+                一致性校验
+                <span className="module-heading__sub">重名 / 孤儿节点 / 悬空引用</span>
+              </h3>
+              {result.consistency_warnings.length === 0 ? (
+                <div className="empty-state">没有发现明显的结构性问题 ✓</div>
+              ) : (
+                result.consistency_warnings.map((w, i) => (
+                  <div className="entity-card" key={i}>
+                    <span className="entity-card__name mono">{w.type}</span>
+                    <div className="entity-card__desc">{w.detail.join("、")}</div>
+                  </div>
+                ))
               )}
             </div>
           )}
         </>
+      )}
+    </div>
+  );
+}
+
+// 修订 2026-07-16：通用空状态组件 — 当 tab 数据为空时显示 + 提供「重新构建」CTA
+function EmptyTab({
+  icon, title, hint, actionLabel, onAction,
+}: {
+  icon: string;
+  title: string;
+  hint: string;
+  actionLabel?: string;
+  onAction?: () => void;
+}) {
+  return (
+    <div className="empty-state empty-state--with-action">
+      <div className="empty-state__icon" style={{ fontSize: 36 }}>{icon}</div>
+      <div className="empty-state__title">{title}</div>
+      <div className="empty-state__hint" style={{ maxWidth: 420, textAlign: "center" }}>{hint}</div>
+      {actionLabel && onAction && (
+        <button className="btn btn-primary" onClick={onAction} style={{ marginTop: 16 }}>
+          {actionLabel}
+        </button>
       )}
     </div>
   );
