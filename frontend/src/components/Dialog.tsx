@@ -17,7 +17,7 @@ interface DialogProps {
   onClose: () => void;
   children: ReactNode;
   actions?: ReactNode;
-  /** 修订 2026-07-16：宽屏模式（章节详情用），自动加 dialog-wide class。 */
+  /** 宽屏模式（章节详情用）：开启时自动加 dialog-wide class。 */
   wide?: boolean;
   /** 额外 className 拼到 <dialog> 上，用来切换宽度（如 dialog-wide）。 */
   className?: string;
