@@ -137,6 +137,7 @@ def test_baseline_revision_is_no_op():
     cfg_obj_path = _BACKEND / "alembic.ini"
     from alembic.config import Config as _AlembicConfig
     cfg = _AlembicConfig(str(cfg_obj_path))
+    cfg.set_main_option("script_location", str(_BACKEND / "alembic"))
     script = ScriptDirectory.from_config(cfg)
     rev = script.get_revision("0001_baseline")
     assert rev is not None
@@ -152,6 +153,7 @@ def test_phase4_users_revision_creates_users():
     from alembic.script import ScriptDirectory
     from alembic.config import Config as _AlembicConfig
     cfg = _AlembicConfig(str(_BACKEND / "alembic.ini"))
+    cfg.set_main_option("script_location", str(_BACKEND / "alembic"))
     script = ScriptDirectory.from_config(cfg)
     rev = script.get_revision("0002_phase4_users")
     assert rev is not None

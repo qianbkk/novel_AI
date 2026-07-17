@@ -20,16 +20,28 @@ import logging
 import re
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ..database import get_db
 from ..models import Chapter
+from ..auth_scope import require_owned_project
 
 log = logging.getLogger("novel_ai.api.chapter_titles")
 
-router = APIRouter()
+def _owner_check(request: Request, project_id: str, db: Session = Depends(get_db)):
+    from ..auth import get_current_user_optional
+    from ..auth_scope import is_production_mode
+
+    user = get_current_user_optional(request)
+    if user is None and is_production_mode():
+        raise HTTPException(401, "authentication required")
+    require_owned_project(db, project_id, user)
+    return user
+
+
+router = APIRouter(dependencies=[Depends(_owner_check)])
 
 
 class RegenerateTitlesRequest(BaseModel):

@@ -1,4 +1,4 @@
-"""backend/tests/test_phase4_arc_inheritance.py — 四期长程连贯回归
+"""跨弧摘要与未决剧情线继承回归测试。
 
 覆盖三个目标：
   1. summarizer 弧末档案回灌 L2.hot.last_arc_summary

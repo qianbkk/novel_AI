@@ -1,4 +1,4 @@
-"""Phase 1.5 收尾排雷 — pytest-discoverable smoke test.
+"""平台集成 smoke tests。
 
 覆盖：
   - 冷启动 + role_assignments 15 行
@@ -45,7 +45,8 @@ Base.metadata.create_all(bind=engine)
 
 @pytest.fixture(scope="module")
 def client():
-    return TestClient(app)
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 @pytest.fixture
@@ -66,6 +67,7 @@ def _seed_project_and_binding(db, project_id: str) -> None:
         status="ready",
     )
     db.merge(p)
+    db.commit()
     db.merge(WorldSetting(project_id=project_id))
     db.merge(NovelAIBinding(
         project_id=project_id,
@@ -103,7 +105,9 @@ def _run_bridge_command(client: TestClient, project_id: str, command: str, args:
 
 def test_cold_start(client):
     """冷启动 + role_assignments 15 行"""
-    assert client.get("/health").json() == {"status": "ok"}
+    health = client.get("/health").json()
+    assert health["status"] == "ok"
+    assert health["db"] == "ok"
     db = SessionLocal()
     try:
         n = db.query(RoleAssignment).count()

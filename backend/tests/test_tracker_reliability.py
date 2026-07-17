@@ -1,4 +1,4 @@
-"""backend/tests/test_tracker_phase1_retry.py — 一期修复回归测试
+"""Tracker 重试与伏笔种子可靠性回归测试。
 
 覆盖三个目标：
   1. tracker schema 简化后，下游字典访问对新旧字段都安全

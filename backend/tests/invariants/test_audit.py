@@ -1,7 +1,7 @@
 """audit/ — Phase 3 测试拆分
 
 不变量测试按业务域分文件存放。
-原文件位置：tests/test_invariants.py（已替换为 re-export shim）
+测试按业务域直接收集，不再经过兼容 re-export 模块。
 """
 
 from tests._paths import REPO_ROOT, BACKEND_ROOT
@@ -13,7 +13,7 @@ import pytest
 BACKEND = Path(REPO_ROOT)
 sys.path.insert(0, str(BACKEND))
 
-# ── 原 test_invariants.py 顶部声明的 app.schema_validator 系列 ──
+# 共享 schema validator imports
 from app.schema_validator import (  # noqa: E402,F401
     validate_setting_package, validate_chapter_meta, SchemaError,
     get_setting_package_schema, get_chapter_meta_schema,

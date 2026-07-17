@@ -437,7 +437,7 @@ async def push_concept(project_id: str, request: Request, db: Session = Depends(
 @router.post("/pull-setting")
 async def pull_setting(project_id: str, request: Request, db: Session = Depends(get_db)):
     project, binding = _get_project_and_binding(request, project_id, db)
-    # 迭代 #79: pull_setting 之前没有 worldbuild 检查——root_cause_analysis.md
+    # pull_setting 之前必须完成 worldbuild，避免跨表依赖顺序被破坏。
     # 第 87 行明确指出 "50 章 0 个 ChapterCharacter 边" 就是因为 import_chapters 早于
     # pull 拉的代码路径。现在明确：pull 必须 worldbuild 完成。
     if not _worldbuild_done(project_id, project, db):

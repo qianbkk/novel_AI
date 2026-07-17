@@ -1,4 +1,4 @@
-"""backend/tests/test_outline_phase2_foreshadow.py — 二期大纲细纲体系回归测试
+"""字段化大纲与伏笔操作回归测试。
 
 覆盖 4 个目标：
   1. normalize_foreshadow_ops 兼容 LLM 返回的 dict/str/null

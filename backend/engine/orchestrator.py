@@ -369,7 +369,7 @@ def _placeholder_task(arc_idx: int, i: int, arc: dict) -> dict:
 
     修订 2026-07-16：chapter_goal 不再用「第N章：推进剧情」6字占位，
     改用 arc.arc_goal + arc_name + 弧位置 派生一个有意义的目标。
-    这样即使 outline 没真跑（gen_chapters_direct.py 走 placeholder 路径），
+    这样即使外部调用方没有运行 outline、直接提供 placeholder task，
     LLM 也能拿到「这本书讲什么 + 现在在弧的什么阶段」做参考。
 
     chapter_role 按 30 章为一周期的弧布局分配（铺垫/发展/爽点/弧高潮/过渡），

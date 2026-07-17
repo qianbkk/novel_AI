@@ -65,6 +65,8 @@ python -m scripts.run_mvp <project_id> --chapters 3 --select B
 
 ## 常用运维脚本（`backend/scripts/`）
 
+完整支持级别与脚本准入规则见 [`backend/scripts/README.md`](../../backend/scripts/README.md)。
+
 | 脚本 | 用途 |
 |------|------|
 | `generate_master_key.py` / `rotate_master_key.py` | Fernet `MASTER_KEY` 生成/轮换 |
@@ -73,17 +75,17 @@ python -m scripts.run_mvp <project_id> --chapters 3 --select B
 | `audit_project.py` | 端到端不变量审计（历史 5 类跨表 bug 的回归检测） |
 | `monitor_run.py` | 实时监控 e2e 测试运行（写 `test_output/*.jsonl`） |
 | `cleanup_test_projects.py` | 清理测试项目数据 |
-| `strip_chapter_headers.py` / `fixup_50ch_audit.py` | 章节文本一次性清洗修复 |
+| `strip_chapter_headers.py` | 旧章节标题清洗修复 |
 | `rewrite_length.py` | 用 LLM 把章节字数规整到 1800-2700 |
 
 ## 测试
 
 ```bash
-cd backend
-pytest
+pytest backend/tests --ignore=backend/tests/invariants
+pytest backend/tests/invariants
 ```
 
-`backend/tests/` 覆盖鉴权（cookie/隔离/限流）、alembic、对齐（alignment）冒烟测试、冷记忆压缩、长文本端到端、大纲卡片模式、生产加固检查、Tracker 漂移等；`backend/tests/invariants/` 专测跨表数据不变量。引擎自身另有 `engine/tools/system_test.py`（20 项集成测试，含 Mock LLM）和 `acceptance_tests.py`（5 大验收标准）。
+从仓库根目录分两个独立进程运行，避免旧集成测试的进程级数据库配置互相污染。`backend/tests/` 覆盖行为、API、集成与回归测试；`backend/tests/invariants/` 专测结构与跨存储不变量。详细分层和聚焦命令见 [`backend/tests/README.md`](../../backend/tests/README.md)。引擎自身另有 `engine/tools/system_test.py`（Mock LLM 集成测试）和 `acceptance_tests.py`（验收标准）。
 
 ## 部署注意事项
 

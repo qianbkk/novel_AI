@@ -1,7 +1,7 @@
 """bridge/ — Phase 3 测试拆分
 
 不变量测试按业务域分文件存放。
-原文件位置：tests/test_invariants.py（已替换为 re-export shim）
+测试按业务域直接收集，不再经过兼容 re-export 模块。
 """
 
 from tests._paths import REPO_ROOT, BACKEND_ROOT
@@ -13,7 +13,7 @@ import pytest
 BACKEND = Path(REPO_ROOT)
 sys.path.insert(0, str(BACKEND))
 
-# ── 原 test_invariants.py 顶部声明的 app.schema_validator 系列 ──
+# 共享 schema validator imports
 from app.schema_validator import (  # noqa: E402,F401
     validate_setting_package, validate_chapter_meta, SchemaError,
     get_setting_package_schema, get_chapter_meta_schema,
@@ -790,12 +790,9 @@ class TestBridgeRunConcurrencyGuard:
 
 
 class TestBridgeEndpointsWorldbuildGuard:
-    """迭代 #79 — docs/root_cause_analysis.md 第 87 / 93 行明确标记的"未来方向
-    (未实施，等下次重构)"：import_chapters / pull_setting 之前没有强制
-    worldbuild 必须完成的代码检查。
-
-    实际现象："50 章 0 个 ChapterCharacter 边"——import 早于 pull → add_chapter
-    找不到任何 character 可建边。
+    """跨表依赖顺序由代码强制执行，不能只依赖调用约定。
+    import_chapters / pull_setting 之前必须强制检查 worldbuild 已完成，
+    否则 import 早于 pull 时找不到 character，无法建立 ChapterCharacter 边。
 
     修法：bridge.py 里 pull-setting / import-chapters / reimport-chapters 3 个端点
     入口处都加 _worldbuild_done(...) 检查，没完成抛 HTTPException(400)。
@@ -817,7 +814,7 @@ class TestBridgeEndpointsWorldbuildGuard:
             "bridge.pull_setting 检查失败必须 raise HTTPException（fail-fast）"
 
     def test_import_chapters_has_worldbuild_guard(self):
-        """import_chapters 必须有 _worldbuild_done 检查（#79 — root cause 之一）。"""
+        """import_chapters 必须有 _worldbuild_done 检查。"""
         src = self._func_source("import_chapters")
         assert "_worldbuild_done" in src, (
             "bridge.import_chapters 必须检查 _worldbuild_done（#79），"

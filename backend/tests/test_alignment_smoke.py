@@ -307,6 +307,7 @@ def test_spawn_audit_mode_per_project(client, _bootstrap, monkeypatch):
                 stdout = __import__("io").StringIO("")
                 returncode = 0
                 def wait(self, *_a, **_kw): return 0
+                def poll(self): return self.returncode
                 stdout_lines = property(lambda self: self.stdout)
             self.proc = _Proc()
 

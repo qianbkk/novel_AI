@@ -117,14 +117,29 @@ def _check_backup_path() -> int:
 
 
 def _is_pid_alive(pid: int | None) -> bool:
-    """signal 0 = 只探测 PID 是否存在，不真发信号。
-    ESRCH = 已死；EPERM = 存在但属于其他用户（容器/PID 复用），按 alive 处理；
-    其他 OSError 一律按 alive 处理（不主动终止陌生进程）。
+    """只读探测 PID 是否存在，不向目标进程发送终止信号。
+
+    Windows 的 ``os.kill(pid, 0)`` 不具备 Unix signal-0 语义，可能直接终止
+    目标进程，因此必须使用 ``OpenProcess`` 查询句柄。
     """
     if not pid:
         return False
-    import errno
     import os
+    if os.name == "nt":
+        import ctypes
+
+        process_query_limited_information = 0x1000
+        ctypes.set_last_error(0)
+        handle = ctypes.windll.kernel32.OpenProcess(
+            process_query_limited_information, False, int(pid)
+        )
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        # Access denied still proves that the process exists.
+        return ctypes.get_last_error() == 5
+
+    import errno
     try:
         os.kill(pid, 0)
         return True

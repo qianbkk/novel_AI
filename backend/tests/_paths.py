@@ -2,14 +2,14 @@
 
 历史背景（Phase D）：
   多个 test_invariants 用 Path(__file__).resolve().parents[N] 写死深度假设
-  — 在 Phase 3 把 8500 行 test_invariants.py 拆成 tests/invariants/test_X.py
+  — 把原单文件不变量测试拆成 tests/invariants/test_X.py
   子包后，每个 test_X.py 实际在 backend/tests/invariants/，比原来
   backend/tests/ 多 1 层路径深度。所有 parents[N] 写死假设的测试都错位
   （parents[1] 期望 backend 实际是 backend/tests；parents[2] 期望 repo_root
   实际是 backend）。
 
   之前依赖调用时 cwd 是 backend/ 才能让部分测试凑巧通过 — 一旦从仓库根
-  跑 pytest backend/tests/test_invariants.py -q，连测试都收集不到
+  从仓库根运行 pytest 时，测试甚至无法收集
   （ModuleNotFoundError: 'tests.invariants'）。
 
 修法：定义 find_repo_root() / find_backend_root() 通过向上走找 marker 文件

@@ -94,13 +94,13 @@
 
 ## 3. 数据契约（"加字段五步流程")
 
-`docs/root_cause_analysis.md` 第 4 节定下的 5 步——任何 schema 字段都要走完：
+任何 schema 字段都要走完以下 5 步：
 
 1. 改 `backend/schema/<schema>.schema.json`
 2. 改生成端 prompt（planner.py / stages.py / rewriter.py 等）
 3. 改消费端解析（setting_sync.py / chapter_import.py）
 4. `python -m scripts.audit_project --strict`（暴露漂移）
-5. `python -m pytest tests/test_invariants.py -v`（Phase 4 起拆分为 `tests/invariants/test_<domain>.py` 14 个文件，近 400 个 invariant 锁死；`test_invariants.py` 保留为 re-export shim 向后兼容）
+5. `pytest backend/tests/invariants -v`（按业务域锁定结构与跨存储不变量）
 
 **自由字段**（个人偏好、不影响引擎逻辑）可以放进 `Project.config_json` 的 freeform 部分，跳过 1-5 步。
 
@@ -108,7 +108,7 @@
 
 ## 4. 当前真实风险敞口
 
-按 [Prioritize real risks over future armor](../.claude/projects/D--AI-Codex-workspace-Novel-AI/memory/prioritize-real-risks-over-future-armor.md) 排列。
+按实际发生概率与影响排序，不为尚未出现的部署形态预建复杂护栏。
 
 | 风险 | 状态 | 缓解 |
 |------|------|------|
@@ -120,16 +120,16 @@
 
 Phase 4（2026-07-11）起，多用户认证（JWT + bcrypt + HttpOnly Cookie + owner 校验 + 登录限流）已实现，dev 模式默认关闭（单租户），`NOVEL_PRODUCTION=1` 时强制开启。参见 README "部署" 段落。
 
-仍冻结到"决定要开放"再启用的项：多 worker 部署下的 MASTER_KEY 一致性、分布式任务队列（现为子进程 + DB 状态检查，迁移触发条件见 `docs/superpowers/plans/2026-07-11-phase4-queue-migration.md`）、密钥管理服务（Vault/KMS）、WAF/DDoS 防护。
+仍冻结到“决定要开放”再启用的项：多 worker 部署下的 MASTER_KEY 一致性、分布式任务队列（现为子进程 + DB 状态检查）、密钥管理服务（Vault/KMS）、WAF/DDoS 防护。
 
 ---
 
 ## 5. 关键不变量（auto-locked by tests）
 
-`backend/tests/invariants/test_<domain>.py`（14 个域文件，近 400 项）+ `scripts/audit_project.py` 端到端审计：
+`backend/tests/invariants/test_<domain>.py` + `scripts/audit_project.py` 端到端审计：
 
 - 所有改动核心模块后必须 PASS。
-- 流程：编辑 → 改对应章节 → `python -m pytest tests/` → 至少本模块绿 → commit。
+- 流程：编辑 → 更新对应测试 → 按 `backend/tests/README.md` 分层运行 → commit。
 
 新增 "audit 类"测试 vs "功能测试"：
 - audit 类（防再犯）如不需要平时跑透，可加 `@pytest.mark.audit` marker；

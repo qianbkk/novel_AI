@@ -1,7 +1,7 @@
 """frontend_align/ — Phase 3 测试拆分
 
 不变量测试按业务域分文件存放。
-原文件位置：tests/test_invariants.py（已替换为 re-export shim）
+测试按业务域直接收集，不再经过兼容 re-export 模块。
 """
 
 from tests._paths import REPO_ROOT, BACKEND_ROOT
@@ -13,7 +13,7 @@ import pytest
 BACKEND = Path(BACKEND_ROOT)
 sys.path.insert(0, str(BACKEND))
 
-# ── 原 test_invariants.py 顶部声明的 app.schema_validator 系列 ──
+# 共享 schema validator imports
 from app.schema_validator import (  # noqa: E402,F401
     validate_setting_package, validate_chapter_meta, SchemaError,
     get_setting_package_schema, get_chapter_meta_schema,
@@ -148,10 +148,10 @@ class TestFrontendBackendPortConsistency:
                 )
 
     def test_no_hardcoded_8123_in_docs_and_scripts(self):
-        """README / dev.bat / scripts / docs html 不能硬编码 :8123
+        """README / dev.bat / scripts 不能硬编码 :8123
         (排除：注释里解释历史/端口漂移、tests/ 锁死历史 bug)。
         历史背景：commit 3278a77 把后端 8123→8132，本轮扫出 5 处残留
-        (README.md / dev.bat / docs/novel-ai-guide.html / run_mvp.py) 全已修。
+        (README.md / dev.bat / run_mvp.py) 全已修。
         """
         from pathlib import Path
         repo = Path(REPO_ROOT)
@@ -159,7 +159,6 @@ class TestFrontendBackendPortConsistency:
         targets = [
             repo / "README.md",
             repo / "dev.bat",
-            repo / "docs" / "novel-ai-guide.html",
             repo / "backend" / "scripts" / "run_mvp.py",
         ]
         # 排除注释里提到 8123 是因为要解释 8132 的来历 / findstr 锚定语义

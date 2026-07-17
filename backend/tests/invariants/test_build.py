@@ -1,7 +1,7 @@
 """build/ — Phase 3 测试拆分
 
 不变量测试按业务域分文件存放。
-原文件位置：tests/test_invariants.py（已替换为 re-export shim）
+测试按业务域直接收集，不再经过兼容 re-export 模块。
 """
 
 from tests._paths import REPO_ROOT, BACKEND_ROOT
@@ -13,7 +13,7 @@ import pytest
 BACKEND = Path(REPO_ROOT)
 sys.path.insert(0, str(BACKEND))
 
-# ── 原 test_invariants.py 顶部声明的 app.schema_validator 系列 ──
+# 共享 schema validator imports
 from app.schema_validator import (  # noqa: E402,F401
     validate_setting_package, validate_chapter_meta, SchemaError,
     get_setting_package_schema, get_chapter_meta_schema,
@@ -217,21 +217,16 @@ class TestParseLLMJsonResponseTypeGuard:
         assert result2 == ""
 
 
-class TestTrackerUsesParseWithDictDefault:
-    """tracker.py:83 的 `parse_llm_json_response(resp, {})` 必须用 dict 作 default
-    —— 不变式。如果有人改成 `parse_llm_json_response(resp, [])` 或别的不当类型，
-    立刻测试失败。
-    """
+class TestAgentJsonDefaults:
+    """Agent JSON 解析失败后必须向字典消费路径提供安全类型。"""
 
-    def test_tracker_source_uses_dict_default(self):
+    def test_tracker_retries_then_falls_back_to_dict(self):
         import inspect
         from engine.agents import tracker as tracker_mod
         src = inspect.getsource(tracker_mod.run_tracker)
-        assert "parse_llm_json_response(resp, {})" in src, (
-            "tracker.run_tracker 必须用 `parse_llm_json_response(resp, {})` "
-            "（dict 作 default）；改成 list/None/str 会让后续 updates.get() "
-            "在 LLM 返回非 dict 时崩溃。"
-        )
+        assert src.count("parse_llm_json_response(") >= 2
+        assert "if updates is None:" in src
+        assert "updates = {}" in src
 
     def test_checker_source_uses_dict_default(self):
         """checker.py 内 parse_llm_json_response 调用点必须传 dict 作 default。

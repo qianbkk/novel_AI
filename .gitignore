@@ -42,6 +42,10 @@ frontend/audit_screenshots/
 # Local benchmark / generated engine artifacts
 backend/setting_package.json
 docs/final-verification-report.txt
+docs/drafts/
+docs/runs/
+docs/benchmark-*.md
+backend/scripts/local_*.py
 
 # dev.bat runtime output (port logs, launcher .cmd)
 .runlogs/
