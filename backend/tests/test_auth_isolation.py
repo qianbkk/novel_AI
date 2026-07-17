@@ -222,7 +222,7 @@ def test_legacy_unowned_data_visible_to_any_logged_in_user(client):
 
 
 def test_unauthenticated_dev_mode_still_works(client):
-    """dev 模式下，无 token 仍能 list/create projects（向后兼容旧客户端）。
+    """dev 模式下，无 token 能创建并看到全部 projects。
 
     这是 Phase 4 的核心权衡：上线后设 NOVEL_PRODUCTION=1 才强制鉴权；
     dev 默认不强制。
@@ -232,8 +232,26 @@ def test_unauthenticated_dev_mode_still_works(client):
     })
     assert r.status_code == 201, r.text  # dev 模式允许
 
+    # 模拟本地用户登录创建项目后又退出登录。dev 模式仍是单租户兼容，
+    # 因此未登录列表不能把已有 owner 的项目隐藏掉。
+    db = SessionLocal()
+    try:
+        db.add(Project(
+            title="owned but visible in dev",
+            genre="都市",
+            config_json={},
+            owner_id="local-owner",
+        ))
+        db.commit()
+    finally:
+        db.close()
+
     r_list = client.get("/projects")
     assert r_list.status_code == 200
+    assert {p["title"] for p in r_list.json()} == {
+        "unauth novel",
+        "owned but visible in dev",
+    }
 
 
 def test_token_with_garbage_signature_returns_none_user(client):

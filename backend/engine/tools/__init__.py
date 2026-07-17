@@ -1,12 +1,9 @@
-"""novel_AI engine tools package.
+"""Novel AI engine tools package.
 
-Ported 1:1 from novel_AI/tools/. Each tool preserves its public CLI shape
-(run_<x> / print_<x>) but uses backend.engine.config.paths for storage
-and backend.engine.llm_router.get_active_router() for LLM calls.
+Submodules are intentionally loaded on demand. Eagerly importing every CLI tool
+caused avoidable startup side effects and made ``python -m
+engine.tools.system_test`` initialize the module twice.
 """
-from . import bootstrap, budget_manager, chapter_checker, fingerprint_checker
-from . import exporter, human_review, style_manager, calibrate_checker
-from . import acceptance_tests, system_test
 
 __all__ = [
     "bootstrap", "budget_manager", "chapter_checker", "fingerprint_checker",

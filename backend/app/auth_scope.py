@@ -22,7 +22,8 @@ import os
 from typing import Optional
 
 from fastapi import HTTPException, status
-from sqlalchemy.orm import Query, Session
+from sqlalchemy import or_, true
+from sqlalchemy.orm import Session
 
 from .auth import User
 from .models import Project
@@ -40,9 +41,8 @@ def owner_filter_clause(current_user: Optional[User]):
         query = db.query(Project).filter(owner_filter_clause(user))
     """
     if current_user is None:
-        # 未登录 → dev 模式可见全部；生产模式上层应已 401 拦过。
-        return Project.owner_id.is_(None)  # 仅 NULL：等价于"未认领数据可见"
-    from sqlalchemy import or_
+        # 未登录 → dev 模式可见全部；production 模式由路由先返回 401。
+        return true()
     return or_(
         Project.owner_id == current_user.id,
         Project.owner_id.is_(None),  # 兼容历史数据

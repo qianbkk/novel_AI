@@ -11,7 +11,7 @@ import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from ..database import get_db
@@ -50,6 +50,8 @@ class OutlineUpdate(BaseModel):
 
 
 class OutlineOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     id: str
     project_id: str
     arc_id: int
@@ -64,10 +66,6 @@ class OutlineOut(BaseModel):
     outline_json: list[dict[str, Any]] | None
     created_at: str
     updated_at: str
-
-    class Config:
-        from_attributes = True
-
 
 class ArcGenerateRequest(BaseModel):
     arc_id: int

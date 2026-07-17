@@ -415,19 +415,9 @@ def run_graph_task(
             # 适合个人试错 / 多开篇试选；选定方向后切回完整 run。
             chapters = int(args[0]) if args else 10
             os.environ["NOVEL_AUDIT_MODE"] = "draft"
-            from .orchestrator import run_orchestrator, _setting
-            # 草稿模式把所有任务标 audit_mode='draft'。
-            # 复用 outline 生成的 tasks 但覆盖 audit_mode 字段，
-            # 不重调 outline 以免成本翻倍。
-            import json as _json
-            try:
-                if _engine_output_dir() and (Path(_engine_output_dir()) / "arc_tasks_state.json").exists():
-                    pass
-            except Exception:
-                pass
-            # 上面探针是 no-op；真正的覆盖在 orchestrator 内部：
-            # 已经在 node_load_arc_tasks 之后用 os.environ 读 NOVEL_AUDIT_MODE，
-            # 这边不再做事。orchestrator._load_state_for_project 已带 audit_mode override 钩子。
+            from .orchestrator import run_orchestrator
+            # node_load_arc_tasks 会读取 NOVEL_AUDIT_MODE 并覆盖任务模式，
+            # 因此可以复用已有大纲，不需要额外读写任务文件。
             with redirect_stdout(capture):
                 state = run_orchestrator(state, max_chapters=chapters)
             exit_code = 0

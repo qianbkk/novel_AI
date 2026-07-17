@@ -154,7 +154,7 @@ _BCRYPT_ROUNDS = 12  # 默认 cost 因子
 
 
 def hash_password(plain: str) -> str:
-    """bcrypt hash（cost=12，~250ms/哈希，desktop 上 ~1000/s）。"""
+    """bcrypt hash（cost=12，单次通常需要数百毫秒）。"""
     if not plain:
         raise ValueError("密码不能为空")
     salt = bcrypt.gensalt(rounds=_BCRYPT_ROUNDS)

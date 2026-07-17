@@ -20,6 +20,10 @@ import sys
 import tempfile
 from pathlib import Path
 
+# This is a CLI-style integration harness invoked by the engine's ``test``
+# command, not a pytest module. Its decorator is intentionally named ``test``.
+__test__ = False
+
 # Ensure backend/ is on the path when run as a script
 _BACKEND = Path(__file__).resolve().parent.parent.parent
 if str(_BACKEND) not in sys.path:

@@ -1,13 +1,13 @@
 from datetime import datetime
 from typing import Optional, Any, Union
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ProjectCreate(BaseModel):
     title: Optional[str] = None
     genre: str
     audience: Optional[str] = "男频·青年向"
-    config_json: dict[str, Any] = {}
+    config_json: dict[str, Any] = Field(default_factory=dict)
 
 
 class ProjectOut(BaseModel):
@@ -87,7 +87,7 @@ class RoleAssignmentUpdate(BaseModel):
 
 class BridgeRunRequest(BaseModel):
     command: str
-    args: list[str] = []
+    args: list[str] = Field(default_factory=list)
     outline_mode: Optional[str] = None  # batch | card | talk
 
 
@@ -129,9 +129,9 @@ class ReviewRequest(BaseModel):
 class RuleConfigOut(BaseModel):
     project_id: str
     style: str
-    taboos: list[str] = []
+    taboos: list[str] = Field(default_factory=list)
     template: str = "run.章节撰写"
-    extra: dict[str, Any] = {}
+    extra: dict[str, Any] = Field(default_factory=dict)
     updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -156,7 +156,7 @@ class PostProcessResult(BaseModel):
     tool: str
     chapter_no: Optional[int] = None
     summary: str
-    findings: list[dict[str, Any]] = []
+    findings: list[dict[str, Any]] = Field(default_factory=list)
     score: Optional[float] = None
     cost_usd: float = 0.0
     generated_at: datetime
@@ -230,7 +230,7 @@ class ChapterFull(BaseModel):
     # created_at 在历史数据（用 raw SQL 或 _force_reimport 覆盖写入）里可能为空，
     # 避免把整个详情接口打挂，这里允许 None。Schema v2 兼容。
     created_at: Optional[datetime] = None
-    characters: list[ChapterCharacterOut] = []
+    characters: list[ChapterCharacterOut] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
