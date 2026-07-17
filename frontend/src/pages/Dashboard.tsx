@@ -285,7 +285,17 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {projects && projects.length > 0 && <ModuleCompass projects={projects} chapterMap={chapterMap} />}
+      {/* 五期：罗盘折叠为可选装饰，主体项目列表上移到首屏 */}
+      {projects && projects.length > 0 && (
+        <details style={{ marginTop: 12 }}>
+          <summary style={{ cursor: "pointer", fontSize: 13, color: "var(--text-muted)" }}>
+            模块罗盘（装饰性概览 · 点击展开）
+          </summary>
+          <div style={{ marginTop: 12 }}>
+            <ModuleCompass projects={projects} chapterMap={chapterMap} />
+          </div>
+        </details>
+      )}
 
       {projects && projects.length === 0 && (q || genre) && (
         <div className="card">

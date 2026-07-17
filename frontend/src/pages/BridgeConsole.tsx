@@ -360,9 +360,12 @@ export default function BridgeConsole() {
       {error && <div className="banner banner-danger">{error}</div>}
       {exitCode !== null && <div className="banner banner-success">命令完成，exit code: {exitCode}</div>}
 
-      {/* ============ ① 三道记忆防线 + ② 多模式大纲 / 七要素概览 ============ */}
-      <div className="card">
-        <h3 className="card__title">实时记忆层 · 当前节点状态</h3>
+      {/* ============ ① 三道记忆防线 + ② 多模式大纲 / 七要素概览（五期：默认折叠） ============ */}
+      <details className="card mt-24">
+        <summary style={{ cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+          <h3 className="card__title" style={{ margin: 0 }}>实时记忆层 · 当前节点状态</h3>
+          <span className="text-faint" style={{ fontSize: 12 }}>▼ 点击展开/折叠</span>
+        </summary>
 
         {/* 3D 翻牌：当前节点状态 */}
         <div className="perspective-3d" style={{ marginBottom: 14, height: 64 }}>
@@ -517,7 +520,7 @@ export default function BridgeConsole() {
             </button>
           ))}
         </div>
-      </div>
+      </details>
 
       {/* ============ novel_AI 目录绑定（保留） ============ */}
       <div className="card mt-24">

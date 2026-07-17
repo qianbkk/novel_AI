@@ -87,6 +87,37 @@ def summarize_arc(arc: dict, chapter_summaries: list, memory: dict, novel_id: st
     l5 = get_l5(novel_id)
     l5["arc_summaries"].append(arc_summary)
     save_l5(novel_id, l5)
+
+    # 四期修复：弧末档案回灌 L2，下一弧 outline 能读到本弧档案，
+    # 避免跨弧情节断片（之前只 append L5，outline 只读 L2.hot）。
+    try:
+        from ..memory.manager import get_l2, save_l2
+        m2 = get_l2(novel_id)
+        hot = m2.setdefault("hot", {})
+        hot["last_arc_summary"] = arc_summary
+        # unresolved_threads 也回灌为下一弧的输入约束
+        unresolved = arc_summary.get("unresolved_threads") or []
+        constr = m2.setdefault("constraints", {})
+        incoming: list[dict] = []
+        existing: set[str] = set()
+        for t in unresolved:
+            if isinstance(t, dict):
+                desc = str(t.get("desc") or "").strip()
+            else:
+                desc = str(t).strip()
+            if desc and desc not in existing:
+                incoming.append({
+                    "desc": desc[:200],
+                    "from_arc": arc.get("arc_id"),
+                    "status": "inherited",
+                })
+                existing.add(desc)
+        # 这是“下一弧”输入，不是永久历史；每次弧末用最新未决线替换。
+        constr["next_arc_incoming_threads"] = incoming
+        save_l2(novel_id, m2)
+    except Exception as e:
+        log.warning("arc_summary backflow to L2 failed (non-blocking): %s", e)
+
     return arc_summary, cost
 
 

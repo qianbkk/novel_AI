@@ -37,6 +37,65 @@ KNOWN_POWER_KEYS = ["power_system", "power_levels", "ability_system"]
 # ─────────────────────────────────────────────
 # 正向：concept → novel_config.json
 # ─────────────────────────────────────────────
+def _build_worldbuild_snapshot(project_id: str, db: Session) -> dict:
+    """一期修复（根因 #3：推送压扁）：把 worldbuild 的结构化产出打包成快照。
+
+    之前 push 只传一段拼接文本（世界观概要+人物名+势力名），7 段世界观/
+    角色卡/关系/伏笔/力量体系全部丢弃，planner 拿概念从头重编一套设定——
+    两套世界观只共享一段模糊文字。现在把结构化数据随 novel_config.json
+    一起传给 planner，planner 降级为「补全者」（沿用实体，只补缺失字段）。
+    """
+    world = db.query(WorldSetting).filter_by(project_id=project_id).first()
+    characters = db.query(Character).filter_by(project_id=project_id).all()
+    factions = db.query(Faction).filter_by(project_id=project_id).all()
+    powers = db.query(PowerSystem).filter_by(project_id=project_id).all()
+    foreshadowings = db.query(Foreshadowing).filter_by(project_id=project_id).all()
+
+    snapshot: dict = {}
+    if world:
+        if world.world_view_rich_json:
+            snapshot["world_view_rich"] = world.world_view_rich_json
+        if world.story_core_struct_json:
+            snapshot["story_core_struct"] = world.story_core_struct_json
+        if world.history_timeline_json:
+            snapshot["history_timeline"] = world.history_timeline_json
+        if world.plot_skeleton_json:
+            snapshot["plot_skeleton"] = world.plot_skeleton_json
+    if characters:
+        snapshot["characters"] = [
+            {
+                "name": c.name, "role": c.role or "配角",
+                "basic": c.card_basic_json,
+                "personality": c.card_personality_json,
+                "background": c.card_background_json,
+                "abilities": c.card_abilities_json,
+                "catchphrase": c.card_catchphrase_json,
+                "arc": c.card_arc_json,
+            }
+            for c in characters
+        ]
+    if factions:
+        snapshot["factions"] = [
+            {"name": f.name, "detail": f.detail_json} for f in factions
+        ]
+    if powers:
+        snapshot["power_systems"] = [
+            {"name": p.name, "description": p.description, "tiers": p.tiers_json}
+            for p in powers
+        ]
+    if foreshadowings:
+        snapshot["foreshadowings"] = [
+            {
+                "content": fs.content, "importance": fs.importance,
+                "status": fs.status,
+                "planted_chapter_hint": fs.planted_chapter_hint,
+                "payoff_chapter_hint": fs.payoff_chapter_hint,
+            }
+            for fs in foreshadowings
+        ]
+    return snapshot
+
+
 async def push_setting_concept(project_id: str, novel_ai_dir: str, db: Session) -> dict:
     project = db.get(Project, project_id)
     if project is None:
@@ -85,6 +144,8 @@ async def push_setting_concept(project_id: str, novel_ai_dir: str, db: Session) 
         "genre": project.genre,
         "setting_concept": concept,
         "budget_limit_usd": project.budget_limit_usd or 500.0,
+        # 一期修复：结构化世界观快照随行（planner 有则沿用，无则自行生成）
+        "worldbuild_snapshot": _build_worldbuild_snapshot(project_id, db),
     }
     config_dir = Path(novel_ai_dir, "config")
     config_dir.mkdir(parents=True, exist_ok=True)

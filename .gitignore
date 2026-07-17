@@ -37,6 +37,11 @@ Thumbs.db
 .playwright-cli/
 test_output/
 .test_project_id
+frontend/audit_screenshots/
+
+# Local benchmark / generated engine artifacts
+backend/setting_package.json
+docs/final-verification-report.txt
 
 # dev.bat runtime output (port logs, launcher .cmd)
 .runlogs/

@@ -37,7 +37,7 @@ LangGraph 状态机驱动的多 Agent 网文写作引擎，被后端以子进程
 | Writer | `writer.py:188 run_writer` | 任务、L2 写作上下文（`get_writer_context`）、设定 | 章节草稿 | Claude Sonnet，用 `call_with_length_budget` |
 | Normalizer | `normalizer.py:88 run_normalizer` | 原始文本 | 去 AI 腔文本 + 格式问题 | 触发时才走 LLM 二次通道 |
 | Compliance | `compliance.py:123 run_compliance` | 文本、平台 | passed/hard_rejects/warnings | DeepSeek（正则 + LLM 两级） |
-| Checker | `checker.py:99 run_checker` | 文本、任务、audit_mode | score/verdict/rewrite_level/五维分 | main=DeepSeek, cross1=Claude, cross2=DeepSeek，加权 0.5/0.25/0.25 |
+| Checker | `checker.py:99 run_checker` | 文本、任务、audit_mode、规则预检反馈 | score/verdict/rewrite_level/六维分 | main=DeepSeek, cross1=Claude, cross2=DeepSeek，加权 0.5/0.25/0.25 |
 | Rewriter | `rewriter.py:199 run_rewriter` | 草稿、级别、反馈、质检结果、记忆 | 重写文本 | Claude Sonnet |
 | Tracker | `tracker.py:103 run_tracker` | 章节文本、任务、当前 L2 | 更新后的 L2（热/冷/约束/元） | DeepSeek |
 | Summarizer | `summarizer.py:123 run_summarizer` | 触发条件、弧、L2 | L5 弧摘要/压缩历史 | Claude Sonnet |
@@ -76,8 +76,9 @@ LangGraph 状态机驱动的多 Agent 网文写作引擎，被后端以子进程
 ## 合规与质量门（三道防线）
 
 1. **Compliance**（`compliance.py`）：两级——先免费正则 `keyword_scan()` 匹配 `config/compliance_rules/compliance_rules_fanqie.json`（5 条硬性拒绝规则：政治人物、血腥暴力、敏感宗教/分裂组织、未成年性内容、真实地点+犯罪组合；1 条警告规则；字数限制），命中硬性关键词时跳过 LLM 语义检查省成本；LLM 返回解析失败按 FAIL 处理（fail-closed，修复过"假通过"bug）。
-2. **Checker**（`checker.py`）：5 维度加权评分——钩子力度 30%、爽感密度 25%、角色一致性 20%、剧情逻辑 15%、文笔自然度 10%。`full` 模式下三模型交叉（主评 50% + 两次交叉各 25%），`lite`/`bootstrap` 模式单模型。
-3. **Fingerprint**（`fingerprint_checker.py`）：纯统计（无 LLM）AI 写作指纹检测——句长标准差、段首字符重复率、AI 对话引导词（说道/笑道等）计数、感叹号/省略号密度、AI 词汇黑名单，0-100 分，≥60 高风险；另检测角色口癖是否落实（`check_character_voices`）。
+2. **Rule Checker**（`rule_checker.py`）：每章质检前执行的零成本规则层，检查占位标记、陈词滥调、重复开场、过长段落和可疑正文包装；结果写入运行状态并作为先验反馈传给 Checker。
+3. **Checker**（`checker.py`）：6 维度加权评分——节奏 25%、人物声音 20%、剧情逻辑 15%、设定一致性 15%、文笔自然度 15%、钩子力度 10%。`full` 模式下三模型交叉（主评 50% + 两次交叉各 25%），`lite`/`bootstrap` 模式单模型；旧 `shuang_density` 结果仍可兼容读取。
+4. **Fingerprint**（`fingerprint_checker.py`）：纯统计（无 LLM）AI 写作指纹检测——句长标准差、段首字符重复率、AI 对话引导词（说道/笑道等）计数、感叹号/省略号密度、AI 词汇黑名单，0-100 分，≥60 高风险；另检测角色口癖是否落实（`check_character_voices`）。
 
 跨章一致性由 `chapter_checker.py` 负责：局部正则检查（点数逻辑、境界非法跳级）+ 每 10 章一次的 LLM 一致性核查（对照已知 L2 事实）。`acceptance_tests.py` 提供 5 项 AC 验收标准（设定一致性、题材切换覆盖、任务单质量、平台字数/钩子合规、角色弧一致性），是独立 CLI 测试套件，不在每章流水线内。
 
@@ -90,6 +91,7 @@ LangGraph 状态机驱动的多 Agent 网文写作引擎，被后端以子进程
 | `exporter.py` | 章节汇编导出为平台格式 TXT |
 | `budget_manager.py` | 成本记录、预算预警、投影分析 |
 | `chapter_checker.py` | 跨章节一致性扫描 |
+| `rule_checker.py` | 每章零成本规则预检，并向 LLM Checker 提供明确问题摘要 |
 | `fingerprint_checker.py` | 文风指纹统计检测 + 角色口癖检测 |
 | `style_manager.py` | 风格样本库管理 |
 | `calibrate_checker.py` | Checker 基线校准 |

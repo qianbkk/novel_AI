@@ -180,7 +180,7 @@ async def generate_outline(
 
     若同 arc_id 已有 outline，覆盖其 outline_json（用户显式触发重新生成）。
     """
-    from ..models import Project, WorldSetting
+    from ..models import Project, WorldSetting, Character, PowerSystem
     from engine.agents.outline import run_outline
 
     # 取 project + world setting 作为 LLM 上下文
@@ -189,13 +189,38 @@ async def generate_outline(
         raise HTTPException(404, f"Project {project_id} not found")
     ws = db.query(WorldSetting).filter_by(project_id=project_id).first()
 
+    # 一期修复：之前读 ws.config_json —— WorldSetting 根本没有这个列
+    # （config_json 在 Project 表上），导致大纲页触发的生成永远拿空上下文
+    # （protagonist={} / key_characters=[] / levels=[]），产出质量断崖。
+    # 改为从真实表构造：Character 表出人物、PowerSystem 表出力量体系、
+    # novel_ai_raw_setting_json（引擎回灌的设定包）兜底补 protagonist。
+    raw_setting = (ws.novel_ai_raw_setting_json if ws else None) or {}
+    characters = db.query(Character).filter_by(project_id=project_id).all()
+    power = db.query(PowerSystem).filter_by(project_id=project_id).first()
+
+    protagonist = raw_setting.get("protagonist") or {}
+    if not protagonist:
+        mc_row = next((c for c in characters if c.role and "主角" in c.role), None)
+        if mc_row:
+            protagonist = {"name": mc_row.name}
+
+    key_characters = [
+        {"name": c.name, "role": c.role or "配角",
+         "speech_quirks": ((c.card_catchphrase_json or {}).get("lines") or [])[:2],
+         "background": ((c.card_background_json or {}).get("origin") or "")}
+        for c in characters if not (c.role and "主角" in c.role)
+    ][:6] or raw_setting.get("key_characters", [])
+
+    levels = (power.tiers_json if power and power.tiers_json else None) \
+        or (raw_setting.get("power_system") or {}).get("levels") or []
+
     setting: dict[str, Any] = {
         "novel_id": project_id,
         "title": project.title or "未命名",
         "genre": payload.genre or project.genre or "都市",
-        "protagonist": (ws.config_json.get("protagonist") if ws and ws.config_json else {}) or {},
-        "key_characters": [],
-        "power_system": (ws.config_json.get("power_system") if ws and ws.config_json else {}) or {"levels": []},
+        "protagonist": protagonist,
+        "key_characters": key_characters,
+        "power_system": {"levels": levels},
     }
 
     arc = {

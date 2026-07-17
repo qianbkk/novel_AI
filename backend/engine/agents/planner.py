@@ -118,6 +118,55 @@ PLANNER_SYSTEM = """你是一位顶级网络小说设定策划，擅长把一段
 """
 
 
+def _snapshot_block(cfg: dict) -> str:
+    """一期修复（根因 #3）：worldbuild 结构化快照 → planner prompt。
+
+    有快照时 planner 从「重编者」降级为「补全者」——人物/势力/力量体系/
+    伏笔必须沿用快照里的实体（名字、设定、关系不得改动），只补齐快照
+    缺失的字段（如 arc_outline / golden_chapter_hooks）。
+    """
+    snap = cfg.get("worldbuild_snapshot") or {}
+    if not snap:
+        return ""
+    parts = ["【已有结构化设定（必须沿用，不得另起炉灶）】"]
+    if snap.get("world_view_rich"):
+        wv = snap["world_view_rich"]
+        parts.append("■ 世界观七段：" + json.dumps(wv, ensure_ascii=False)[:1200])
+    if snap.get("story_core_struct"):
+        parts.append("■ 故事核心：" + json.dumps(snap["story_core_struct"], ensure_ascii=False)[:400])
+    if snap.get("history_timeline"):
+        parts.append("■ 历史时间线：" + json.dumps(
+            snap["history_timeline"], ensure_ascii=False)[:800])
+    if snap.get("plot_skeleton"):
+        parts.append("■ 卷级骨架：" + json.dumps(snap["plot_skeleton"], ensure_ascii=False)[:800])
+    if snap.get("characters"):
+        chars_brief = [
+            {"name": c.get("name"), "role": c.get("role"),
+             "personality": c.get("personality"), "background": c.get("background"),
+             "catchphrase": c.get("catchphrase")}
+            for c in snap["characters"][:8]
+        ]
+        parts.append("■ 已设定人物（姓名/性格/背景必须原样沿用）：" +
+                     json.dumps(chars_brief, ensure_ascii=False)[:1500])
+    if snap.get("power_systems"):
+        parts.append("■ 力量体系（境界名称与层级必须原样沿用）：" +
+                     json.dumps(snap["power_systems"], ensure_ascii=False)[:800])
+    if snap.get("factions"):
+        parts.append("■ 势力：" + json.dumps(
+            [{"name": f.get("name")} for f in snap["factions"][:8]], ensure_ascii=False))
+    if snap.get("foreshadowings"):
+        parts.append("■ 已设计伏笔（必须全部收入 foreshadowing_seeds，不得丢弃）：" +
+                     json.dumps(snap["foreshadowings"][:10], ensure_ascii=False)[:1000])
+    parts.append(
+        "【沿用规则】上述实体是用户在世界构建阶段的定稿："
+        "protagonist / key_characters 用已有人物的名字和设定；"
+        "power_system.levels 用已有境界；foreshadowing_seeds 必须包含全部已设计伏笔"
+        "（可补充新伏笔）。你的增量工作是：arc_outline、golden_chapter_hooks、"
+        "title_candidates、tagline，以及快照中缺失字段的补全。"
+    )
+    return "\n".join(parts) + "\n\n"
+
+
 def _build_user_prompt(cfg: dict, novel_id: str) -> str:
     setting_concept = cfg.get("setting_concept", "（无）")
     genre = cfg.get("genre", "玄幻")
@@ -132,7 +181,7 @@ budget_limit_usd: {budget}
 【世界观概念】（由用户在前端填写、worldbuild 阶段聚合出的设定概念）
 {setting_concept}
 
-请基于以上概念，生成完整的设定包 JSON。注意：
+{_snapshot_block(cfg)}请基于以上概念，生成完整的设定包 JSON。注意：
 1. 主角名字风格与世界观概念匹配（古风 → 古典名，现代 → 通俗名）
 2. 力量体系必须支撑 ≥100 章长篇（多级境界 + 资源系统）
 3. 弧规划至少 4 弧，每弧 30-40 章

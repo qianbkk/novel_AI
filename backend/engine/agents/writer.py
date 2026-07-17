@@ -113,6 +113,69 @@ WRITER_CACHE_PREFIX = """\
 """ + UNIVERSAL_WRITING_RULES
 
 
+def _world_one_liner(setting: dict) -> str:
+    """世界观一句话提要（注入 system_dynamic，让 LLM 始终知道这是哪本书）。"""
+    ws = setting.get("world_setting", {}) or {}
+    hidden = ws.get("hidden_world_name", "")
+    surface = ws.get("surface_world_name", "")
+    ps = setting.get("power_system", {}) or {}
+    pname = ps.get("name", "")
+    if not (hidden or surface or pname):
+        return ""
+    return f"\n【本书世界观】表世界「{surface or '—'}」+ 里世界「{hidden or '—'}」；力量体系「{pname or '—'}」。\n"
+
+
+def _build_world_block(task: dict, setting: dict) -> str:
+    """把 setting_package 里的结构化世界观压成 writer 能用的【世界观速览】块。
+
+    一期修复（2026-07-16）：之前 writer prompt 完全不含 world_setting /
+    power_system / key_characters —— 世界观注入通道不存在。
+    策略：不全量灌（token 爆炸），按「本章出场人物 + 力量体系 + 世界独特元素」
+    做相关性压缩，预算 ~400-600 字。setting 为空时返回空串（向后兼容空壳 driver）。
+    """
+    parts: list[str] = []
+
+    ws = setting.get("world_setting", {}) or {}
+    hidden = ws.get("hidden_world_name", "")
+    surface = ws.get("surface_world_name", "")
+    history = (ws.get("hidden_world_history", "") or "")[:150]
+    uniq = ws.get("unique_elements", []) or []
+    if hidden or surface or uniq:
+        line = f"世界：表世界「{surface}」/ 里世界「{hidden}」" if (hidden or surface) else ""
+        if history:
+            line += f"。{history}"
+        if line:
+            parts.append(line)
+        if uniq:
+            parts.append("独特设定：" + "；".join(str(u) for u in uniq[:4]))
+
+    ps = setting.get("power_system", {}) or {}
+    levels = ps.get("levels", []) or []
+    if levels:
+        lv_str = " → ".join(f"{l.get('name','?')}" for l in levels)
+        parts.append(f"力量体系「{ps.get('name','')}」：{lv_str}（资源：{ps.get('currency','')}）")
+
+    # 本章出场人物的设定卡（只注入 main_characters 相关的，控制预算）
+    main_chars = set(task.get("main_characters", []) or [])
+    key_chars = setting.get("key_characters", []) or []
+    char_lines = []
+    for c in key_chars:
+        cname = c.get("name", "")
+        if not cname:
+            continue
+        relevant = any(cname in mc or mc in cname for mc in main_chars)
+        if relevant or len(char_lines) < 2:  # 出场者必注入；否则最多带 2 个核心配角
+            quirks = "、".join(c.get("speech_quirks", [])[:2])
+            bg = (c.get("background", "") or "")[:60]
+            char_lines.append(f"  {cname}（{c.get('role','')}）：{bg}" + (f"｜口癖：{quirks}" if quirks else ""))
+    if char_lines:
+        parts.append("关键人物设定：\n" + "\n".join(char_lines[:5]))
+
+    if not parts:
+        return ""
+    return "【世界观速览（写作时必须遵守，不得违背）】\n" + "\n".join(parts) + "\n"
+
+
 def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, str]:
     """Build (cached_system_prefix, dynamic_user_prompt).
 
@@ -124,8 +187,19 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
     genre   = setting.get("genre", "都市")
     mc_name = mc.get("name", "主角")
 
+    # 一期修复（根因 #1：世界观注入断线）：writer 之前只读 protagonist/genre，
+    # planner 产出的 world_setting / power_system / key_characters 全部不进 prompt，
+    # 300 章实测里 writer 眼中的世界只剩"主角等级"一个字符串。
+    # 这里拼一个紧凑的【世界观速览】块（预算 ~400-600 字），全量丢弃 → 摘要注入。
+    world_block = _build_world_block(task, setting)
+
     genre_instr    = _genre_instruction(genre)
-    hook_guidance  = _hook_guidance(task.get("ending_hook_type", "悬念钩"))
+    if task.get("is_final_chapter"):
+        # 一期修复（复盘 P3 配套）：终章不走常规钩子指导，明确收尾要求
+        hook_guidance = ("【终章要求】这是全书最后一章：收束主线冲突、交代主要人物归宿、"
+                         "回应开篇。以余韵作结，禁止留下新悬念或「下一章」钩子。\n")
+    else:
+        hook_guidance = _hook_guidance(task.get("ending_hook_type", "悬念钩"))
     voice_reminder = _character_voice_reminder(task.get("main_characters", []) or [], setting)
 
     style_samples = context.get("style_samples", []) or []
@@ -144,14 +218,32 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
     foreshadow_str = "\n".join(f"  → {f}" for f in foreshadow) or "  无"
     cold_str = context.get("cold_summary", "") or ""
 
-    system_dynamic = genre_instr
+    # 一期修复（按需章包，参考 linshi.txt C 节）：从 worldview 里抽
+    # 本章出场人物相关的小切片，避免全量塞入。世界观总览只在 system_dynamic
+    # 给一句话提要，具体细节由 main_characters 切片注入。
+    world_one_liner = _world_one_liner(setting)
+
+    # 二期：从 task.foreshadowing_ops 渲染「本章伏笔工作单」
+    from .foreshadow_helper import format_foreshadow_ops_for_prompt
+    foreshadow_worklist = format_foreshadow_ops_for_prompt([task])
+
+    # 二期：emotion_shift / core_conflict / plot_progression 是新字段；
+    # 老 task 可能没有，做空值兼容。
+    emotion_shift = task.get("emotion_shift") or "未指定"
+    core_conflict = task.get("core_conflict") or "未指定"
+    plot_progression = task.get("plot_progression") or "未指定"
+
+    system_dynamic = genre_instr + world_one_liner
 
     user_prompt = f"""【当前写作任务】
 第{task.get('chapter_number', 0)}章 ｜ 定位：{task.get('chapter_role','')} ｜ 目标字数：{task.get('target_length','2000-2200')}字
 章节目标：{task.get('chapter_goal','')}
+核心冲突：{core_conflict}
+情感迁移：{emotion_shift}
+主线推进：{plot_progression}
 是否弧高潮：{'是（全力以赴）' if task.get('is_arc_climax') else '否'}
 
-【主角状态】
+{world_block}【主角状态】
 姓名：{mc_name} ｜ 等级：{context.get('protagonist_level','凡人')} ｜ 点数：{context.get('protagonist_points',0)}
 道具：{', '.join(context.get('inventory', []) or []) or '无'}
 场景：{context.get('scene_location','未指定')} ｜ 时间：{context.get('time_context','未指定')}
@@ -181,6 +273,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 
 【即将到期的伏笔（请在本章埋下呼应）】
 {foreshadow_str}
+{foreshadow_worklist}
 {voice_reminder}
 {('【历史背景参考】\n' + cold_str) if cold_str else ''}
 {style_block}

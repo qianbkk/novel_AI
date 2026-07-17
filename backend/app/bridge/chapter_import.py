@@ -20,6 +20,70 @@ from datetime import datetime, timezone
 log = get_logger("novel_ai.chapter_import")
 
 
+def _clean_content_for_import(content: str) -> str:
+    """清理 chapter txt 的正文内容，去掉 chapter_import 阶段会污染显示的前缀：
+
+    1. 行首的 [待修订] / [未通过] 标记（orchestrator 在 escalation 时加的）
+    2. 整段是 JSON 包装 `{"title": "...", "body": "..."}` 的情况：剥外层取 body
+    3. 行首既有 [待修订] + 紧跟 JSON 包装的情况：去掉 [待修订] 行再剥 JSON
+
+    返回清洗后的正文（去掉了内容污染，但保留原始换行/段落）。
+    """
+    import re as _re
+    if not content:
+        return ""
+    stripped = content.lstrip()
+
+    # 剥 "[待修订]" / "[未通过]" 行前缀（可能多个）
+    lines = stripped.split("\n")
+    while lines and lines[0].strip() in ("[待修订]", "[未通过]"):
+        lines = lines[1:]
+    stripped = "\n".join(lines).lstrip()
+
+    # 整段是 JSON 包装：剥外层取 body
+    if stripped.startswith("{") and '"body"' in stripped[:200]:
+        # 1) 先试严格解析
+        try:
+            import json as _json
+            d = _json.loads(stripped)
+            if isinstance(d, dict) and "body" in d:
+                return str(d.get("body", ""))
+        except Exception:
+            pass
+        # 2) 解析失败：writer raw 输出有真换行符（违反 JSON 语法），手动扫描抽 body。
+        #    找 "body":" 起点，扫描到下一个非转义的 " 或 } 停止。
+        m_start = _re.search(r'"body"\s*:\s*"', stripped)
+        if m_start:
+            i = m_start.end()
+            out = []
+            while i < len(stripped):
+                ch = stripped[i]
+                if ch == "\\" and i + 1 < len(stripped):
+                    # 保留转义字符的反义（如 \" → "），\\ → \，\n → 真 newline
+                    nxt = stripped[i+1]
+                    if nxt == "n":
+                        out.append("\n")
+                    elif nxt == "r":
+                        out.append("\r")
+                    elif nxt == "t":
+                        out.append("\t")
+                    elif nxt == '"':
+                        out.append('"')
+                    elif nxt == "\\":
+                        out.append("\\")
+                    else:
+                        out.append(nxt)
+                    i += 2
+                    continue
+                if ch == '"' or ch == '}':
+                    break
+                out.append(ch)
+                i += 1
+            return "".join(out)
+
+    return stripped
+
+
 def _derive_title(n: int, meta: dict, content: str) -> str:
     """派生章节标题。
 
@@ -30,12 +94,19 @@ def _derive_title(n: int, meta: dict, content: str) -> str:
       3. role + 真实 chapter_goal 派生
       4. 兜底"第N章"
 
-    旧版本对 placeholder goal 直接返回「第N章·发展·第N章：推进剧情」（重复 placeholder），
-    第二轮 fix 让 placeholder 也走首句路径——已存在的 300 章测试小说因此能
-    拿到基于真实内容的标题（如「第270章·陆承把U盘里的表格拉到第三屏」）。
+    修订 2026-07-17：meta.title 可能是 JSON `{"title": ..., "body": ...}`（writer
+    2026-07-16 后输出 JSON 包装），需要剥 JSON 取 title 字段。
     """
+    import json as _json
+
     # 1) meta.title（writer 直接给的最准）
     raw_title = (meta.get("title") or "").strip()
+    if raw_title.startswith("{") and '"title"' in raw_title:
+        try:
+            d = _json.loads(raw_title)
+            raw_title = d.get("title") or d.get("body", "")[:30]
+        except Exception:
+            raw_title = raw_title[:40]
     if raw_title and raw_title not in ("未命名章节",):
         return f"第{n}章·{raw_title[:40]}"
 
@@ -96,8 +167,29 @@ def _extract_title_from_content(content: str) -> str:
       5. "[待修订]" / "[未通过]" 前缀
     """
     import re as _re
+    import json as _json
     if not content:
         return ""
+    # 6) 先剥 JSON 包装（writer 2026-07-16 后输出 JSON {"title": ..., "body": ...}）。
+    #    disk 上内容可能是 "[待修订]\n{...JSON...}"，先去掉 [待修订] 前缀再尝试 JSON 解析。
+    stripped = content.lstrip()
+    for prefix in ("[待修订]\n", "[未通过]\n"):
+        if stripped.startswith(prefix):
+            stripped = stripped[len(prefix):]
+    stripped = stripped.lstrip()
+    if stripped.startswith("{") and '"title"' in stripped[:200]:
+        # 1) 先试严格解析
+        try:
+            d = _json.loads(stripped)
+            if isinstance(d, dict) and "title" in d:
+                return str(d.get("title", ""))[:30].strip()
+        except Exception:
+            pass
+        # 2) 解析失败时用 regex 兜底抽 "title" 字段（处理 writer 输出有
+        #    双重转义 \\n 等坏 JSON 的情况）
+        m_title = _re.search(r'"title"\s*:\s*"([^"\\]+(?:\\.[^"\\]*)*)"', stripped)
+        if m_title:
+            return m_title.group(1).replace('\\n', '').replace('\\"', '"')[:30].strip()
     junk_patterns = [
         _re.compile(r"^第\d+[章卷]\s*\S+"),
         _re.compile(r"^【[^】]+】第\d+[章卷]\s*\S+"),
@@ -164,6 +256,11 @@ async def import_chapters_from_novel_ai(project_id: str, novel_ai_dir: str, db: 
                 continue
 
             content = txt_path.read_text(encoding="utf-8")
+            # 一期修复（前端展示）：剥 [待修订] 前缀 + JSON 包装
+            # —— writer 2026-07-16 后输出 {"title":..., "body":...}，
+            # orchestrator.save_chapter 把原始 LLM 输出落盘（含 JSON 包装），
+            # import 时需要剥 JSON 才能给前端纯文本 body。
+            content = _clean_content_for_import(content)
             meta_path = txt_path.with_name(txt_path.stem + "_meta.json")
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
@@ -228,6 +325,8 @@ async def _force_reimport(project_id: str, novel_ai_dir: str, db: Session) -> li
                 continue
 
             content = txt_path.read_text(encoding="utf-8")
+            # 一期修复（前端展示）：剥 [待修订] 前缀 + JSON 包装（与 import_chapters 一致）
+            content = _clean_content_for_import(content)
             meta_path = txt_path.with_name(txt_path.stem + "_meta.json")
             try:
                 meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}

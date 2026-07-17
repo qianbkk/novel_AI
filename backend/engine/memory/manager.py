@@ -107,6 +107,45 @@ def save_l2(novel_id: str, memory: dict) -> None:
     _atomic_write_json(path, memory)
 
 
+def seed_foreshadowing_from_setting(novel_id: str, setting: dict) -> int:
+    """一期修复（根因 #2：伏笔断线）：把 setting_package.foreshadowing_seeds
+    灌进 L2 constraints.foreshadowing_planted。
+
+    之前 planner 产出的伏笔种子（以及 worldbuild DB 里的伏笔）从未进入引擎记忆，
+    writer 的「即将到期伏笔」栏永远为空——伏笔全靠 tracker 每章即兴。
+    幂等：按 desc 去重，重复调用不产生重复条目。返回本次新增条数。
+    """
+    seeds = setting.get("foreshadowing_seeds") or []
+    if not seeds:
+        return 0
+    memory = get_l2(novel_id)
+    constr = memory.setdefault("constraints", {})
+    planted = constr.setdefault("foreshadowing_planted", [])
+    existing = {p.get("desc") for p in planted if isinstance(p, dict)}
+    added = 0
+    for s in seeds:
+        if isinstance(s, dict):
+            desc = (s.get("content") or s.get("desc") or "").strip()
+            target_chapter = s.get("target_chapter")
+            target_arc = s.get("target_arc")
+        else:
+            desc, target_chapter, target_arc = str(s).strip(), None, None
+        if not desc or desc in existing:
+            continue
+        planted.append({
+            "desc": desc,
+            "planted_at_chapter": 0,          # 0 = 设定期埋设（尚未在正文出现）
+            "target_chapter": target_chapter,
+            "target_arc": target_arc,
+            "source": "setting_seed",
+        })
+        existing.add(desc)
+        added += 1
+    if added:
+        save_l2(novel_id, memory)
+    return added
+
+
 def save_l5(novel_id: str, data: dict) -> None:
     """Atomic write L5 弧总结：同 save_l2 的修法。"""
     os.makedirs(L5_DIR_STR, exist_ok=True)
@@ -282,6 +321,25 @@ def _secondary_summarize_cold_history(existing: str, *, novel_id: str,
         return None, 0.0
 
 
+def _foreshadow_target_chapter(f: dict) -> int:
+    """把一条伏笔换算成「预计回收章号」。
+
+    一期修复（量纲 bug）：旧代码直接比较 target_arc（弧ID）和 ch_num（章号），
+    量纲不同导致 due_soon 基本不触发。统一换算成章号：
+      1. 显式 target_chapter 优先（新数据/DB 注入用这个字段）
+      2. target_arc × 30（弧 ≈ 30 章的粗换算）
+      3. 都没有 → planted_at_chapter + 30（埋下后 30 章内提醒回收）
+    """
+    tc = f.get("target_chapter")
+    if isinstance(tc, int) and tc > 0:
+        return tc
+    ta = f.get("target_arc")
+    if isinstance(ta, int) and ta > 0:
+        return ta * 30
+    planted_at = f.get("planted_at_chapter")
+    return (planted_at + 30) if isinstance(planted_at, int) else 10**9
+
+
 def get_chapter_relevant_context(memory: dict, task: dict) -> dict:
     """Filter hot/cold/constraints down to only what's relevant to the current task.
 
@@ -302,8 +360,10 @@ def get_chapter_relevant_context(memory: dict, task: dict) -> dict:
                      or (isinstance(c.get("expires_at_chapter"), int)
                          and c["expires_at_chapter"] > ch_num)][:5]
     planted = constraints.get("foreshadowing_planted", [])
+    resolved = set(memory.get("cold", {}).get("resolved_foreshadowing", []))
     due_soon = [f["desc"] for f in planted
-                if isinstance(f.get("target_arc"), int) and f.get("target_arc") <= ch_num + 30][:3]
+                if f.get("desc") and f["desc"] not in resolved
+                and _foreshadow_target_chapter(f) <= ch_num + 30][:5]
     total_tracked = memory.get("meta", {}).get("total_chapters_tracked", 0)
     # Phase 5 fix #6 配套：原代码硬截 500 字，长篇丧失"早期脉络"印象。
     # 改成 2000 字上限（更接近 L2 active context token 预算）。

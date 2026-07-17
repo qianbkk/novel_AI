@@ -251,7 +251,7 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
         env["NOVEL_AI_DIR"] = (
             binding.novel_ai_dir if binding else os.environ.get("NOVEL_AI_DIR", "")
         )
-        env["NOVEL_ENGINE_MOCK"] = os.environ.get("NOVEL_ENGINE_MOCK", "")
+        env["NOVEL_ENGINE_MOCK"] = os.environ.get("NOVEL_ENGINE_MOCK", "0")
     finally:
         db.close()
 

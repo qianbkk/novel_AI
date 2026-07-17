@@ -256,6 +256,29 @@ def node_load_arc_tasks(state: OrchestratorState) -> OrchestratorState:
     # 之前这里多调一次导致 outline 费用被计 2 倍（多弧叠加后 budget_used 虚高）。
     # P5 fix：删掉这行重复。
 
+    # 一期修复（复盘 P3：end-of-book 终章）：final arc 的最后一章显式标为终章。
+    # 之前第 N 章被当普通"发展"章跑，writer 不知道要收尾 → 写 stub →
+    # checker 0 分 → escalation → 落盘 [待修订]（300 章实测 ch_0300 空章根因）。
+    if tasks and (arc.get("is_final_arc") or arc_idx == len(arc_plans) - 1):
+        last = tasks[-1]
+        last["chapter_role"] = "终章"
+        last["is_final_chapter"] = True
+        last["chapter_goal"] = (
+            f"全书终章：{last.get('chapter_goal', '')}。收束主线与所有未回收伏笔，"
+            "给出明确结局与人物归宿。禁止留下新悬念钩子。"
+        )
+        last["ending_hook_type"] = "无（全书完）"
+        last["ending_hook_description"] = "以余韵收尾，不设下章钩子"
+
+    # 二期：把 outline 阶段 plant 的伏笔种进 L2 记忆（幂等）
+    try:
+        from .agents.foreshadow_helper import plant_seeds_from_tasks
+        n = plant_seeds_from_tasks(tasks, state.get("novel_id", "default"))
+        if n:
+            log(f"🌱 outline 阶段灌入 {n} 条伏笔种子到 L2", state)
+    except Exception as e:
+        _log.warning("plant_seeds_from_tasks failed (non-blocking): %s", e)
+
     state["chapter_task_queue"]      = tasks
     state["total_chapters_planned"]  = state.get("total_chapters_planned", 0) + len(tasks)
 
@@ -516,6 +539,29 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
             return state
     else:
         log("  ⏭  跳过合规检查（personal 平台）", state)
+
+    # 三期：先跑零成本规则层（不调 LLM），结果存 meta.audit_rule_layer
+    # 再喂给 checker 当先验，避免 LLM 重复找茬同类问题。
+    try:
+        from .tools.rule_checker import analyze_chapter, format_issues_for_prompt
+        prev_opens = state.get("_recent_chapter_openings", []) or []
+        rule_result = analyze_chapter(clean_text, prev_openings)
+        state.setdefault("audit_rule_layer", []).append({
+            "chapter": task["chapter_number"],
+            "score": rule_result["score"],
+            "issues": rule_result["issues"],
+        })
+        # 把最近 5 章开场存进 state，给下章对比
+        recent_opens = (prev_opens + [rule_result["first_60"]])[-5:]
+        state["_recent_chapter_openings"] = recent_opens
+        task["_rule_feedback"] = format_issues_for_prompt(rule_result)
+        if rule_result["issues"]:
+            log(f"  📐 规则层预检：{rule_result['score']:.1f}/10 "
+                f"({len(rule_result['issues'])} 项)", state)
+    except Exception as e:
+        _log.warning("rule_checker failed (non-blocking): %s", e)
+        rule_result = None
+        task.pop("_rule_feedback", None)
 
     log(f"  🔍 质检（{audit_mode}）...", state)
     try:
@@ -863,6 +909,16 @@ def build_graph(checkpointer=None):
 def run_orchestrator(state: OrchestratorState, max_chapters: int = 10) -> OrchestratorState:
     app = build_graph()
     chapters_done = 0
+    # 一期修复（伏笔断线）：run 启动时把 setting_package.foreshadowing_seeds
+    # 灌进 L2（幂等，按 desc 去重）。writer 的「即将到期伏笔」栏从此有源头。
+    try:
+        from .memory.manager import seed_foreshadowing_from_setting
+        n_seeded = seed_foreshadowing_from_setting(
+            state.get("novel_id", "default"), _setting())
+        if n_seeded:
+            print(f"🌱 已从设定包灌入 {n_seeded} 条伏笔种子到 L2 记忆")
+    except Exception as e:
+        _log.warning("seed_foreshadowing_from_setting failed (non-blocking): %s", e)
     print(f"\n{'='*60}")
     print(f"🚀 Orchestrator | 目标{max_chapters}章 | 起始Ch{state.get('current_chapter',0)+1}")
     print(f"   {state.get('novel_id')} | 预算${state.get('budget_used_usd',0):.2f}/${state.get('budget_limit_usd',500):.0f}")
@@ -871,7 +927,10 @@ def run_orchestrator(state: OrchestratorState, max_chapters: int = 10) -> Orches
     # 否则 LangGraph 报 "Checkpointer requires one or more of the following
     # 'configurable' keys: thread_id, ..." → exit_code=1（你独立验证）
     thread_id = state.get("novel_id") or "default"
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": 2500}
+    # 一期修复（复盘 P2）：recursion_limit 按章数自适应，不再硬编码。
+    # 每章最多走 load→next→pipeline→(rewrite×3)→save ≈ 8 个节点，留 500 余量。
+    recursion_limit = max(2500, max_chapters * 8 + 500)
+    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": recursion_limit}
     for event in app.stream(state, config):
         node_name = list(event.keys())[0]
         new_state = event[node_name]

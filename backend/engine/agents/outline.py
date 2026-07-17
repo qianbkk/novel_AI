@@ -17,18 +17,51 @@ HOOK_LIST   = " | ".join(HOOK_TYPES.keys())
 SHUANG_LIST = " | ".join(SHUANG_TYPES.keys())
 
 
-OUTLINE_SYSTEM = f"""你是一位网文策划，将弧级大纲拆解为具体章节任务单。
-深度理解番茄读者口味：密集爽感、清晰钩子、行动驱动情节。
+OUTLINE_SYSTEM = f"""你是一位网文策划，将弧级大纲拆解为结构化「字段化章节蓝图」（细纲）。
+深度理解番茄读者口味：密集爽感、清晰钩子、行动驱动情节；重视伏笔的
+埋设/强化/回收节奏，避免章节目标变成流水账。
 
 【拆解原则】
 1. 每5-8章设置一个「爽点章」，每15-20章设置一个「中爽点章」
 2. 弧最后3章节奏加速
 3. 结尾钩子类型只能从以下选择：{HOOK_LIST}
 4. 爽点类型只能从以下选择：{SHUANG_LIST}（无爽点时填null）
-5. 章节定位：铺垫|发展|爽点|弧高潮|过渡
+5. 章节定位：铺垫|发展|爽点|弧高潮|过渡|终章
 6. 字数：普通2000-2200，爽点2200-2500，弧高潮3000-3300
 
-严格输出JSON数组，不输出任何其他内容。"""
+【字段化章节蓝图 schema】（每章必须严格按此结构输出）
+{{
+  "chapter_number": 起始章号,
+  "chapter_role": "铺垫|发展|爽点|弧高潮|过渡|终章",
+  "chapter_goal": "本章核心任务（一句话讲清主角要做什么）",
+  "core_conflict": "本章核心冲突（一句话，谁 vs 谁/什么）",
+  "main_characters": ["本章出场主角+关键配角"],
+  "shuang_type": "{SHUANG_LIST}之一或null",
+  "shuang_description": "爽感场景的具体呈现（如为空字符串表示本章不要求爽点）",
+  "ending_hook_type": "{HOOK_LIST}之一",
+  "ending_hook_description": "结尾钩子的具体方向（让读者想看下一章）",
+  "foreshadowing_ops": [
+    {{"op": "plant|reinforce|resolve", "desc": "伏笔文本", "target_chapter": 数字}}
+  ],
+  "emotion_shift": "本章情感基调（例：紧张→释然 / 压抑→爆发）",
+  "plot_progression": "本章推动的主线进度（一句话，如：进入妖族缓冲区）",
+  "setting_constraints": ["本章必须遵守的世界观设定"],
+  "forbidden_actions": ["本章禁止事项"],
+  "target_length": "2000-2200" | "2200-2500" | "3000-3300",
+  "audit_mode": "full" | "lite" | "bootstrap",
+  "is_arc_climax": false
+}}
+
+【伏笔操作 op 说明】
+- plant：埋设新伏笔（desc 是伏笔文本，target_chapter 是预计回收章）
+- reinforce：强化已有伏笔（让读者再次注意到它，加深印象）
+- resolve：回收伏笔（desc 必须与已埋设的伏笔文本精确匹配）
+
+【硬约束】
+- 每章必须有 1-3 个 foreshadowing_ops（不允许空数组，除非本章明确是过渡章）
+- 弧高潮与终章必须有 resolve 操作（回收本弧伏笔）
+- chapter_goal 不能写「推进剧情」「发展」等通用词，必须写明具体动作
+- 严格输出 JSON 数组，不输出任何 markdown fence 或额外文字"""
 
 
 def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> tuple[list, float]:
@@ -54,9 +87,30 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
     try:
         tasks = json.loads(resp)
     except json.JSONDecodeError:
-        resp2 = re.sub(r',\s*}', '}', resp)
-        resp2 = re.sub(r',\s*]', ']', resp2)
-        tasks = json.loads(resp2)
+        # 先做零成本的常见尾逗号修复；仍失败才请求 LLM 重排格式。
+        repaired = re.sub(r',\s*}', '}', resp)
+        repaired = re.sub(r',\s*]', ']', repaired)
+        try:
+            tasks = json.loads(repaired)
+        except json.JSONDecodeError:
+            retry_prompt = (
+                f"上一次你的输出无法被解析为合法 JSON。原文：\n{resp[:2000]}\n\n"
+                "请重新审视并严格按 schema 输出纯 JSON 数组，不要任何解释/markdown fence。"
+            )
+            try:
+                retry_resp, cost2 = router.call(
+                    agent_name="outline",
+                    system_prompt=OUTLINE_SYSTEM,
+                    user_prompt=retry_prompt,
+                    max_tokens=8000,
+                    temperature=0.0,
+                )
+                cost += cost2
+                tasks = json.loads(_extract_json_array(retry_resp))
+                print("  ✓ outline JSON 重试成功")
+            except Exception as e:
+                print(f"  ✗ outline JSON 解析失败: {e}")
+                raise
 
     _mark_arc_climax(tasks, arc)
 
@@ -65,6 +119,11 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
     for t in tasks:
         if t.get("ending_hook_type") not in valid_hooks:
             t["ending_hook_type"] = "悬念钩"  # 默认兜底
+
+    # 二期：foreshadowing_ops 标准化 + 校验 + 注入伏笔种子到 memory
+    from .foreshadow_helper import normalize_foreshadow_ops
+    for t in tasks:
+        t["foreshadowing_ops"] = normalize_foreshadow_ops(t.get("foreshadowing_ops"))
 
     print(f"  ✅ {len(tasks)}章任务，成本${cost:.4f}")
     return tasks, cost
@@ -184,6 +243,38 @@ def _build_user_prompt(arc: dict, start_chapter: int, setting: dict,
     threads    = hot.get("active_threads", [])
     threads_str = "\n".join(f"  - {t}" for t in threads) or "  无"
 
+    # 四期：上一弧档案注入（避免跨弧断片）
+    last_arc = hot.get("last_arc_summary")
+    arc_block = ""
+    if last_arc and isinstance(last_arc, dict):
+        prev_summary = last_arc.get("summary_100", "")
+        prev_events = "；".join(
+            str(item.get("event") or item.get("desc") or item)
+            if isinstance(item, dict) else str(item)
+            for item in (last_arc.get("key_events", []) or [])
+        )[:300]
+        prev_unresolved = "；".join(
+            str(item.get("desc") or item)
+            if isinstance(item, dict) else str(item)
+            for item in (last_arc.get("unresolved_threads", []) or [])
+        )[:300]
+        prev_growth = last_arc.get("protagonist_growth", "")[:120]
+        arc_block = f"""
+【上一弧档案 · 必须继承】
+本弧摘要：{prev_summary}
+关键事件：{prev_events}
+主角成长：{prev_growth}
+未解决剧情线（需在本弧推进或收尾）：{prev_unresolved}
+"""
+    # 四期：跨弧继承的 incoming 线程注入
+    constr = memory.get("constraints", {}) or {}
+    incoming = constr.get("next_arc_incoming_threads", []) or []
+    incoming_block = ""
+    if incoming:
+        incoming_lines = "\n".join(f"  - {t.get('desc', str(t))}（来自弧{t.get('from_arc','?')}）"
+                                   for t in incoming[:8])
+        incoming_block = f"\n【跨弧继承剧情线】\n{incoming_lines}\n"
+
     return f"""【弧信息】
 弧{arc.get('arc_id', '?')}「{arc.get('arc_name','?')}」
 目标：{arc.get('arc_goal','')}
@@ -192,7 +283,7 @@ def _build_user_prompt(arc: dict, start_chapter: int, setting: dict,
 情绪曲线：{arc.get('emotion_curve','')}
 本弧引入角色：{', '.join(arc.get('new_characters_introduced', []))}
 弧结束状态：{arc.get('arc_ending_state','')}
-
+{arc_block}{incoming_block}
 【主角】{mc.get('name','陆承')} | 当前等级：{hot.get('protagonist_level','感债者')} | 点数：{hot.get('protagonist_points',0)}
 【力量层级】{level_str}
 【可用角色】
@@ -205,11 +296,15 @@ def _build_user_prompt(arc: dict, start_chapter: int, setting: dict,
   "chapter_number": {start_chapter},
   "chapter_role": "铺垫|发展|爽点|弧高潮|过渡",
   "chapter_goal": "本章核心任务（一句话）",
+  "core_conflict": "本章核心冲突",
   "main_characters": ["角色名"],
   "shuang_type": "{SHUANG_LIST}中之一，或null",
   "shuang_description": "爽感场景具体描述，无爽点则空字符串",
   "ending_hook_type": "{HOOK_LIST}中之一",
   "ending_hook_description": "结尾钩子具体方向",
+  "foreshadowing_ops": [{{"op": "plant|reinforce|resolve", "desc": "伏笔", "target_chapter": 数字}}],
+  "emotion_shift": "情感迁移",
+  "plot_progression": "主线推进",
   "setting_constraints": ["约束1"],
   "forbidden_actions": ["禁止事项1"],
   "target_length": "2000-2200",

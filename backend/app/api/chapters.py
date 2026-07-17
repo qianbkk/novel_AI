@@ -41,13 +41,17 @@ def list_chapters(
         .order_by(Chapter.chapter_no.asc())
         .all()
     )
+    # 复用 chapter_import 的 _clean_content_for_import：剥 [待修订] 前缀 + JSON 包装
+    # —— list 端是 raw content，但 import 流程已经在写入前清理过，这里再兜一次
+    # 防御旧数据（之前 run 未做内容清理时落盘的 chapter 行）。
+    from ..bridge.chapter_import import _clean_content_for_import
     return [
         {
             "id": r.id,
             "chapter_no": r.chapter_no,
             "title": r.title,
-            "content_preview": (r.content or "")[:80],
-            "word_count": len(r.content or ""),
+            "content_preview": _clean_content_for_import(r.content or "")[:80],
+            "word_count": len(_clean_content_for_import(r.content or "")),
             "created_at": r.created_at,
         }
         for r in rows
@@ -107,11 +111,12 @@ def get_chapter(
         }
         for edge in edges
     ]
+    from ..bridge.chapter_import import _clean_content_for_import
     return ChapterFull(
         id=chapter.id,
         chapter_no=chapter.chapter_no,
         title=chapter.title,
-        content=chapter.content,
+        content=_clean_content_for_import(chapter.content or ""),
         created_at=chapter.created_at,
         characters=characters,
     )

@@ -78,26 +78,27 @@ def _append_dedup(existing: list, additions: list) -> list:
 
 
 TRACKER_SYSTEM = """你是叙事状态追踪AI。阅读本章正文，提取状态变化并更新记录。
-严格输出JSON，不输出任何其他内容：
-{
-  "protagonist_level": "（仅境界变化时填写）",
-  "protagonist_level_num": 数字（仅变化时），
-  "protagonist_points": 数字（仅变化时），
-  "inventory_add": ["新增道具"],
-  "inventory_remove": ["消耗道具"],
-  "character_states": {"角色名": "一句话状态"},
-  "active_threads": ["完整的当前剧情线列表（包含旧的未关闭线）"],
-  "new_closed_threads": ["本章关闭的线"],
-  "new_world_events": ["重要世界事件"],
-  "last_chapter_ending": "最后100字核心内容",
-  "chapter_summary": "50字以内摘要",
-  "scene_location": "本章结束时所在地点",
-  "time_context": "本章结束时的时间背景",
-  "new_foreshadowing": [{"desc":"伏笔描述","target_arc":目标弧ID数字}],
-  "resolved_foreshadowing": ["已揭开的伏笔描述"],
-  "new_constraints": [{"desc":"新约束","expires_at_chapter":过期章节数,"reason":"原因"}],
-  "new_facts": ["本章确立的重要事实"]
-}"""
+严格输出JSON，不输出任何其他内容。
+
+【字段】（**只填有变化的字段；没变化就输出 null 或不输出**）
+- chapter_summary（必填）：50字以内本章摘要
+- protagonist_level（仅境界变化）：新境界名
+- protagonist_level_num（仅变化）：新等级数字
+- protagonist_points（仅变化）：新点数
+- inventory_add / inventory_remove（仅本章有变化）：道具列表
+- character_states（**仅本章登场或状态改变的角色**）：{"角色名": "一句话状态"}
+- active_threads（**本章涉及的当前活跃剧情线**）：["..."]（不要重复每章已存在的）
+- new_closed_threads（仅本章真正关闭）：["..."]
+- last_chapter_ending：最后100字核心内容
+- scene_location（仅变化）：本章结束时所在地点
+- time_context（仅变化）：本章结束时的时间背景
+- new_foreshadowing（仅本章明确埋设的）：[{"desc":"…","target_arc":弧ID数字}]
+- resolved_foreshadowing（仅本章明确回收的）：["…"]
+
+【关键约束】
+1. **宁缺勿滥**：拿不准的字段不要瞎填，没变化就不要输出，让 history 自动延续。
+2. **不要复述全文**：每条 30 字以内。
+3. **只返回 JSON**，连 markdown fence 也不要。"""
 
 
 def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: str) -> tuple[dict, float]:
@@ -134,19 +135,37 @@ def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: s
         max_tokens=1200,
         temperature=0.1,
     )
-    # 迭代 #40: 之前用 parse_llm_json_response(resp, {}) — parse 失败时
-    # 返回 {}，下游所有 `updates.get(...)` 都是默认值（空 list / 空 dict），
-    # chapter_summary / world_events / constraints / foreshadowing **全部
-    # 静默丢失**。后果：50 章跑下来 meta.tracked_chapters=50 但
-    # recent_summaries=[]、world_events=[]、character_states={}——writer
-    # 拿到的 memory 永远是"第 0 章状态"，文章脱节。
-    # 修法：用 None 作为 default 检测 parse 失败；失败时 log warning
-    # + 在 meta 里记 last_tracker_parse_failure_chapter，**不静默丢失
-    # 信号**。runs / UI 可以通过 meta 看到「哪一章 tracker 失败了」。
+    # 一期修复（复盘 P5）：tracker 解析失败时**自动 reformat retry 一次**——
+    # 把上次 LLM 原始输出 + 重写指令再喂一次，命中率显著高于零样本。
+    # 原始目标：96% 失败率 → < 10%（DOC/Re3 验证的通用模式）。
     updates = parse_llm_json_response(resp, None)
     if updates is None:
+        retry_prompt = (
+            f"{context}\n\n"
+            f"【上一次你的输出无法被解析为 JSON，原文如下】\n{resp[:1500]}\n\n"
+            "请重新审视并严格按 schema 输出纯 JSON，不要任何解释/markdown fence。"
+        )
+        try:
+            resp2, cost2 = router.call(
+                agent_name="tracker",
+                system_prompt=TRACKER_SYSTEM,
+                user_prompt=retry_prompt,
+                max_tokens=1200,
+                temperature=0.0,
+            )
+            cost += cost2
+            updates = parse_llm_json_response(resp2, None)
+            if updates is not None:
+                log.info(
+                    "tracker parse retry succeeded for chapter %s",
+                    task.get("chapter_number"),
+                )
+        except Exception as e:
+            log.warning("tracker retry LLM call failed: %s", e)
+
+    if updates is None:
         log.warning(
-            "tracker LLM JSON parse failed for chapter %s: resp[:200]=%r",
+            "tracker LLM JSON parse failed after retry for chapter %s: resp[:200]=%r",
             task.get("chapter_number"),
             (resp or "")[:200],
         )
