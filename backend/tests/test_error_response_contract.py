@@ -11,38 +11,27 @@
 """
 from __future__ import annotations
 
-import os
 import sys
-import tempfile
-import uuid as _uuid
 from pathlib import Path
 
 _BACKEND = Path(__file__).resolve().parent.parent
+_BACKEND_TESTS = Path(__file__).resolve().parent
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
+if str(_BACKEND_TESTS) not in sys.path:
+    sys.path.insert(0, str(_BACKEND_TESTS))
 
 
 import pytest
-
-
-# 隔离 DB
-_tmp_db = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
-_tmp_db.close()
-_db_path = f"{_tmp_db.name}.{_uuid.uuid4().hex[:6]}.sqlite"
-os.environ["DATABASE_URL"] = f"sqlite:///{_db_path}"
-os.environ["JWT_SECRET"] = "test-error-contract-this-key-is-at-least-32-chars-long-12345"
-
-from fastapi.testclient import TestClient  # noqa: E402
-
-from app.main import app  # noqa: E402
-from app.database import Base, engine  # noqa: E402
-
-
-Base.metadata.create_all(bind=engine)
+from _test_db import isolated_test_db  # noqa: E402,F401  -- fixture 注入
 
 
 @pytest.fixture
-def client():
+def client(isolated_test_db):
+    from fastapi.testclient import TestClient
+    from app.main import app
+    from app.database import Base, engine
+    Base.metadata.create_all(bind=engine)
     with TestClient(app) as c:
         yield c
 
