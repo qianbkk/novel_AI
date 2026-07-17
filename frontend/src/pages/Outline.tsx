@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
@@ -7,18 +7,26 @@ import type {
 import { useToast } from "../components/Toast";
 
 /**
- * Outline 页 — 弧级大纲管理（2026-07-16 Issue #4 修复）
+ * Outline 页 — 弧级大纲管理
  *
- * 之前：chapter_task_queue 只在 orchestrator state 里，断电丢 + 用户看不到
- * 现在：持久化到 DB + 独立页面查看 / 编辑 / 删除 / LLM 重新生成
+ * 持久化到 DB + 独立页面查看 / 编辑 / 删除 / LLM 重新生成。
  */
 export default function Outline() {
   const { projectId } = useParams<{ projectId: string }>();
   const toast = useToast();
   const [outlines, setOutlines] = useState<OutlineOut[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [generating, setGenerating] = useState<number | null>(null);
   const [expandedArc, setExpandedArc] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // 生成 modal state
   const [showGenModal, setShowGenModal] = useState(false);
@@ -35,13 +43,18 @@ export default function Outline() {
   async function refresh() {
     if (!projectId) return;
     setLoading(true);
+    setLoadError(null);
     try {
       const list = await api.listOutlines(projectId);
+      if (!mountedRef.current) return;
       setOutlines(list);
     } catch (e) {
-      toast.error("大纲加载失败", String(e));
+      if (!mountedRef.current) return;
+      const msg = String(e);
+      setLoadError(msg);
+      toast.error("大纲加载失败", msg);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }
 
@@ -115,6 +128,20 @@ export default function Outline() {
       </div>
 
       {loading && <div className="loading-text">加载中…</div>}
+
+      {loadError && !loading && (
+        <div className="banner banner--error" role="alert">
+          <span>加载失败：{loadError}</span>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => refresh()}
+            disabled={loading}
+          >
+            重试
+          </button>
+        </div>
+      )}
 
       {!loading && outlines.length === 0 && (
         <div className="card">

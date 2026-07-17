@@ -1,5 +1,5 @@
 /**
- * Phase 4：角色卡详情页 — /projects/{pid}/characters/{cid}
+ * 角色卡详情页 — /projects/{pid}/characters/{cid}
  *
  * 8 段结构化展示：
  *   1. 基础信息  2. 外貌描写  3. 性格特征  4. 背景故事
@@ -9,7 +9,7 @@
  * 复用 styles.css 已有类：card / entity-card / module-heading /
  * legislation-card / tier-rail / chip / empty-state。
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { CharacterCard, CharacterCardOut, CharacterRelation } from "../types";
@@ -22,21 +22,39 @@ export default function CharacterCardPage() {
   const [relations, setRelations] = useState<CharacterRelation[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  async function refresh() {
     if (!projectId || !characterId) return;
     setLoading(true);
     setError(null);
-    Promise.all([
-      api.getCharacterCard(projectId, characterId),
-      api.getCharacterRelations(projectId, characterId),
-    ])
-      .then(([card, rels]) => {
-        setData(card);
-        setRelations(rels);
-      })
-      .catch((e) => setError(String(e)))
-      .finally(() => setLoading(false));
+    try {
+      const [card, rels] = await Promise.all([
+        api.getCharacterCard(projectId, characterId),
+        api.getCharacterRelations(projectId, characterId),
+      ]);
+      if (!mountedRef.current) return;
+      setData(card);
+      setRelations(rels);
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setError(String(e));
+    } finally {
+      if (mountedRef.current) setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+    // 依赖项已隐含 projectId/characterId 变化触发
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, characterId]);
 
   return (
@@ -58,7 +76,19 @@ export default function CharacterCardPage() {
         </div>
       </div>
 
-      {error && <div className="banner banner-danger">{error}</div>}
+      {error && (
+        <div className="banner banner-danger" role="alert">
+          <span>{error}</span>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => refresh()}
+            disabled={loading}
+          >
+            重试
+          </button>
+        </div>
+      )}
 
       {loading && <p className="loading-text">加载中…</p>}
 
