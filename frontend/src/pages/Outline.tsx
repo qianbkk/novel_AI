@@ -118,9 +118,11 @@ export default function Outline() {
         </div>
         <div className="page-header__actions">
           <button
+            type="button"
             className="btn btn-primary"
             onClick={() => setShowGenModal(true)}
             disabled={generating !== null}
+            aria-label="生成新大纲"
           >
             ✨ 生成新大纲
           </button>
@@ -238,8 +240,9 @@ export default function Outline() {
               />
             </div>
             <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
-              <button className="btn" onClick={() => setShowGenModal(false)}>取消</button>
+              <button type="button" className="btn" onClick={() => setShowGenModal(false)}>取消</button>
               <button
+                type="button"
                 className="btn btn-primary"
                 onClick={handleGenerate}
                 disabled={generating !== null}

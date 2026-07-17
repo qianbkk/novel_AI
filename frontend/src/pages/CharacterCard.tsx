@@ -51,10 +51,10 @@ export default function CharacterCardPage() {
     }
   }
 
+  // refresh 故意不列入依赖项（避免循环 + 自带防 setState after unmount）
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     refresh();
-    // 依赖项已隐含 projectId/characterId 变化触发
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId, characterId]);
 
   return (
