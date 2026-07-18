@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Provider, ProviderForm, ProviderCreate } from "../types";
 
@@ -56,6 +56,15 @@ export default function Providers() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const editingProvider = useMemo(
     () => providers.find((provider) => provider.id === editingId) || null,
@@ -64,12 +73,16 @@ export default function Providers() {
 
   async function refresh() {
     setLoading(true);
+    setLoadError(null);
     try {
-      setProviders(await api.listProviders());
+      const list = await api.listProviders();
+      if (!mountedRef.current) return;
+      setProviders(list);
     } catch (e) {
-      setError(String(e));
+      if (!mountedRef.current) return;
+      setLoadError(String(e));
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }
 
@@ -127,12 +140,14 @@ export default function Providers() {
       } else {
         await api.createProvider(payload);
       }
+      if (!mountedRef.current) return;
       resetForm();
       await refresh();
     } catch (e) {
+      if (!mountedRef.current) return;
       setError(String(e));
     } finally {
-      setSaving(false);
+      if (mountedRef.current) setSaving(false);
     }
   }
 
@@ -141,9 +156,11 @@ export default function Providers() {
     setError(null);
     try {
       await api.deleteProvider(provider.id);
+      if (!mountedRef.current) return;
       if (editingId === provider.id) resetForm();
       await refresh();
     } catch (e) {
+      if (!mountedRef.current) return;
       setError(String(e));
     }
   }
@@ -167,6 +184,21 @@ export default function Providers() {
       {error && <div className="banner banner-danger">{error}</div>}
       {/* 迭代 #83：顶部 master key 加密行为警告 — 让用户知道 dev mode 安全但需了解 */}
       {MASTER_KEY_DEV_WARNING}
+
+      {loadError && !loading && (
+        <div className="banner banner-danger" role="alert">
+          <span>加载失败：{loadError}</span>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => refresh()}
+            disabled={loading}
+            aria-label="重试加载 Provider"
+          >
+            重试
+          </button>
+        </div>
+      )}
 
       <div className="card">
         <h3 className="card__title">{editingId ? "编辑 Provider" : "新增 Provider"}</h3>
@@ -222,11 +254,16 @@ export default function Providers() {
           )}
         </div>
         <div className="button-row">
-          <button className="btn btn-primary" onClick={handleSubmit} disabled={saving || !form.name.trim()}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleSubmit}
+            disabled={saving || !form.name.trim()}
+          >
             {saving ? "保存中…" : editingId ? "保存修改" : "新增 Provider"}
           </button>
           {editingId && (
-            <button className="btn" onClick={resetForm} disabled={saving}>
+            <button type="button" className="btn" onClick={resetForm} disabled={saving}>
               取消编辑
             </button>
           )}
@@ -248,10 +285,10 @@ export default function Providers() {
             </div>
             <div className="button-row">
               {provider.needs_proxy && <span className="badge-soft badge">代理</span>}
-              <button className="btn" onClick={() => startEdit(provider)}>
+              <button type="button" className="btn" onClick={() => startEdit(provider)}>
                 编辑
               </button>
-              <button className="btn btn-danger" onClick={() => handleDelete(provider)}>
+              <button type="button" className="btn btn-danger" onClick={() => handleDelete(provider)}>
                 删除
               </button>
             </div>

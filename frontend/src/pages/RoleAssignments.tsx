@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Provider, RoleAssignment } from "../types";
 
@@ -11,12 +11,23 @@ export default function RoleAssignments() {
   const [loading, setLoading] = useState(true);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   async function refresh() {
     setLoading(true);
+    setLoadError(null);
     try {
       const [providerRows, roleRows] = await Promise.all([api.listProviders(), api.listRoleAssignments()]);
+      if (!mountedRef.current) return;
       setProviders(providerRows);
       setRoles(roleRows);
       setDrafts(
@@ -31,9 +42,10 @@ export default function RoleAssignments() {
         ),
       );
     } catch (e) {
-      setError(String(e));
+      if (!mountedRef.current) return;
+      setLoadError(String(e));
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }
 
@@ -56,12 +68,14 @@ export default function RoleAssignments() {
         provider_id: draft.provider_id || null,
         model_override: draft.model_override.trim() || null,
       });
+      if (!mountedRef.current) return;
       setMessage(`已保存：${role.label}`);
       await refresh();
     } catch (e) {
+      if (!mountedRef.current) return;
       setError(String(e));
     } finally {
-      setSavingKey(null);
+      if (mountedRef.current) setSavingKey(null);
     }
   }
 
@@ -81,6 +95,21 @@ export default function RoleAssignments() {
 
       {error && <div className="banner banner-danger">{error}</div>}
       {message && <div className="banner banner-success">{message}</div>}
+
+      {loadError && !loading && (
+        <div className="banner banner-danger" role="alert">
+          <span>加载失败：{loadError}</span>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => refresh()}
+            disabled={loading}
+            aria-label="重试加载角色绑定"
+          >
+            重试
+          </button>
+        </div>
+      )}
 
       <div className="card">
         <h3 className="card__title">模型路由</h3>
@@ -127,7 +156,13 @@ export default function RoleAssignments() {
                         />
                       </td>
                       <td className="table-actions">
-                        <button className="btn" onClick={() => saveRole(role)} disabled={savingKey === role.role_key}>
+                        <button
+                          type="button"
+                          className="btn"
+                          onClick={() => saveRole(role)}
+                          disabled={savingKey === role.role_key}
+                          aria-label={`保存角色 ${role.label}`}
+                        >
                           {savingKey === role.role_key ? "保存中…" : "保存"}
                         </button>
                       </td>
