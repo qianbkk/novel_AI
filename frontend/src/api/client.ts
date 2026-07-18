@@ -20,17 +20,17 @@ import type {
   PostProcessResult,
   ForeshadowingRow,
   AiAssistLevel,
-  // 2026-07-16：弧级大纲
+  // 弧级大纲
   OutlineOut,
   OutlineCreatePayload,
   ArcGeneratePayload,
-  // Phase 4 新增
+  // 角色卡 / 世界观 / 关系图（前端持久类型）
   CharacterSummary,
   CharacterCardOut,
   CharacterRelation,
   RelationGraph,
   WorldviewRichOut,
-  // Phase 4 认证
+  // 多用户认证
   User,
   TokenResponse,
 } from "../types";
@@ -40,7 +40,7 @@ import type {
 // 强抢会失败。统一走 8132 避免「前端 404、后端没起来」这种误判。
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8132";
 
-// ─── Phase 4：JWT token 管理 ───
+// ─── JWT token 管理 ───
 const TOKEN_KEY = "novel_ai_jwt";
 
 export function getStoredToken(): string | null {
@@ -75,7 +75,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     "Content-Type": "application/json",
     ...((options?.headers as Record<string, string>) || {}),
   };
-  // Phase 4：有 token 就带 Authorization（dev 模式无 token 也允许）
+  // 有 token 就带 Authorization（dev 模式无 token 也允许）
   const token = getStoredToken();
   if (token && !headers["Authorization"]) {
     headers["Authorization"] = `Bearer ${token}`;
@@ -167,14 +167,14 @@ export const api = {
     return request<ChapterSearchResult[]>(`/projects/${projectId}/chapters/search?${params.toString()}`);
   },
 
-  // ─── 2026-07-16：重新导入 chapters（修正旧标题从内容首句派生） ───
+  // ─── 重新导入 chapters（修正旧标题从内容首句派生） ───
   reimportChapters: (projectId: string) =>
     request<Array<{ chapter_no: number; title: string; mode: string }>>(
       `/projects/${projectId}/bridge/reimport-chapters`,
       { method: "POST" }
     ),
 
-  // ─── 2026-07-16（Issue #12）：LLM 生成章节标题 ───
+  // ─── LLM 生成章节标题 ───
   regenerateTitles: (projectId: string, payload: {
     limit?: number;
     only_missing?: boolean;
@@ -317,7 +317,7 @@ export const api = {
       body: JSON.stringify({ ai_assist_level: level }),
     }),
 
-  // ─── Phase 4：世界构建板块 5 个新 endpoint ───
+  // ─── 世界构建板块 5 个 endpoint ───
   getWorldviewRich: (projectId: string) =>
     request<WorldviewRichOut>(`/projects/${projectId}/worldview/rich`),
 
@@ -333,7 +333,7 @@ export const api = {
   getRelationsGraph: (projectId: string) =>
     request<RelationGraph>(`/projects/${projectId}/relations/graph`),
 
-  // ─── 2026-07-16：弧级大纲管理（Issue #4） ───
+  // ─── 弧级大纲管理 ───
   listOutlines: (projectId: string) =>
     request<OutlineOut[]>(`/projects/${projectId}/outlines`),
 
@@ -360,7 +360,7 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  // ─── Phase 4：多用户认证 ───
+  // ─── 多用户认证 ───
   // dev 模式（默认）：上面所有端点在没有 token 时仍可访问（兼容旧用户）
   // production 模式（NOVEL_PRODUCTION=1）：必须先 register / login 才能用
   register: async (payload: {

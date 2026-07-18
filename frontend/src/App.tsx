@@ -9,8 +9,8 @@ import RoleAssignments from "./pages/RoleAssignments";
 import BridgeConsole from "./pages/BridgeConsole";
 import RuleCenter from "./pages/RuleCenter";
 import CharacterCard from "./pages/CharacterCard";
-import Outline from "./pages/Outline";  // 2026-07-16：弧级大纲管理（Issue #4）
-import ChapterReader from "./pages/ChapterReader";  // 2026-07-16：章节阅读器（Issue #11）
+import Outline from "./pages/Outline";  // 弧级大纲管理
+import ChapterReader from "./pages/ChapterReader";  // 章节阅读器（独立页面）
 import { LoginDialog } from "./components/LoginDialog";
 import { api, getStoredToken } from "./api/client";
 
@@ -26,7 +26,7 @@ export default function App() {
   const projectMatch = location.pathname.match(/^\/projects\/([^/]+)/);
   const projectId = projectMatch?.[1];
 
-  // ─── Phase 4：登录态管理 ───
+  // ─── 登录态管理 ───
   // 优先从 localStorage 恢复；没有 token 时显示"匿名"。
   // 暴露 meOrNull 检查真有效性（token 存在但失效会清掉并显示"匿名"）。
   const [authEmail, setAuthEmail] = useState<string | null>(null);
@@ -94,7 +94,7 @@ export default function App() {
           ))}
         </div>
 
-        {/* 登录态指示器（Phase 4） — 用户主动登录 / 匿名标记 */}
+        {/* 登录态指示器 — 用户主动登录 / 匿名标记 */}
         <div className="sidebar-section">
           <div className="sidebar-section__label">账号</div>
           {authEmail ? (
@@ -150,7 +150,7 @@ export default function App() {
               <span className="sidebar-link__dot" />
               世界构建
             </NavLink>
-            {/* 2026-07-16：弧级大纲管理（Issue #4） */}
+            {/* 弧级大纲管理 */}
             <NavLink
               to={`/projects/${projectId}/outline`}
               className={({ isActive }) =>
@@ -207,11 +207,11 @@ export default function App() {
           <Route path="/projects/:projectId/chapters" element={<Chapters />} />
           <Route path="/projects/:projectId/bridge" element={<BridgeConsole />} />
           <Route path="/projects/:projectId/rules" element={<RuleCenter />} />
-          {/* Phase 4: 角色卡详情页 */}
+          {/* 角色卡详情页 */}
           <Route path="/projects/:projectId/characters/:characterId" element={<CharacterCard />} />
-          {/* 2026-07-16：弧级大纲管理（Issue #4） */}
+          {/* 弧级大纲管理 */}
           <Route path="/projects/:projectId/outline" element={<Outline />} />
-          {/* 2026-07-16：章节阅读器（Issue #11） — 独立页面替代 Dialog */}
+          {/* 章节阅读器（独立页面替代 Dialog） */}
           <Route path="/projects/:projectId/chapter/:chapterNo" element={<ChapterReader />} />
         </Routes>
         </div>

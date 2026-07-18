@@ -290,7 +290,7 @@ export interface ChapterFull {
   characters: ChapterCharacter[];
 }
 
-// ─── 2026-07-16：弧级大纲（Issue #4） ───
+// ─── 弧级大纲（ChapterTask = 每章任务单） ───
 export interface ChapterTask {
   chapter_number: number;
   chapter_role: string;
@@ -385,7 +385,7 @@ export interface BridgeBudget {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Phase 4：世界构建板块结构化类型
+// 世界构建板块结构化类型
 // ════════════════════════════════════════════════════════════════════════════
 
 // 角色卡 8 段
@@ -517,7 +517,7 @@ export interface WorldviewRichOut {
   fallback_story_core: string | null;
 }
 
-// ─── Phase 4：多用户认证类型 ───
+// ─── 多用户认证类型 ───
 export interface User {
   id: string;
   email: string;
