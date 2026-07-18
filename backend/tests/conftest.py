@@ -24,7 +24,7 @@ if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
 
-# 共享 fixture（任务 08 batch 3）
+# 共享 fixture（任务 08 batch 3-4）
 import pytest  # noqa: E402
 
 
@@ -74,3 +74,68 @@ def api_client_factory(isolated_test_db):
         return TestClient(app)
 
     yield _make
+
+
+# ─── 任务 08 batch 4：用户 + 项目 fixture ────────────────────────────
+
+
+@pytest.fixture
+def make_user(api_client):
+    """工厂 fixture：注册并返回 (token, user_id) 的 callable。
+
+    替代 test_auth_isolation / test_auth_structural_coverage / test_auth_cookie
+    等文件里重复定义的 `_register(client, email, password="longenough123")`。
+
+    用法：
+        def test_cross_user(make_user, api_client):
+            token_a, uid_a = make_user("alice@example.com")
+            token_b, _    = make_user("bob@example.com")
+            r = api_client.get(f"/users/{uid_a}/...", headers={"Authorization": f"Bearer {token_b}"})
+    """
+    def _make(email: str, password: str = "longenough123"):
+        r = api_client.post("/auth/register", json={"email": email, "password": password})
+        assert r.status_code == 201, f"register 失败 {r.status_code}: {r.text}"
+        body = r.json()
+        return body["access_token"], body["user"]["id"]
+    return _make
+
+
+@pytest.fixture
+def make_project(api_client):
+    """工厂 fixture：在 DB 里建一个项目，返回 project_id。
+
+    owner_id 默认从 make_user 注册后的用户来；可显式传入 owner_id 字段。
+
+    用法：
+        def test_world(make_user, make_project, api_client):
+            _, uid = make_user("alice@example.com")
+            pid = make_project(owner_id=uid, title="alice novel", status="ready")
+    """
+    import uuid as _uuid
+    from app.models import Project
+
+    def _make(
+        owner_id: str = "default-owner",
+        title: str = "test novel",
+        genre: str = "玄幻",
+        status: str = "draft",
+    ) -> str:
+        # 直接走 ORM（api_client 已经在临时 DB 上）
+        from app.database import SessionLocal
+        db = SessionLocal()
+        try:
+            p = Project(
+                id=str(_uuid.uuid4()),
+                title=title,
+                genre=genre,
+                config_json={},
+                owner_id=owner_id,
+                status=status,
+            )
+            db.add(p)
+            db.commit()
+            db.refresh(p)
+            return p.id
+        finally:
+            db.close()
+    return _make
