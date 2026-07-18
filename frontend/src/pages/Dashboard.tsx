@@ -172,12 +172,22 @@ export default function Dashboard() {
   const [genre, setGenre] = useState(searchParams.get("genre") || "");
   const navigate = useNavigate();
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   useReveal(rootRef);
 
   async function loadAll() {
     setError(null);
     try {
       const ps = await api.listProjects({ q, genre });
+      if (!mountedRef.current) return;
       setProjects(ps);
       const entries = await Promise.all(
         ps.map(async (p) => {
@@ -189,8 +199,10 @@ export default function Dashboard() {
           }
         }),
       );
+      if (!mountedRef.current) return;
       setChapterMap(Object.fromEntries(entries));
     } catch (e) {
+      if (!mountedRef.current) return;
       setError(String(e));
     }
   }
@@ -228,8 +240,10 @@ export default function Dashboard() {
         </div>
         <div className="page-header__actions">
           <button
+            type="button"
             className="btn btn-primary"
             onClick={() => navigate("/new")}
+            aria-label="新建小说"
           >
             + 新建小说
           </button>
@@ -237,12 +251,14 @@ export default function Dashboard() {
       </div>
 
       {error && (
-        <div className="banner banner-danger">
+        <div className="banner banner-danger" role="alert">
           <div>{error} — 后端没起来？默认地址 <span className="text-mono">http://localhost:8132</span></div>
           <button
+            type="button"
             className="btn"
             style={{ marginTop: 10 }}
             onClick={loadAll}
+            aria-label="重试加载项目"
           >
             重试
           </button>

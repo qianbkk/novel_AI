@@ -55,18 +55,28 @@ export default function BridgeConsole() {
   const logEndRef = useRef<HTMLDivElement | null>(null);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const nodeFlipRef = useRef<HTMLDivElement | null>(null);
+  const mountedRef = useRef(true);
   const toast = useToast();
   useReveal(rootRef);
 
   useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     if (!projectId) return;
-    api.getProject(projectId).then(setProject).catch((e) => setError(String(e)));
+    api.getProject(projectId).then((p) => { if (mountedRef.current) setProject(p); }).catch((e) => { if (mountedRef.current) setError(String(e)); });
     api.getNovelAIBinding(projectId)
       .then((binding) => {
+        if (!mountedRef.current) return;
         setNovelAiDir(binding.novel_ai_dir);
         setNovelId(binding.novel_id);
       })
       .catch((e) => {
+        if (!mountedRef.current) return;
         setNovelAiDir("");
         // binding 缺失不算静默 — 让用户知道要先去 binding 页面设置
         // （之前 .catch(()=>{}) 完全吞掉，用户不知道为啥 bridge 跑不动）
@@ -75,10 +85,11 @@ export default function BridgeConsole() {
         );
       });
     api.listChapters(projectId)
-      .then(setChapters)
+      .then((chs) => { if (mountedRef.current) setChapters(chs); })
       // 之前 .catch(() => setChapters([])) — listChapters 失败时静默显示空列表，
       // 用户看不到已导入的章节以为是 bug。改为 toast.error 提示真实原因。
       .catch((e) => {
+        if (!mountedRef.current) return;
         toast.error("加载章节列表失败", String(e));
         setChapters([]);
       });
@@ -257,10 +268,12 @@ export default function BridgeConsole() {
     appendLogLine("cmd", `$ ${label}`, "info");
     try {
       const data = await task();
+      if (!mountedRef.current) return;
       setPanelData(data);
       appendLogLine(label, formatPayload(data), "ok");
       if (label === "待审核" && Array.isArray(data)) setPending(data as BridgePendingItem[]);
     } catch (e) {
+      if (!mountedRef.current) return;
       setError(String(e));
       appendLogLine("error", String(e), "err");
       toast.error(`${label} 失败`, String(e));
@@ -274,16 +287,18 @@ export default function BridgeConsole() {
     appendLogLine("cmd", "$ 预算报告", "info");
     try {
       const data = await api.getBridgeBudget(projectId);
+      if (!mountedRef.current) return;
       setBudget(data);
       setPanelTitle("预算报告");
       setPanelData(data as PanelData);
       appendLogLine("预算报告", `已用 $${data.total_cost_usd.toFixed(4)} · ${data.record_count} 条记录`, "ok");
     } catch (e) {
+      if (!mountedRef.current) return;
       setError(String(e));
       appendLogLine("error", String(e), "err");
       toast.error("预算拉取失败", String(e));
     } finally {
-      setBudgetLoading(false);
+      if (mountedRef.current) setBudgetLoading(false);
     }
   }
 
@@ -536,7 +551,13 @@ export default function BridgeConsole() {
           </div>
         </div>
         <div className="button-row">
-          <button className="btn btn-primary" onClick={saveBinding} disabled={!novelAiDir.trim()}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={saveBinding}
+            disabled={!novelAiDir.trim()}
+            aria-label="保存 NovelAI 绑定"
+          >
             保存绑定
           </button>
         </div>
@@ -547,35 +568,69 @@ export default function BridgeConsole() {
         <h3 className="card__title">命令</h3>
         <div className="command-grid">
           <button
+            type="button"
             className="btn btn-primary"
             disabled={running}
             onClick={() => runControl("推送设定", () => api.pushConcept(projectId))}
+            aria-label="推送设定到 NovelAI"
           >
             推送设定
           </button>
           {RUN_COMMANDS.map((item) => (
             <button
+              type="button"
               key={item.label}
               className="btn"
               disabled={running}
               onClick={() => runBridge(item.label, item.command, item.args)}
+              aria-label={`运行 ${item.label}`}
             >
               {running && activeLabel === item.label ? "运行中…" : item.label}
             </button>
           ))}
-          <button className="btn" disabled={running} onClick={() => runControl("查看状态", () => api.getBridgeStatus(projectId))}>
+          <button
+            type="button"
+            className="btn"
+            disabled={running}
+            onClick={() => runControl("查看状态", () => api.getBridgeStatus(projectId))}
+            aria-label="查看 bridge 状态"
+          >
             查看状态
           </button>
-          <button className="btn" disabled={running || budgetLoading} onClick={fetchBudget}>
+          <button
+            type="button"
+            className="btn"
+            disabled={running || budgetLoading}
+            onClick={fetchBudget}
+            aria-label="拉取预算报告"
+          >
             {budgetLoading ? "拉取中…" : "预算报告"}
           </button>
-          <button className="btn" disabled={running} onClick={() => runControl("待审核", () => api.getBridgePending(projectId))}>
+          <button
+            type="button"
+            className="btn"
+            disabled={running}
+            onClick={() => runControl("待审核", () => api.getBridgePending(projectId))}
+            aria-label="查看待审核"
+          >
             待审核
           </button>
-          <button className="btn" disabled={running} onClick={() => runControl("拉取设定", () => api.pullSetting(projectId))}>
+          <button
+            type="button"
+            className="btn"
+            disabled={running}
+            onClick={() => runControl("拉取设定", () => api.pullSetting(projectId))}
+            aria-label="拉取设定"
+          >
             拉取设定
           </button>
-          <button className="btn" disabled={running} onClick={() => runControl("导入章节", () => api.importChapters(projectId))}>
+          <button
+            type="button"
+            className="btn"
+            disabled={running}
+            onClick={() => runControl("导入章节", () => api.importChapters(projectId))}
+            aria-label="导入章节"
+          >
             导入章节
           </button>
         </div>
@@ -602,7 +657,12 @@ export default function BridgeConsole() {
               />
               自动滚动
             </label>
-            <button className="btn btn-sm" onClick={() => setLogs([])}>清空</button>
+            <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => setLogs([])}
+            aria-label="清空日志"
+          >清空</button>
           </div>
         </div>
         <div className="log-stream" onClick={() => setAutoscroll(false)}>
