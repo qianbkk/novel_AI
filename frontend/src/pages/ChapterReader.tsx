@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type { ChapterFull, ChapterListItem, ChapterCharacter } from "../types";
@@ -28,6 +28,15 @@ export default function ChapterReader() {
   const [allChapters, setAllChapters] = useState<ChapterListItem[]>([]);
   const [characters, setCharacters] = useState<ChapterCharacter[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // 阅读设置（持久化到 localStorage）
   const [fontSize, setFontSize] = useState<number>(() => {
@@ -61,30 +70,42 @@ export default function ChapterReader() {
   useEffect(() => {
     if (!projectId || !chapterNo) return;
     setLoading(true);
+    setLoadError(null);
     Promise.all([
       api.listChapters(projectId),
       // 通过列表查找 chapter_id，再获取完整内容
     ])
       .then(async ([list]) => {
+        if (!mountedRef.current) return;
         setAllChapters(list);
         const target = list.find((c) => c.chapter_no === chapterNo);
         if (!target) {
+          if (!mountedRef.current) return;
           toast.error("找不到该章节", `chapter_no=${chapterNo}`);
           return;
         }
         const full = await api.getChapter(projectId, target.id);
+        if (!mountedRef.current) return;
         setChapter(full);
         // 加载出场人物
         try {
           const chars = await api.getChapterCharacters(projectId, target.id);
+          if (!mountedRef.current) return;
           setCharacters(chars);
         } catch (e) {
           // 不致命
           console.warn("getChapterCharacters failed:", e);
         }
       })
-      .catch((e) => toast.error("章节加载失败", String(e)))
-      .finally(() => setLoading(false));
+      .catch((e) => {
+        if (!mountedRef.current) return;
+        const msg = String(e);
+        setLoadError(msg);
+        toast.error("章节加载失败", msg);
+      })
+      .finally(() => {
+        if (mountedRef.current) setLoading(false);
+      });
   }, [projectId, chapterNo, toast]);
 
   const sortedChapters = useMemo(
@@ -113,7 +134,42 @@ export default function ChapterReader() {
     return (
       <div className={`reader-page reader-theme-${theme}`}>
         <div className="card">
-          <div className="banner banner-danger">章节不存在或加载失败</div>
+          <div className="banner banner-danger" role="alert">
+            <span>章节不存在或加载失败{loadError ? `：${loadError}` : ""}</span>
+            <button
+              type="button"
+              className="btn btn-sm"
+              onClick={() => {
+                if (!projectId || !chapterNo) return;
+                setLoading(true);
+                setLoadError(null);
+                // 触发刷新：把 chapterNo 用 noop 方式递增再回退 — 实际由外层 useEffect 重新拉取
+                // 这里直接调用 refresh via state flip
+                const refreshKey = `${projectId}-${chapterNo}`;
+                void refreshKey;
+                setLoading(true);
+                api.listChapters(projectId).then((list) => {
+                  if (!mountedRef.current) return;
+                  setAllChapters(list);
+                  const target = list.find((c) => c.chapter_no === chapterNo);
+                  if (!target) { setLoading(false); return; }
+                  return api.getChapter(projectId, target.id).then((full) => {
+                    if (!mountedRef.current) return;
+                    setChapter(full);
+                    setLoading(false);
+                  });
+                }).catch((e) => {
+                  if (!mountedRef.current) return;
+                  setLoadError(String(e));
+                  setLoading(false);
+                });
+              }}
+              disabled={loading}
+              aria-label="重试加载章节"
+            >
+              重试
+            </button>
+          </div>
           <Link to={`/projects/${projectId}/chapters`} className="btn btn-primary" style={{ marginTop: 12 }}>
             ← 返回章节列表
           </Link>
@@ -134,9 +190,11 @@ export default function ChapterReader() {
         </div>
         <div className="reader-topbar__right">
           <button
+            type="button"
             className="reader-icon-btn"
             onClick={() => setTocOpen((v) => !v)}
             title={tocOpen ? "隐藏目录" : "显示目录"}
+            aria-label={tocOpen ? "隐藏目录" : "显示目录"}
           >
             ☰
           </button>
@@ -156,10 +214,12 @@ export default function ChapterReader() {
             <div className="reader-toc__list">
               {sortedChapters.map((c) => (
                 <button
+                  type="button"
                   key={c.id}
                   className={`reader-toc__item ${c.chapter_no === chapterNo ? "is-current" : ""}`}
                   onClick={() => goToChapter(c.chapter_no)}
                   title={c.title || `第${c.chapter_no}章`}
+                  aria-label={`跳转到 ${c.title || `第${c.chapter_no}章`}`}
                 >
                   <span className="reader-toc__no">Ch{c.chapter_no}</span>
                   <span className="reader-toc__title">{c.title || "（无标题）"}</span>
@@ -198,7 +258,12 @@ export default function ChapterReader() {
             {/* 底部上下章导航 */}
             <nav className="reader-pager">
               {prevChapter ? (
-                <button className="reader-pager__btn" onClick={() => goToChapter(prevChapter.chapter_no)}>
+                <button
+                  type="button"
+                  className="reader-pager__btn"
+                  onClick={() => goToChapter(prevChapter.chapter_no)}
+                  aria-label={`上一章 ${prevChapter.title || `第${prevChapter.chapter_no}章`}`}
+                >
                   <span className="reader-pager__label">← 上一章</span>
                   <span className="reader-pager__title">Ch{prevChapter.chapter_no} · {prevChapter.title || "（无标题）"}</span>
                 </button>
@@ -208,7 +273,12 @@ export default function ChapterReader() {
                 </div>
               )}
               {nextChapter ? (
-                <button className="reader-pager__btn" onClick={() => goToChapter(nextChapter.chapter_no)}>
+                <button
+                  type="button"
+                  className="reader-pager__btn"
+                  onClick={() => goToChapter(nextChapter.chapter_no)}
+                  aria-label={`下一章 ${nextChapter.title || `第${nextChapter.chapter_no}章`}`}
+                >
                   <span className="reader-pager__label">下一章 →</span>
                   <span className="reader-pager__title">Ch{nextChapter.chapter_no} · {nextChapter.title || "（无标题）"}</span>
                 </button>
@@ -240,7 +310,13 @@ function ReaderSettings({
   const [open, setOpen] = useState(false);
   return (
     <div className="reader-settings">
-      <button className="reader-icon-btn" onClick={() => setOpen(!open)} title="阅读设置">Aa</button>
+      <button
+        type="button"
+        className="reader-icon-btn"
+        onClick={() => setOpen(!open)}
+        title="阅读设置"
+        aria-label="阅读设置"
+      >Aa</button>
       {open && (
         <div className="reader-settings__panel" onMouseLeave={() => setOpen(false)}>
           <div className="reader-settings__row">
@@ -266,10 +342,12 @@ function ReaderSettings({
             <div className="reader-settings__themes">
               {(["dark", "light", "sepia"] as Theme[]).map((t) => (
                 <button
+                  type="button"
                   key={t}
                   className={`reader-theme-btn reader-theme-btn--${t} ${theme === t ? "is-active" : ""}`}
                   onClick={() => setTheme(t)}
                   title={t}
+                  aria-label={`切换主题 ${t}`}
                 >
                   {t === "dark" ? "🌙" : t === "light" ? "☀️" : "📖"}
                 </button>

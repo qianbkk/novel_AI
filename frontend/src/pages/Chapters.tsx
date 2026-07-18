@@ -33,6 +33,8 @@ export default function Chapters() {
   const navigate = useNavigate();
   const [chapters, setChapters] = useState<ChapterListItem[]>([]);
   const [characters, setCharacters] = useState<Character[]>([]);
+  const [chaptersLoading, setChaptersLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const [chapterNo, setChapterNo] = useState(1);
   const [title, setTitle] = useState("");
@@ -48,6 +50,14 @@ export default function Chapters() {
 
   // 跳到指定章节号（输入 chapter_no 一键查看全文）
   const [jumpChapterNo, setJumpChapterNo] = useState("");
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   // 单章详情 → 独立 ChapterReader 页（见 App.tsx 路由），
 // 不再用 Dialog 弹窗模式
@@ -64,10 +74,17 @@ export default function Chapters() {
 
   async function refreshChapters() {
     if (!projectId) return;
+    setChaptersLoading(true);
+    setLoadError(null);
     try {
-      setChapters(await api.listChapters(projectId));
+      const list = await api.listChapters(projectId);
+      if (!mountedRef.current) return;
+      setChapters(list);
     } catch (e) {
-      toast.error("刷新章节列表失败", String(e));
+      if (!mountedRef.current) return;
+      setLoadError(String(e));
+    } finally {
+      if (mountedRef.current) setChaptersLoading(false);
     }
   }
 
@@ -77,7 +94,7 @@ export default function Chapters() {
     // getWorldbuildResult 失败 → characters 留空不影响主功能（章节写入不需要），
     // 但仍然 toast.warn 让用户知道「角色图谱没拿到」
     api.getWorldbuildResult(projectId)
-      .then((r) => setCharacters(r.characters))
+      .then((r) => { if (mountedRef.current) setCharacters(r.characters); })
       .catch((e) => toast.warn("角色图谱加载失败", String(e)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
@@ -88,9 +105,11 @@ export default function Chapters() {
     if (charactersByChapter[expandedLock]) return;
     api.getChapterCharacters(projectId, expandedLock)
       .then((chars) => {
+        if (!mountedRef.current) return;
         setCharactersByChapter((prev) => ({ ...prev, [expandedLock]: chars }));
       })
       .catch((e) => {
+        if (!mountedRef.current) return;
         toast.warn("出场人物加载失败", String(e));
         setCharactersByChapter((prev) => ({ ...prev, [expandedLock]: [] }));
       });
@@ -232,6 +251,7 @@ export default function Chapters() {
         {chapters.length > 0 && (
           <div className="page-header__actions">
             <button
+              type="button"
               className="btn btn-ghost"
               onClick={handleReimport}
               disabled={reimporting || aiGenerating}
@@ -240,17 +260,37 @@ export default function Chapters() {
               {reimporting ? "重新导入中…" : "🔄 重新派生（首句）"}
             </button>
             <button
+              type="button"
               className="btn btn-primary"
               onClick={() => handleAiGenerateTitles("sample5")}
               disabled={aiGenerating || reimporting}
               title="调 LLM 读章节内容生成真正像样的标题（先看 5 章样例）"
               style={{ marginLeft: 6 }}
+              aria-label="AI 生成章节标题"
             >
               {aiGenerating ? "生成中…" : "✨ AI 生成标题"}
             </button>
           </div>
         )}
       </div>
+
+      {chaptersLoading && chapters.length === 0 && (
+        <div className="loading-text">加载章节中…</div>
+      )}
+      {loadError && !chaptersLoading && (
+        <div className="banner banner-danger" role="alert">
+          <span>章节加载失败：{loadError}</span>
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => refreshChapters()}
+            disabled={chaptersLoading}
+            aria-label="重试加载章节"
+          >
+            重试
+          </button>
+        </div>
+      )}
 
       {/* AI 生成结果面板 */}
       {aiResult && (
