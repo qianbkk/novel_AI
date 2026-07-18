@@ -22,6 +22,42 @@ import pytest
 import uuid as _uuid
 
 
+# 生产模式必填的 env vars（除测试场景明确要"缺 X 触发 fail-fast"外一律用本 fixture 设置）。
+# Task 08 batch 2：8 个测试之前都要写 5-7 行 monkeypatch.setenv，重复明显，
+# 抽到一处后每条用例只需声明"哪个值被改 / 哪个 key 不设"。
+_PROD_REQUIRED_KEYS = ("NOVEL_PRODUCTION", "MASTER_KEY", "JWT_SECRET")
+_PROD_OPTIONAL_KEYS = ("ALLOWED_ORIGINS", "RATE_LIMIT_EXEMPT_LOCALHOST", "ALLOWED_PROXIES")
+
+
+def _apply_prod_env(monkeypatch, *, drop=(), **overrides):
+    """设置生产模式基线 env vars（任务 08 batch 2 抽取的 helper）。
+
+    - 默认设 NOVEL_PRODUCTION=1 + MASTER_KEY + JWT_SECRET
+    - overrides 里给 ALLOWED_ORIGINS / RATE_LIMIT_EXEMPT_LOCALHOST / ALLOWED_PROXIES 覆盖值
+    - drop 里的 key 故意不设（用于测"缺 X → fail-fast"）
+    """
+    monkeypatch.setenv("NOVEL_PRODUCTION", "1")
+    monkeypatch.setenv("MASTER_KEY", "x" * 44)
+    monkeypatch.setenv("JWT_SECRET", "x" * 64)
+    for k in _PROD_OPTIONAL_KEYS:
+        if k in overrides:
+            monkeypatch.setenv(k, overrides[k])
+        elif k not in drop:
+            # 默认给安全值，保证 prod 校验能通过
+            if k == "ALLOWED_ORIGINS":
+                monkeypatch.setenv(k, "https://app.example.com")
+            elif k == "RATE_LIMIT_EXEMPT_LOCALHOST":
+                monkeypatch.setenv(k, "0")
+            # ALLOWED_PROXIES 默认不设（可选）
+
+
+def _reload_settings():
+    """重读 app.config.settings（env 改了 → 必须重新构造 Settings 实例）。"""
+    import app.config as _cfg
+    _cfg.settings = _cfg.Settings()
+    return _cfg
+
+
 @pytest.fixture(autouse=True)
 def _isolate_env(monkeypatch):
     """每个测试前清掉可能干扰的 env vars。
@@ -29,9 +65,7 @@ def _isolate_env(monkeypatch):
     auth.py 用 JWT_SECRET/dev cache，需要在 main.py import 之前清掉，
     所以 monkeypatch.delenv（严格清理 "not present"）而不是 set。
     """
-    for k in ("NOVEL_PRODUCTION", "JWT_SECRET", "ALLOWED_ORIGINS",
-              "RATE_LIMIT_EXEMPT_LOCALHOST", "ALLOWED_PROXIES",
-              "MASTER_KEY", "DATABASE_URL"):
+    for k in _PROD_REQUIRED_KEYS + _PROD_OPTIONAL_KEYS + ("DATABASE_URL",):
         monkeypatch.delenv(k, raising=False)
 
 
@@ -44,15 +78,8 @@ def test_dev_mode_passes(monkeypatch):
 
 def test_production_localhost_origin_fails(monkeypatch):
     """NOVEL_PRODUCTION=1 + ALLOWED_ORIGINS 含 localhost → fail-fast。"""
-    monkeypatch.setenv("NOVEL_PRODUCTION", "1")
-    monkeypatch.setenv("MASTER_KEY", "x" * 44)
-    monkeypatch.setenv("ALLOWED_ORIGINS", "https://app.example.com,http://localhost:5293")
-    monkeypatch.setenv("RATE_LIMIT_EXEMPT_LOCALHOST", "0")
-    monkeypatch.setenv("JWT_SECRET", "x" * 64)
-
-    from app.config import get_allowed_origins_list
-    import app.config as _cfg
-    _cfg.settings = _cfg.Settings()
+    _apply_prod_env(monkeypatch, ALLOWED_ORIGINS="https://app.example.com,http://localhost:5293")
+    _reload_settings()
 
     from app.main import _check_production_hardening
     with pytest.raises(RuntimeError) as exc_info:
@@ -65,14 +92,8 @@ def test_production_wildcard_origin_fails(monkeypatch):
 
     通配 * 也是 dev 风格——会让 CORS 放行任何来源到生产 backend。
     """
-    monkeypatch.setenv("NOVEL_PRODUCTION", "1")
-    monkeypatch.setenv("MASTER_KEY", "x" * 44)
-    monkeypatch.setenv("ALLOWED_ORIGINS", "*")
-    monkeypatch.setenv("RATE_LIMIT_EXEMPT_LOCALHOST", "0")
-    monkeypatch.setenv("JWT_SECRET", "x" * 64)
-
-    import app.config as _cfg
-    _cfg.settings = _cfg.Settings()
+    _apply_prod_env(monkeypatch, ALLOWED_ORIGINS="*")
+    _reload_settings()
 
     from app.main import _check_production_hardening
     with pytest.raises(RuntimeError) as exc_info:
@@ -83,14 +104,8 @@ def test_production_wildcard_origin_fails(monkeypatch):
 
 def test_production_localhost_exempt_fails(monkeypatch):
     """NOVEL_PRODUCTION=1 + RATE_LIMIT_EXEMPT_LOCALHOST 未设 0 → fail-fast。"""
-    monkeypatch.setenv("NOVEL_PRODUCTION", "1")
-    monkeypatch.setenv("MASTER_KEY", "x" * 44)
-    monkeypatch.setenv("ALLOWED_ORIGINS", "https://app.example.com")
-    # 不设 RATE_LIMIT_EXEMPT_LOCALHOST（默认豁免）
-    monkeypatch.setenv("JWT_SECRET", "x" * 64)
-
-    import app.config as _cfg
-    _cfg.settings = _cfg.Settings()
+    _apply_prod_env(monkeypatch, drop=("RATE_LIMIT_EXEMPT_LOCALHOST",))
+    _reload_settings()
 
     from app.main import _check_production_hardening
     with pytest.raises(RuntimeError) as exc_info:
@@ -100,14 +115,9 @@ def test_production_localhost_exempt_fails(monkeypatch):
 
 def test_production_jwt_secret_required(monkeypatch):
     """NOVEL_PRODUCTION=1 + JWT_SECRET 未设 → fail-fast。"""
-    monkeypatch.setenv("NOVEL_PRODUCTION", "1")
-    monkeypatch.setenv("MASTER_KEY", "x" * 44)
-    monkeypatch.setenv("ALLOWED_ORIGINS", "https://app.example.com")
-    monkeypatch.setenv("RATE_LIMIT_EXEMPT_LOCALHOST", "0")
-    # JWT_SECRET 不设
-
-    import app.config as _cfg
-    _cfg.settings = _cfg.Settings()
+    _apply_prod_env(monkeypatch)
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    _reload_settings()
 
     from app.main import _check_production_hardening
     with pytest.raises(RuntimeError) as exc_info:
@@ -117,15 +127,12 @@ def test_production_jwt_secret_required(monkeypatch):
 
 def test_production_full_hardening_passes(monkeypatch):
     """全套 prod 配置 → 不抛。"""
-    monkeypatch.setenv("NOVEL_PRODUCTION", "1")
-    monkeypatch.setenv("MASTER_KEY", "x" * 44)
-    monkeypatch.setenv("ALLOWED_ORIGINS", "https://app.example.com,https://www.app.example.com")
-    monkeypatch.setenv("RATE_LIMIT_EXEMPT_LOCALHOST", "0")
-    monkeypatch.setenv("JWT_SECRET", "x" * 64)
+    _apply_prod_env(
+        monkeypatch,
+        ALLOWED_ORIGINS="https://app.example.com,https://www.app.example.com",
+    )
     monkeypatch.setenv("ALLOWED_PROXIES", "10.0.0.0/8")
-
-    import app.config as _cfg
-    _cfg.settings = _cfg.Settings()
+    _reload_settings()
 
     from app.main import _check_production_hardening
     _check_production_hardening()  # no raise
@@ -133,13 +140,13 @@ def test_production_full_hardening_passes(monkeypatch):
 
 def test_production_multiple_issues_combined(monkeypatch):
     """多个 issue 合并到一条错误（不让用户修一个重启一次）。"""
-    monkeypatch.setenv("NOVEL_PRODUCTION", "1")
-    monkeypatch.setenv("MASTER_KEY", "x" * 44)
-    monkeypatch.setenv("ALLOWED_ORIGINS", "http://localhost:5293")
-    # 不设 RATE_LIMIT_EXEMPT_LOCALHOST, 不设 JWT_SECRET
-
-    import app.config as _cfg
-    _cfg.settings = _cfg.Settings()
+    _apply_prod_env(
+        monkeypatch,
+        ALLOWED_ORIGINS="http://localhost:5293",
+        drop=("RATE_LIMIT_EXEMPT_LOCALHOST",),
+    )
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    _reload_settings()
 
     from app.main import _check_production_hardening
     with pytest.raises(RuntimeError) as exc_info:
