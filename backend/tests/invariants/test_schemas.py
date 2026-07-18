@@ -97,6 +97,17 @@ class TestChapterMetaSchema:
             "word_count": 2000,
         })
 
+    def test_validation_error_identifies_field_path(self):
+        with pytest.raises(SchemaError) as exc:
+            validate_chapter_meta({
+                "chapter_number": 1,
+                "chapter_role": "铺垫",
+                "chapter_goal": "展现绝境",
+                "score": 11,
+                "word_count": 2000,
+            })
+        assert "score" in str(exc.value)
+
 
 class TestDeriveTitle:
     """历史 bug：ch1 标题"【修改后正文】" / ch42 标题"【玄幻·人族秘史卷】第42章..."

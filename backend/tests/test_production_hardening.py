@@ -58,6 +58,15 @@ def _reload_settings():
     return _cfg
 
 
+@pytest.mark.parametrize("env_name", ["DATABASE_URL", "NOVEL_DATABASE_URL"])
+def test_database_url_alias_is_honored(monkeypatch, env_name):
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("NOVEL_DATABASE_URL", raising=False)
+    expected = "sqlite:///explicit-test-database.sqlite"
+    monkeypatch.setenv(env_name, expected)
+    assert _reload_settings().settings.database_url == expected
+
+
 @pytest.fixture(autouse=True)
 def _isolate_env(monkeypatch):
     """每个测试前清掉可能干扰的 env vars。

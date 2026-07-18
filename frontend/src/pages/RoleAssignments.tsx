@@ -114,7 +114,7 @@ export default function RoleAssignments() {
       <div className="card">
         <h3 className="card__title">模型路由</h3>
         {loading && <p className="loading-text">加载中…</p>}
-        {!loading && roles.length === 0 && <div className="empty-state">角色注册表还没有初始化。</div>}
+        {!loading && !loadError && roles.length === 0 && <div className="empty-state">角色注册表还没有初始化。</div>}
         {!loading && roles.length > 0 && (
           <div className="table-wrap">
             <table className="data-table">

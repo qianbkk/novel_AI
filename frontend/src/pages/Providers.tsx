@@ -273,7 +273,7 @@ export default function Providers() {
       <div className="card mt-24">
         <h3 className="card__title">已配置 Provider</h3>
         {loading && <p className="loading-text">加载中…</p>}
-        {!loading && providers.length === 0 && <div className="empty-state">还没有 Provider。</div>}
+        {!loading && !loadError && providers.length === 0 && <div className="empty-state">还没有 Provider。</div>}
         {providers.map((provider) => (
           <div className="entity-card provider-row" key={provider.id}>
             <div>

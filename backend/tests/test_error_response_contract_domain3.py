@@ -32,28 +32,6 @@ def client(api_client):
     yield api_client
 
 
-@pytest.fixture(autouse=True)
-def _cleanup_test_providers():
-    """domain 3 测试可能通过 POST 创建 chapters / outlines / chapter_titles，
-    这些记录会落到真实 backend/data/novel_assistant.db（isolated_test_db
-    只改 env，不重建 engine）。清理按可识别 name / 唯一 sentinel。
-    """
-    yield
-    try:
-        from app.database import SessionLocal
-        from app.models import Provider
-        db = SessionLocal()
-        try:
-            n = db.query(Provider).filter(
-                Provider.name.in_(["domain3-leak", "domain4-leak"])
-            ).delete(synchronize_session=False)
-            db.commit()
-        finally:
-            db.close()
-    except Exception:
-        pass
-
-
 # ──────────────────────────────────────────────────────────────────────
 # A. /outline/* 错误码
 # ──────────────────────────────────────────────────────────────────────

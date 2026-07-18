@@ -31,36 +31,6 @@ def client(api_client):
     yield api_client
 
 
-@pytest.fixture(autouse=True)
-def _cleanup_test_providers():
-    """domain 2 测试创建的 provider 必须清理，否则会污染
-    backend/tests/invariants/test_security.py::TestRotateMasterKeyEndToEnd
-    （它只清理 id.like("test-%")，但本测试 POST 创建的 provider 走 UUID id）。
-
-    注意：isolated_test_db 只设 DATABASE_URL 但不重建 app.database.engine，
-    所以本测试实际写入的是真实 backend/data/novel_assistant.db；
-    因此清理必须用 SessionLocal() 直接删除，不能依赖 temp 文件 unlink。
-    """
-    yield
-    try:
-        from app.database import SessionLocal
-        from app.models import Provider
-        db = SessionLocal()
-        try:
-            n = db.query(Provider).filter(
-                Provider.name.in_(["domain2-provider", "leak-test", "domain3-leak", "domain4-leak"])
-            ).delete(synchronize_session=False)
-            db.commit()
-            if n:
-                import sys as _sys
-                print(f"[domain2 cleanup] removed {n} leaked provider(s)", file=_sys.stderr)
-        finally:
-            db.close()
-    except Exception as e:
-        import sys as _sys
-        print(f"[domain2 cleanup] failed: {e}", file=_sys.stderr)
-
-
 # ──────────────────────────────────────────────────────────────────────
 # A. /providers 错误码
 # ──────────────────────────────────────────────────────────────────────

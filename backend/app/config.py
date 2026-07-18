@@ -38,7 +38,11 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 class Settings(BaseSettings):
     # ── 数据库 ──
     # 数据库：固定存在 backend/data/novel_assistant.db
-    database_url: str = f"sqlite:///{DATA_DIR / 'novel_assistant.db'}"
+    database_url: str = Field(
+        default=f"sqlite:///{DATA_DIR / 'novel_assistant.db'}",
+        validation_alias=AliasChoices("DATABASE_URL", "NOVEL_DATABASE_URL"),
+        description="SQLAlchemy database URL. Tests and deployments may override the local SQLite default.",
+    )
 
     # ── LLM 默认（mock 模式下全局生效，忽略下面的角色路由）──
     llm_provider: str = "mock"          # mock | deepseek | kimi | minimax | openai_compatible

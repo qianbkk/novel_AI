@@ -16,8 +16,15 @@ Scripts are CLI entry points, not a storage area for experiment code.
 
 - `monitor_run.py`: monitor a long-running local engine job.
 - `rewrite_length.py`: repair chapter lengths with an LLM.
-- `strip_chapter_headers.py`: clean legacy chapter headers.
+- `strip_chapter_headers.py`: inspect explicitly named chapter directories and, with `--apply`, clean legacy headers.
 
 Manual repair scripts must support an explicit target, avoid hard-coded project IDs, and default to a non-destructive or dry-run mode where practical.
+
+Example header cleanup (the first command only previews):
+
+```powershell
+python -m scripts.strip_chapter_headers --chapters-dir data/engine/output/chapters
+python -m scripts.strip_chapter_headers --chapters-dir data/engine/output/chapters --apply
+```
 
 One-off benchmark and migration scripts should use a local `local_*.py` filename and must not be committed. Delete them after the investigation is complete; durable behavior belongs in the application or test suite.

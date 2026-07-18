@@ -5,6 +5,7 @@ import type {
   OutlineOut, ChapterTask, ArcGeneratePayload,
 } from "../types";
 import { useToast } from "../components/Toast";
+import { Dialog } from "../components/Dialog";
 
 /**
  * Outline 页 — 弧级大纲管理
@@ -132,7 +133,7 @@ export default function Outline() {
       {loading && <div className="loading-text">加载中…</div>}
 
       {loadError && !loading && (
-        <div className="banner banner--error" role="alert">
+        <div className="banner banner-danger" role="alert">
           <span>加载失败：{loadError}</span>
           <button
             type="button"
@@ -145,7 +146,7 @@ export default function Outline() {
         </div>
       )}
 
-      {!loading && outlines.length === 0 && (
+      {!loading && !loadError && outlines.length === 0 && (
         <div className="card">
           <div className="empty-state empty-state--with-action">
             <div className="empty-state__icon" style={{ fontSize: 36 }}>📋</div>
@@ -171,15 +172,25 @@ export default function Outline() {
         />
       ))}
 
-      {/* 生成 modal */}
-      {showGenModal && (
-        <div className="modal-backdrop" onClick={() => setShowGenModal(false)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h3>✨ 生成弧级大纲</h3>
-            <p className="text-muted" style={{ fontSize: 12, marginBottom: 14 }}>
-              LLM 会根据弧名称 + 弧目标 + 章节数 拆出 chapter_task 任务单。
-              同 arc_id 已有大纲会被覆盖。
-            </p>
+      <Dialog
+        open={showGenModal}
+        title="生成弧级大纲"
+        sub="LLM 会根据弧名称、弧目标和章节数拆出任务单；相同弧 ID 的大纲会被覆盖。"
+        onClose={() => setShowGenModal(false)}
+        actions={(
+          <>
+            <button type="button" className="btn" onClick={() => setShowGenModal(false)}>取消</button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleGenerate}
+              disabled={generating !== null}
+            >
+              {generating !== null ? "生成中…" : "开始生成"}
+            </button>
+          </>
+        )}
+      >
             <div className="form-grid">
               <div className="field">
                 <label>弧 ID</label>
@@ -239,20 +250,7 @@ export default function Outline() {
                 placeholder="如：主角觉醒九天神脉"
               />
             </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 16 }}>
-              <button type="button" className="btn" onClick={() => setShowGenModal(false)}>取消</button>
-              <button
-                type="button"
-                className="btn btn-primary"
-                onClick={handleGenerate}
-                disabled={generating !== null}
-              >
-                {generating !== null ? "生成中…" : "开始生成"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      </Dialog>
     </div>
   );
 }

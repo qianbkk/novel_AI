@@ -455,7 +455,7 @@ export default function Chapters() {
           点击章节号 / 标题直接打开章节全文 Dialog（ESC 关闭）；点击 ▸ 展开章节衔接锁。
         </div>
 
-        {chapters.length === 0 ? (
+        {!chaptersLoading && !loadError && chapters.length === 0 ? (
           <div className="empty-state">
             <div className="empty-state__icon" aria-hidden="true">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
@@ -470,9 +470,9 @@ export default function Chapters() {
               从写作控制台点「写 N 章」，写完会自动出现在这里
             </div>
           </div>
-        ) : filteredChapters.length === 0 ? (
+        ) : !chaptersLoading && !loadError && filteredChapters.length === 0 ? (
           <div className="empty-state">当前筛选下没有章节。</div>
-        ) : (
+        ) : !chaptersLoading && !loadError ? (
           filteredChapters.map((c) => {
             const prev = chapters.find((x) => x.chapter_no === c.chapter_no - 1);
             const text = c.content_preview || "";
@@ -567,7 +567,7 @@ export default function Chapters() {
               </details>
             );
           })
-        )}
+        ) : null}
       </div>
 
       {/* ============ 高级操作（折叠）：手动录入 + 语义检索 ============ */}

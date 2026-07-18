@@ -29,7 +29,9 @@ export default function ChapterReader() {
   const [characters, setCharacters] = useState<ChapterCharacter[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const mountedRef = useRef(true);
+  const requestRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -68,29 +70,34 @@ export default function ChapterReader() {
   }, [tocOpen]);
 
   useEffect(() => {
-    if (!projectId || !chapterNo) return;
+    if (!projectId || !Number.isInteger(chapterNo) || chapterNo < 1) {
+      setChapter(null);
+      setLoading(false);
+      setLoadError("章节号无效");
+      return;
+    }
+    const requestId = ++requestRef.current;
     setLoading(true);
     setLoadError(null);
-    Promise.all([
-      api.listChapters(projectId),
-      // 通过列表查找 chapter_id，再获取完整内容
-    ])
-      .then(async ([list]) => {
-        if (!mountedRef.current) return;
+    setChapter(null);
+    setCharacters([]);
+    api.listChapters(projectId)
+      .then(async (list) => {
+        if (!mountedRef.current || requestRef.current !== requestId) return;
         setAllChapters(list);
         const target = list.find((c) => c.chapter_no === chapterNo);
         if (!target) {
-          if (!mountedRef.current) return;
+          setLoadError(`找不到第 ${chapterNo} 章`);
           toast.error("找不到该章节", `chapter_no=${chapterNo}`);
           return;
         }
         const full = await api.getChapter(projectId, target.id);
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || requestRef.current !== requestId) return;
         setChapter(full);
         // 加载出场人物
         try {
           const chars = await api.getChapterCharacters(projectId, target.id);
-          if (!mountedRef.current) return;
+          if (!mountedRef.current || requestRef.current !== requestId) return;
           setCharacters(chars);
         } catch (e) {
           // 不致命
@@ -98,15 +105,18 @@ export default function ChapterReader() {
         }
       })
       .catch((e) => {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || requestRef.current !== requestId) return;
         const msg = String(e);
         setLoadError(msg);
         toast.error("章节加载失败", msg);
       })
       .finally(() => {
-        if (mountedRef.current) setLoading(false);
+        if (mountedRef.current && requestRef.current === requestId) setLoading(false);
       });
-  }, [projectId, chapterNo, toast]);
+    return () => {
+      if (requestRef.current === requestId) requestRef.current += 1;
+    };
+  }, [projectId, chapterNo, reloadKey, toast]);
 
   const sortedChapters = useMemo(
     () => [...allChapters].sort((a, b) => a.chapter_no - b.chapter_no),
@@ -140,29 +150,7 @@ export default function ChapterReader() {
               type="button"
               className="btn btn-sm"
               onClick={() => {
-                if (!projectId || !chapterNo) return;
-                setLoading(true);
-                setLoadError(null);
-                // 触发刷新：把 chapterNo 用 noop 方式递增再回退 — 实际由外层 useEffect 重新拉取
-                // 这里直接调用 refresh via state flip
-                const refreshKey = `${projectId}-${chapterNo}`;
-                void refreshKey;
-                setLoading(true);
-                api.listChapters(projectId).then((list) => {
-                  if (!mountedRef.current) return;
-                  setAllChapters(list);
-                  const target = list.find((c) => c.chapter_no === chapterNo);
-                  if (!target) { setLoading(false); return; }
-                  return api.getChapter(projectId, target.id).then((full) => {
-                    if (!mountedRef.current) return;
-                    setChapter(full);
-                    setLoading(false);
-                  });
-                }).catch((e) => {
-                  if (!mountedRef.current) return;
-                  setLoadError(String(e));
-                  setLoading(false);
-                });
+                setReloadKey((value) => value + 1);
               }}
               disabled={loading}
               aria-label="重试加载章节"

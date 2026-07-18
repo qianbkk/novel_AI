@@ -36,38 +36,47 @@ def _scan_client_endpoints():
     client_path = REPO_ROOT / "frontend" / "src" / "api" / "client.ts"
     src = client_path.read_text(encoding="utf-8")
 
+    lines = src.splitlines()
     out = []
-    for i, line in enumerate(src.splitlines(), start=1):
-        m = re.search(r"request<[^>]+>\(\s*`([^`]+)`", line)
+    for i, line in enumerate(lines, start=1):
+        # Every request call keeps its first path argument on one line. Capture
+        # either a template literal or a normal string; options may continue on
+        # following lines.
+        m = re.search(r"\brequest(?:<.*>)?\(\s*([`\"'])(.*)", line)
         if not m:
             continue
-        path = m.group(1)
-        # 跳过条件查询字符串拼接里的 `\`...\`` 模板（不可解析为字符串字面量）
-        # 例：`/projects${search ? \`?${search}\` : ""}` —— query 部分嵌在模板里
-        # 判定：path 包含 `${` 与条件运算符 `?` 同时存在 — 视为不可解析
-        if "${" in path and (" ?" in path or "?" in path.split("${", 1)[0]):
-            # 含 ${var} 且本段里有未包裹进 backtick 的 ? — 整段非可解析
-            # 退路：去掉 `?${var...}` 之后的部分
-            pass
-        # 常规处理：去除 `?xxx` query 字符串
+        quote, remainder = m.groups()
+        if quote == "`":
+            if "`" not in remainder:
+                continue
+            path = remainder.rsplit("`", 1)[0]
+        else:
+            end = remainder.find(quote)
+            if end < 0:
+                continue
+            path = remainder[:end]
+
+        # The project list call conditionally appends a query template. Its
+        # stable route is the literal prefix before that expression.
+        if "${" in path and " ? " in path:
+            path = path.split("${", 1)[0]
         if "?" in path:
             path = path.split("?", 1)[0]
-        # 处理条件三元 `path${search ? \`?${search}\` : ""}` —— 不可静态求值
-        # 退化：取首个 ${ 之前的前缀作为 path（通常已是完整路径前缀）
-        if "${" in path:
-            base = path.split("${", 1)[0]
-            tail = "${" + path.split("${", 1)[1]
-            # 把整段条件（直到最深一层 }) 删掉 —— 简化：如果 base 是 /projects
-            # 直接用 base
-            path = base
-        # 把剩余的简单 `${name}` 占位规整为 `{name}` 形式以便匹配
         path = re.sub(r"\$\{([^}]+)\}", r"{\1}", path)
-
-        # 跳过空 path 或只带基础前缀的（如只剩 `/projects`）
         if not path.strip("/"):
             continue
 
-        method_m = re.search(r"method:\s*[\"']([A-Z]+)[\"']", line)
+        # Collect the complete request expression so a method on the next line
+        # is not silently treated as GET.
+        expression = line[line.find("request"):]
+        depth = expression.count("(") - expression.count(")")
+        cursor = i
+        while depth > 0 and cursor < len(lines):
+            next_line = lines[cursor]
+            expression += "\n" + next_line
+            depth += next_line.count("(") - next_line.count(")")
+            cursor += 1
+        method_m = re.search(r"method:\s*[\"']([A-Z]+)[\"']", expression)
         method = method_m.group(1).lower() if method_m else "get"
         out.append((method, path, i))
     return out
@@ -85,22 +94,28 @@ def _scan_backend_route_templates():
             tree = ast.parse(py.read_text(encoding="utf-8"))
         except SyntaxError:
             continue
-        # 找 router = APIRouter(prefix="...") 的 prefix
-        prefix = ""
+        # A module may expose more than one router (for example worldbuild's
+        # project router plus its global metadata router).
+        router_prefixes: dict[str, str] = {}
         for node in ast.walk(tree):
             if not isinstance(node, ast.Assign):
                 continue
             if len(node.targets) != 1:
                 continue
             tgt = node.targets[0]
-            if not isinstance(tgt, ast.Name) or tgt.id != "router":
+            if not isinstance(tgt, ast.Name):
                 continue
             v = node.value
             if not isinstance(v, ast.Call):
                 continue
+            func_name = v.func.id if isinstance(v.func, ast.Name) else ""
+            if func_name != "APIRouter":
+                continue
+            prefix = ""
             for kw in v.keywords:
                 if kw.arg == "prefix" and isinstance(kw.value, ast.Constant):
                     prefix = kw.value.value or ""
+            router_prefixes[tgt.id] = prefix
         # 累积所有 @router.METHOD("path")
         for node in ast.walk(tree):
             if not isinstance(node, ast.Call):
@@ -110,14 +125,15 @@ def _scan_backend_route_templates():
                 continue
             if not isinstance(func.value, ast.Name):
                 continue
-            if func.value.id != "router":
+            router_name = func.value.id
+            if router_name not in router_prefixes:
                 continue
             if not node.args:
                 continue
             arg = node.args[0]
             if not isinstance(arg, ast.Constant) or not isinstance(arg.value, str):
                 continue
-            path = (prefix or "") + arg.value
+            path = router_prefixes[router_name] + arg.value
             method = func.attr.lower()
             out.setdefault(method, set()).add(path)
     return out
@@ -169,12 +185,6 @@ def _find_backend_path(method: str, front_path: str, backend_routes) -> str | No
     for bp in candidates:
         if _path_matches(front_path, bp):
             return bp
-    # 可能 method 错（前端默认 GET 但后端用 POST 之类）— 也试一下
-    for alt_method in ("post", "put", "patch", "delete"):
-        if method != alt_method:
-            for bp in backend_routes.get(alt_method, set()):
-                if _path_matches(front_path, bp):
-                    return bp
     return None
 
 

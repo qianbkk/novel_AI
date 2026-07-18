@@ -31,6 +31,12 @@ class TestBackupDB:
       - 保留最近 N 份（默认 10），通过 mtime 排序删除最旧的。
     """
 
+    @pytest.fixture(autouse=True)
+    def _enable_backup_for_unit_tests(self, monkeypatch):
+        """The global test safety net skips backups; this class uses temp dirs."""
+        from app import backup_db
+        monkeypatch.delenv(backup_db.ENV_SKIP, raising=False)
+
     @staticmethod
     def _patch_dirs(monkeypatch, base):
         """Helper: redirect _data_dir & _backup_dir under base/.

@@ -15,6 +15,7 @@ pytest-discoverable 版本：所有函数命名 test_*，由 `pytest tests/` 自
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 import tempfile
 import uuid
@@ -26,11 +27,6 @@ _BACKEND = Path(__file__).resolve().parent.parent
 if str(_BACKEND) not in sys.path:
     sys.path.insert(0, str(_BACKEND))
 
-# 用临时 SQLite DB 避免污染真实数据
-_tmp_db = tempfile.NamedTemporaryFile(suffix=".sqlite", delete=False)
-_tmp_db.close()
-os.environ["DATABASE_URL"] = f"sqlite:///{_tmp_db.name}"
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -41,6 +37,13 @@ from app.models import RoleAssignment, BridgeRun, Project, WorldSetting, NovelAI
 
 # 一次性建表
 Base.metadata.create_all(bind=engine)
+_ENGINE_ROOT = Path(tempfile.mkdtemp(prefix="novel_ai_smoke_engines_"))
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _cleanup_engine_root():
+    yield
+    shutil.rmtree(_ENGINE_ROOT, ignore_errors=True)
 
 
 @pytest.fixture(scope="module")
@@ -69,9 +72,11 @@ def _seed_project_and_binding(db, project_id: str) -> None:
     db.merge(p)
     db.commit()
     db.merge(WorldSetting(project_id=project_id))
+    engine_dir = _ENGINE_ROOT / project_id
+    (engine_dir / "output").mkdir(parents=True, exist_ok=True)
     db.merge(NovelAIBinding(
         project_id=project_id,
-        novel_ai_dir=str(Path(__file__).resolve().parents[2] / "novel_AI"),
+        novel_ai_dir=str(engine_dir),
         novel_id=project_id,
     ))
     db.commit()

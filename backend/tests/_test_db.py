@@ -115,7 +115,7 @@ def _restore_sessionlocal(patched):
 
 
 @pytest.fixture
-def isolated_test_db():
+def isolated_test_db(monkeypatch):
     """提供一条真隔离的临时 sqlite DB（任务 08 root fix）。
 
     用法：
@@ -151,9 +151,10 @@ def isolated_test_db():
     # 替换已知直接 import SessionLocal 的模块的本地绑定
     patched = _patch_sessionlocal_in_known_modules(NewSessionLocal)
 
-    # 设 env + 重置 settings 缓存
-    os.environ["DATABASE_URL"] = f"sqlite:///{path}"
-    os.environ["JWT_SECRET"] = os.environ.get("JWT_SECRET", _MIN_JWT_SECRET)
+    # monkeypatch 在 fixture teardown 后恢复原环境，避免测试顺序污染。
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{path}")
+    if not __import__("os").environ.get("JWT_SECRET"):
+        monkeypatch.setenv("JWT_SECRET", _MIN_JWT_SECRET)
     try:
         _cfg.settings = Settings()
     except Exception:

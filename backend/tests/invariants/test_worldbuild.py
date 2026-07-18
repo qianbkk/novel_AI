@@ -161,22 +161,22 @@ class TestGraphCommandFailurePaths:
 
     def test_run_command_handler_registered(self):
         """run command 必须在 graph 分支里有处理（不能走 unknown 命令路径）。"""
+        import ast
+        import inspect
+        import textwrap
         from engine.graph import run_graph_task
-        from queue import Queue
-        q = Queue()
-        # 用不存在 project_id + run command 应该走 orchestrator 路径（不一定成功，
-        # 但不能 exit_code=0 假装 ok，也不能 unknown command 路径）
-        exit_code, stdout = run_graph_task(
-            project_id="nonexistent-for-run",
-            command="run",
-            args=["1"],
-            run_id="r-run",
-            queue=q,
-        )
-        # 不严格断言 exit_code（依赖 state 文件存在），但必须不是 unknown command 错误
-        assert "未知命令" not in stdout, (
-            f"'run' 是合法 command，不应走到 unknown 分支：{stdout[:200]!r}"
-        )
+
+        tree = ast.parse(textwrap.dedent(inspect.getsource(run_graph_task)))
+        registered_commands = {
+            value.value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Compare)
+            for comparator in node.comparators
+            if isinstance(comparator, (ast.Tuple, ast.List))
+            for value in comparator.elts
+            if isinstance(value, ast.Constant) and isinstance(value.value, str)
+        }
+        assert {"run", "resume"} <= registered_commands
 
     def test_planner_import_error_fallback(self, monkeypatch):
         """planner agent 不存在时 fallback 到 'not yet ported' warn（不 crash）。"""

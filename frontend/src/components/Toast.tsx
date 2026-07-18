@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, createContext, useContext, useRef } from "react";
+import { useEffect, useState, useCallback, createContext, useContext, useMemo, useRef } from "react";
 
 /**
  * Toast — 轻量通知组件
@@ -58,13 +58,13 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     [dismiss],
   );
 
-  const api: ToastContextValue = {
+  const api = useMemo<ToastContextValue>(() => ({
     push,
     success: (title, description) => push({ kind: "success", title, description }),
     info:    (title, description) => push({ kind: "info",    title, description }),
     warn:    (title, description) => push({ kind: "warn",    title, description }),
     error:   (title, description) => push({ kind: "error",   title, description }),
-  };
+  }), [push]);
 
   return (
     <ToastContext.Provider value={api}>
