@@ -5,9 +5,9 @@ import type { ChapterFull, ChapterListItem, ChapterCharacter } from "../types";
 import { useToast } from "../components/Toast";
 
 /**
- * ChapterReader — 章节阅读器（2026-07-16 Issue #11）
+ * ChapterReader — 章节阅读器
  *
- * 替代之前的 Dialog 弹窗模式。新增独立的「阅读模式」页面：
+ * 替代之前的 Dialog 弹窗模式。独立的「阅读模式」页面：
  *  - URL: /projects/:id/chapter/:chapterNo
  *  - 侧栏 TOC：所有章节列表，当前章节高亮
  *  - 上下章导航（顶部 + 底部）

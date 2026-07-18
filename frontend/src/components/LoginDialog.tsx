@@ -1,7 +1,7 @@
 /**
- * LoginDialog.tsx — Phase 4 多用户认证 UI
+ * LoginDialog.tsx — 多用户认证 UI
  *
- * 设计原则（与 backend/app/auth.py:Phase 3 memo 一致）：
+ * 设计原则（与 backend/app/auth.py 单租户本地默认 + prod 必须登录的策略一致）：
  *   - 单租户本地使用仍是默认场景：dev 模式下 dialog 通常不强制弹出。
  *   - 用户可以选 register / login / logout 三个动作。
  *   - production 模式（NOVEL_PRODUCTION=1 后端开启）必须先 register 或 login。

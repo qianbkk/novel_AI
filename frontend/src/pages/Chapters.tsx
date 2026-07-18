@@ -19,7 +19,7 @@ function deriveItemState(text: string): string {
   return matched.length > 0 ? matched.join("、") : "—";
 }
 
-// 修订 2026-07-16：判定章节状态用于筛选 / 状态指示器
+// 判定章节状态用于筛选 / 状态指示器
 type ChapterStatus = "ok" | "incomplete" | "escalate";
 function deriveStatus(c: ChapterListItem): ChapterStatus {
   const preview = c.content_preview || "";
@@ -49,13 +49,13 @@ export default function Chapters() {
   // 跳到指定章节号（输入 chapter_no 一键查看全文）
   const [jumpChapterNo, setJumpChapterNo] = useState("");
 
-  // 单章详情 → 改为独立 ChapterReader 页（见 App.tsx 路由），
-// 不再用 Dialog 弹窗模式（2026-07-16 Issue #11）
+  // 单章详情 → 独立 ChapterReader 页（见 App.tsx 路由），
+// 不再用 Dialog 弹窗模式
 
   const [expandedLock, setExpandedLock] = useState<string | null>(null);
   const [charactersByChapter, setCharactersByChapter] = useState<Record<string, ChapterCharacter[]>>({});
 
-  // 修订 2026-07-16：章节状态筛选（全部/完整/待修订/无标题）
+  // 章节状态筛选（全部/完整/待修订/无标题）
   const [statusFilter, setStatusFilter] = useState<"all" | ChapterStatus>("all");
 
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -96,14 +96,14 @@ export default function Chapters() {
       });
   }, [expandedLock, projectId, charactersByChapter]);
 
-  // 打开单章详情 — 修订 2026-07-16：跳到独立 ChapterReader 页（替代 Dialog）
+  // 打开单章详情 → 独立 ChapterReader 页（替代 Dialog）
   function openChapterDetail(chapterNo: number) {
     if (!projectId) return;
     navigate(`/projects/${projectId}/chapter/${chapterNo}`);
   }
 
   // 重新导入章节：从 output/chapters 重新派生 title/summary（用于修旧标题）
-  // 修订 2026-07-16：用户报告「300 章标题还是错的」 — 加这个按钮让用户手动触发
+  // 用户报告「300 章标题还是错的」 — 这个按钮让用户手动触发从输出目录重派生
   const [reimporting, setReimporting] = useState(false);
   async function handleReimport() {
     if (!projectId) return;
@@ -120,7 +120,7 @@ export default function Chapters() {
     }
   }
 
-  // 修订 2026-07-16（Issue #12）：调 LLM 真正生成章节标题
+  // 调 LLM 真正生成章节标题
   // 区别于 handleReimport：那个从内容首句机械截，这个走 LLM 读章节内容生成标题。
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiResult, setAiResult] = useState<{
@@ -200,7 +200,7 @@ export default function Chapters() {
 
   const chaptersDesc = useMemo(() => [...chapters].sort((a, b) => b.chapter_no - a.chapter_no), [chapters]);
 
-  // 修订 2026-07-16：状态分组 + 筛选
+  // 状态分组 + 筛选
   const statusCounts = useMemo(() => {
     const counts = { all: chapters.length, ok: 0, incomplete: 0, escalate: 0 };
     for (const c of chapters) {
@@ -214,7 +214,7 @@ export default function Chapters() {
     return chaptersDesc.filter((c) => deriveStatus(c) === statusFilter);
   }, [chaptersDesc, statusFilter]);
 
-  // 修订 2026-07-16：第一章 / 末章快跳（修订：跳独立 ChapterReader 页）
+  // 第一章 / 末章快跳（跳独立 ChapterReader 页）
   const firstChapter = chapters.length > 0 ? [...chapters].sort((a, b) => a.chapter_no - b.chapter_no)[0] : null;
   const lastChapter = chapters.length > 0 ? chaptersDesc[0] : null;
 
@@ -383,7 +383,7 @@ export default function Chapters() {
         </div>
         <h3 className="card__title">已保存章节 · {chapters.length} 章</h3>
 
-        {/* 修订 2026-07-16：状态筛选 chips */}
+        {/* 状态筛选 chips */}
         <div className="chapter-filter">
           <button
             className={`chapter-filter__chip ${statusFilter === "all" ? "is-active" : ""}`}

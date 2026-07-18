@@ -22,11 +22,11 @@ const FALLBACK_STAGES: { key: string; label: string }[] = [
 
 type StageStatus = "pending" | "active" | "done";
 
-// 修订 2026-07-16：top-level tabs 扩展为 8 个（合并原「世界立法」6 个 subtab）
+// top-level tabs 扩展为 8 个（合并原「世界立法」6 个 subtab）
 // 用户的反馈：世界构建内容太简陋 — 把 6 个 subtab 提升为 top-level 后，
 // 每个分类独立 tab，每个 tab 有自己的统计 + 详情视图 + 空状态。
 //
-// 修订 2026-07-16 v2：删掉「势力」tab（跟「人物阵营」重复，用户认知里
+// v2：删掉「势力」tab（跟「人物阵营」重复，用户认知里
 // 「人物阵营」就是 factions / 阵营，已合并到「人物阵营」tab 的 M04.3）。
 // 旧的「势力」tab 路由保留作为 fallback（避免外部链接 404，但内容是 banner）。
 const TOP_TABS = [
@@ -248,7 +248,7 @@ export default function WorldBuild() {
 
       {result && (
         <>
-          {/* 修订 2026-07-16：worldbuilding 摘要统计卡 */}
+          {/* worldbuilding 摘要统计卡 */}
           <div className="card worldbuild-summary">
             <div className="worldbuild-summary__grid">
               <div className="worldbuild-summary__stat">
@@ -293,7 +293,7 @@ export default function WorldBuild() {
             </div>
           )}
 
-          {/* 顶层 8 个 tab（修订 2026-07-16：原 3 个 + 6 个 subtab 全部提升） */}
+          {/* 顶层 8 个 tab（原 3 个 + 6 个 subtab 全部提升） */}
           <div className="tabs tabs--scrollable">
             {TOP_TABS.map((t) => (
               <button
@@ -314,7 +314,7 @@ export default function WorldBuild() {
           {/* ===================== 人物阵营 tab ===================== */}
           {topTab === "人物阵营" && (
             <div>
-              {/* Phase 6: 关系图谱（嵌入 tab 顶部） */}
+              {/* 关系图谱（嵌入 tab 顶部） */}
               <h3 className="module-heading">
                 <span className="module-heading__index">M04</span>
                 关系图谱
@@ -367,7 +367,7 @@ export default function WorldBuild() {
                   </div>
                 );
               })}
-              {/* 修订 2026-07-16：把 factions（势力）搬进「人物阵营」tab，让 tab 名实相符。
+              {/* factions（势力）搬进「人物阵营」tab，让 tab 名实相符。
                   修复前 factions 只在「势力」tab，但用户认知里「人物阵营」= 阵营。
                   关系网 → 势力阵营 自然延续（关系 → 阵营归属）。 */}
               <h3 className="module-heading">
@@ -519,7 +519,7 @@ export default function WorldBuild() {
                           {p.tiers_json.map((t, i) => {
                             const reached = i < Math.ceil(p.tiers_json!.length / 2);
                             const isCurrent = i === Math.floor(p.tiers_json!.length / 2);
-                            // Phase 7: tier 结构化展示 hover 详情
+                            // tier 结构化展示 hover 详情
                             const summary = (t as any).summary as string | undefined;
                             const breakCond = (t as any).break_condition as string | undefined;
                             const cultTime = (t as any).cultivation_time as string | undefined;
@@ -573,7 +573,7 @@ export default function WorldBuild() {
               ) : (
                 <div className="legislation-grid">
                   {result.currencies.map((c) => {
-                    // Phase 7: 结构化 detail_json
+                    // 结构化 detail_json
                     const dj = (c.detail_json || {}) as Record<string, unknown>;
                     const detail = dj.detail as string | undefined;
                     const exchange = dj.exchange_rate as string | undefined;
@@ -724,7 +724,7 @@ export default function WorldBuild() {
   );
 }
 
-// 修订 2026-07-16：通用空状态组件 — 当 tab 数据为空时显示 + 提供「重新构建」CTA
+// 通用空状态组件 — tab 数据为空时显示 + 提供「重新构建」CTA
 function EmptyTab({
   icon, title, hint, actionLabel, onAction,
 }: {
@@ -869,7 +869,7 @@ function FactionGraph({
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// Phase 5：世界观 tab 7 段结构化 + 历史时间线
+// 世界观 tab 7 段结构化 + 历史时间线
 // ════════════════════════════════════════════════════════════════════════════
 function WorldviewTab({ result }: { result: WorldBuildResult }) {
   const rich = (result as any).worldview_rich as null | Record<string, string>;
@@ -886,7 +886,7 @@ function WorldviewTab({ result }: { result: WorldBuildResult }) {
         <span className="module-heading__sub">主线记忆防线 L1</span>
       </h3>
 
-      {/* Phase 5: 故事核心 4 段（新结构） */}
+      {/* 故事核心 4 段 */}
       {storyCore ? (
         <>
           {storyCore.goal && (
@@ -922,7 +922,7 @@ function WorldviewTab({ result }: { result: WorldBuildResult }) {
         </div>
       ) : null}
 
-      {/* Phase 5: 7 段世界观（新结构） */}
+      {/* 7 段世界观 */}
       {rich ? (
         <div style={{ marginTop: 18 }}>
           <WorldviewSection title="宇宙观 / 天地法则" text={rich.cosmos} idx="M03.1" />
@@ -949,7 +949,7 @@ function WorldviewTab({ result }: { result: WorldBuildResult }) {
         </div>
       )}
 
-      {/* Phase 5: 历史时间线 */}
+      {/* 历史时间线 */}
       {timeline && timeline.length > 0 && (
         <div style={{ marginTop: 18 }}>
           <h3 className="module-heading">

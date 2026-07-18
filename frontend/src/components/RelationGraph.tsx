@@ -1,5 +1,5 @@
 /**
- * Phase 6：关系图谱 SVG 组件 — 嵌入 WorldBuild 人物阵营 tab 顶部。
+ * 关系图谱 SVG 组件 — 嵌入 WorldBuild 人物阵营 tab 顶部。
  *
  * 布局：
  *   - 中心：主角（role=='主角' 那一格）
@@ -85,8 +85,7 @@ export function RelationGraph({ projectId, onNodeClick }: Props) {
       .finally(() => setLoading(false));
   }, [projectId]);
 
-  // 修订 2026-07-16：把 useMemo 提到所有 early return 之前，避免 hooks 顺序错乱
-  // （之前 data=null 时跳过了 useMemo，data 到了又调用 → "Rendered more hooks" 崩溃 → 黑屏）。
+  // useMemo 必须置于所有 early return 之前，否则 hooks 顺序错乱 → "Rendered more hooks" 崩溃 → 黑屏。
   // data 为空时 collectMutualNodes([]) 立即返回空 Set，零开销。
   const mutualNodeIds = useMemo(
     () => collectMutualNodes(data?.edges || []),
