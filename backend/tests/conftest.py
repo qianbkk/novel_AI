@@ -139,3 +139,64 @@ def make_project(api_client):
         finally:
             db.close()
     return _make
+
+
+# ─── 任务 08 batch 5：Provider / LLM mock fixture ───────────────────────
+
+
+@pytest.fixture
+def mock_llm_router():
+    """LLMRouter 实例 + 强制 use_mock（不读 api_key）。
+
+    替代 test_mock_provider / test_longform_e2e 等文件里重复的：
+        from engine.llm.router import LLMRouter
+        monkeypatch.setenv("NOVEL_ENGINE_MOCK", "1")
+        r = LLMRouter("test")
+
+    用法：
+        def test_engine(mock_llm_router):
+            text, cost = mock_llm_router.call("writer", "sys", "user")
+            assert text
+
+    注意：本 fixture 不通过 env 触发，而是直接 use_mock()，避免污染 env
+    影响其他测试；teardown 时也无需还原 env。
+    """
+    from engine.llm.router import LLMRouter
+    r = LLMRouter("test-fixture-router")
+    r.use_mock()
+    return r
+
+
+@pytest.fixture
+def make_mock_provider(monkeypatch):
+    """注册一个临时 Provider 到 DB（name + provider_type + 默认 mock key），
+    返回它的 provider_id，用于测试需要 DB 中存在 Provider 但不想真调 LLM 的场景。
+
+    用法：
+        def test_x(make_mock_provider, mock_llm_router):
+            pid = make_mock_provider(name="test-prov", provider_type="mock")
+            # 之后可以通过 api_client.get(f"/providers/{pid}") 拿到
+    """
+    import uuid as _uuid
+    from app.models import Provider
+
+    def _make(name: str = "test-mock-provider", provider_type: str = "mock") -> str:
+        from app.database import SessionLocal
+        from app.security import encrypt_api_key, key_suffix
+        pid = str(_uuid.uuid4())
+        db = SessionLocal()
+        try:
+            p = Provider(
+                id=pid,
+                name=name,
+                provider_type=provider_type,
+                api_key_encrypted=encrypt_api_key("mock-test-key-not-real"),
+                api_key_suffix=key_suffix("mock-test-key-not-real"),
+                default_model="mock-model",
+            )
+            db.add(p)
+            db.commit()
+            return pid
+        finally:
+            db.close()
+    return _make
