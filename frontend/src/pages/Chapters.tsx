@@ -501,7 +501,7 @@ export default function Chapters() {
                 <summary
                   className={`chapter-row chapter-row--clickable ${isOpen ? "is-locked" : ""}`}
                   onClick={(e) => {
-                    // 修订 2026-07-16：整行可点击打开 Dialog（除了 ▸ 和右侧按钮）
+                    // 整行可点击打开 Dialog（除了 ▸ 和右侧按钮）
                     const tag = (e.target as HTMLElement).tagName;
                     if (tag === "DETAILS" || tag === "SUMMARY") {
                       // SUMMARY 的默认行为是切换 details，让 details toggle 自然发生

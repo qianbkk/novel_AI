@@ -1173,7 +1173,7 @@ label {
 }
 .chapter-row.is-locked .lock-mark { background: var(--color-stamp); opacity: 0.9; }
 
-/* 修订 2026-07-16：worldbuilding 摘要统计卡 */
+/* worldbuilding 摘要统计卡 */
 .worldbuild-summary { padding: var(--space-3) var(--space-4); }
 .worldbuild-summary__grid {
   display: grid;
@@ -1198,7 +1198,7 @@ label {
   font-size: 11.5px; color: var(--color-fg-3); text-transform: uppercase; letter-spacing: 0.05em;
 }
 
-/* 修订 2026-07-16：tabs 横滚支持（8 个 tab 不会挤） */
+/* tabs 横滚支持（8 个 tab 不会挤） */
 .tabs--scrollable {
   flex-wrap: nowrap !important; overflow-x: auto;
   padding-bottom: 4px;
@@ -1208,13 +1208,13 @@ label {
 .tabs--scrollable::-webkit-scrollbar-thumb { background: var(--color-border-2); border-radius: 3px; }
 .tabs--scrollable .tab-btn { white-space: nowrap; flex-shrink: 0; }
 
-/* 修订 2026-07-16：empty-state with action */
+/* empty-state with action */
 .empty-state--with-action {
   padding: var(--space-7) var(--space-4);
   display: flex; flex-direction: column; align-items: center;
 }
 
-/* 修订 2026-07-16：Modal 弹层（Outline 页用） */
+/* Modal 弹层（Outline 页用） */
 .modal-backdrop {
   position: fixed; inset: 0; z-index: 100;
   background: rgba(0, 0, 0, 0.6); backdrop-filter: blur(2px);
@@ -1232,7 +1232,7 @@ label {
 }
 .modal h3 { margin: 0 0 var(--space-2) 0; font-family: var(--font-display); font-size: 18px; }
 
-/* 修订 2026-07-16：数据表格（章节任务单） */
+/* 数据表格（章节任务单） */
 .data-table {
   width: 100%; border-collapse: collapse; font-size: 13px;
   background: var(--color-bg-1); border-radius: 6px; overflow: hidden;
@@ -1262,7 +1262,7 @@ label {
 .role-过渡 { background: rgba(255,255,255,0.05); color: var(--color-fg-3); }
 
 /* ════════════════════════════════════════════════════════════════
- * 章节阅读器（ChapterReader.tsx, 2026-07-16 Issue #11）
+ * 章节阅读器（ChapterReader.tsx）
  * 独立页面取代 Dialog 弹窗，提供阅读体验（侧栏 TOC + 上下章 + 阅读设置）
  * ════════════════════════════════════════════════════════════════ */
 .reader-page {
@@ -1413,7 +1413,7 @@ label {
 .reader-theme-btn--sepia { background: #f4ecd8; }
 .reader-theme-btn.is-active { border-color: var(--reader-accent); box-shadow: 0 0 0 2px rgba(74, 109, 217, 0.3); }
 
-/* 修订 2026-07-16：章节整行可点击的视觉提示 */
+/* 章节整行可点击的视觉提示 */
 .chapter-row--clickable { cursor: pointer; transition: background 120ms ease; padding-left: 4px; }
 .chapter-row--clickable:hover { background: rgba(107, 138, 253, 0.06); }
 .chapter-row__no--btn,
@@ -1826,7 +1826,7 @@ label {
   color: var(--color-accent-strong);
   font-weight: var(--weight-semibold);
 }
-/* Phase 7: tier hover 详情面板 */
+/* tier hover 详情面板 */
 .tier-rail__detail {
   display: none;
   position: absolute;
@@ -2399,7 +2399,7 @@ label {
 }
 .faction-graph svg { display: block; width: 100%; height: 320px; }
 
-/* ─── Phase 5: 历史时间线 ─── */
+/* ─── 历史时间线 ─── */
 .history-timeline {
   border-left: 2px solid var(--color-border-2);
   padding-left: var(--space-5);
@@ -2821,7 +2821,7 @@ dialog.ink-dialog__actions {
 }
 
 /* ===========================================================
-   7.5 世界构建摘要卡 / 详情对话框（Phase 7 重整）
+   7.5 世界构建摘要卡 / 详情对话框
    =========================================================== */
 
 .worldbuild-summary {
