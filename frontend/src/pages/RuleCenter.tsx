@@ -101,19 +101,28 @@ export default function RuleCenter() {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const dialogRef = useRef<HTMLDialogElement | null>(null);
   const dialogInputRef = useRef<HTMLInputElement | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useReveal(rootRef);
 
   // ── 初始加载：先读远端，再回退到 localStorage，再回退到默认 ──
   useEffect(() => {
     if (!projectId) return;
-    api.getProject(projectId).then(setProject).catch((e) => {
+    api.getProject(projectId).then((p) => { if (mountedRef.current) setProject(p); }).catch((e) => {
       // 之前 .catch(() => {}) — project_id 不存在 / 权限问题时 RuleCenter
       // 显示空白页无任何线索。改为 toast.error 留信号。
-      toast.error("加载项目失败", String(e));
+      if (mountedRef.current) toast.error("加载项目失败", String(e));
     });
     api.getRules(projectId)
       .then((cfg: RuleConfig) => {
+        if (!mountedRef.current) return;
         setStyle(cfg.style);
         setTaboos(cfg.taboos || []);
         setTemplate(cfg.template || PROMPT_TEMPLATES[1].name);
@@ -123,7 +132,7 @@ export default function RuleCenter() {
       .catch(() => {
         // 后端不可用 → 走 localStorage
         const saved = loadSaved(projectId);
-        if (saved) {
+        if (saved && mountedRef.current) {
           setStyle(saved.style as "webnovel" | "literary" | "wuxia");
           setTaboos(saved.taboos);
           setTemplate(saved.template);
@@ -138,8 +147,8 @@ export default function RuleCenter() {
     const t = window.setTimeout(() => {
       saveSaved(projectId, { style, taboos, template });
       api.putRules(projectId, { style, taboos, template })
-        .then(() => setSavedAt(Date.now()))
-        .catch((e) => setError(String(e)));
+        .then(() => { if (mountedRef.current) setSavedAt(Date.now()); })
+        .catch((e) => { if (mountedRef.current) setError(String(e)); });
     }, 400);
     return () => window.clearTimeout(t);
   }, [projectId, style, taboos, template, remoteLoaded]);
@@ -186,6 +195,7 @@ export default function RuleCenter() {
         taboos,
         // 不传 chapter_no → 后端取最新一章
       });
+      if (!mountedRef.current) return;
       setLastResults((prev) => ({ ...prev, [key]: res }));
       const out = [
         `摘要：${res.summary}` + (res.score ? `  评分：${res.score}/10` : ""),
@@ -196,15 +206,16 @@ export default function RuleCenter() {
       setToolOutputs((prev) => ({ ...prev, [key]: out }));
       setFlashKey(key);
       playTick(audioCtxRef, 520, 0.12);
-      window.setTimeout(() => setFlashKey(null), 1500);
+      window.setTimeout(() => { if (mountedRef.current) setFlashKey(null); }, 1500);
     } catch (e) {
+      if (!mountedRef.current) return;
       setError(String(e));
       setToolOutputs((prev) => ({
         ...prev,
         [key]: `[${key}] 后处理失败：${e}`,
       }));
     } finally {
-      setRunning(null);
+      if (mountedRef.current) setRunning(null);
     }
   }
 
@@ -267,12 +278,14 @@ export default function RuleCenter() {
         <div className="rule-grid">
           {STYLE_PRESETS.map((s) => (
             <button
+              type="button"
               key={s.key}
               className="legislation-card"
               onClick={() => {
                 setStyle(s.key);
                 playTick(audioCtxRef, 360, 0.06);
               }}
+              aria-label={`选择文笔风格 ${s.label}`}
               style={{
                 cursor: "pointer",
                 textAlign: "left",

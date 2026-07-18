@@ -57,18 +57,27 @@ export default function WorldBuild() {
   const [topTab, setTopTab] = useState<TopTab>("世界观");
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!projectId) return;
     // 加载项目信息。失败时显式设 error 状态，避免 page 永远卡在「加载中…」
     api.getProject(projectId)
       .then((p) => {
+        if (!mountedRef.current) return;
         setProject(p);
         if (p.status === "ready") {
-          api.getWorldbuildResult(projectId).then(setResult).catch((e) => setError(String(e)));
+          api.getWorldbuildResult(projectId).then((r) => { if (mountedRef.current) setResult(r); }).catch((e) => { if (mountedRef.current) setError(String(e)); });
         }
       })
-      .catch((e) => setError(String(e)));
+      .catch((e) => { if (mountedRef.current) setError(String(e)); });
     return () => eventSourceRef.current?.close();
   }, [projectId]);
 
@@ -128,26 +137,27 @@ export default function WorldBuild() {
 
     es.addEventListener("job_done", async (e) => {
       const payload: StageEvent = JSON.parse((e as MessageEvent).data);
-      setProgress(payload.progress_percent ?? 100);
+      if (mountedRef.current) setProgress(payload.progress_percent ?? 100);
       es.close();
-      setBuilding(false);
+      if (mountedRef.current) setBuilding(false);
       const fresh = await api.getWorldbuildResult(projectId);
+      if (!mountedRef.current) return;
       setResult(fresh);
       setProject((prev) => (prev ? { ...prev, status: "ready" } : prev));
     });
 
     es.addEventListener("job_failed", (e) => {
       const payload: StageEvent = JSON.parse((e as MessageEvent).data);
-      setError(`生成失败（${payload.stage}）：${payload.error}`);
+      if (mountedRef.current) setError(`生成失败（${payload.stage}）：${payload.error}`);
       es.close();
-      setBuilding(false);
+      if (mountedRef.current) setBuilding(false);
     });
 
     es.onerror = () => {
       // 连接异常断开（比如后端重启）；不在这里报错刷屏，留给用户重试
       // 显式 close() 防止某些浏览器重连逻辑（即便浏览器本来会自动关闭显式更稳）
       es.close();
-      setBuilding(false);
+      if (mountedRef.current) setBuilding(false);
     };
   }
 
@@ -156,14 +166,16 @@ export default function WorldBuild() {
     if (error) {
       return (
         <div className="card">
-          <div className="banner banner-danger">{error}</div>
+          <div className="banner banner-danger" role="alert">{error}</div>
           <p className="text-muted" style={{ marginTop: 12, fontSize: 12.5 }}>
             后端没起来？默认地址 <span className="text-mono">http://localhost:8132</span>
           </p>
           <button
+            type="button"
             className="btn btn-primary"
             style={{ marginTop: 12 }}
             onClick={() => window.location.reload()}
+            aria-label="重试加载世界构建"
           >
             重试
           </button>
@@ -193,20 +205,24 @@ export default function WorldBuild() {
         {project.status === "ready" && (
           <div className="page-header__actions">
             <button
+              type="button"
               className="btn"
               onClick={() => navigate(`/projects/${project.id}/rules`)}
             >
               规则中心
             </button>
             <button
+              type="button"
               className="btn"
               onClick={() => navigate(`/projects/${project.id}/chapters`)}
             >
               查看章节
             </button>
             <button
+              type="button"
               className="btn btn-primary"
               onClick={() => navigate(`/projects/${project.id}/bridge`)}
+              aria-label="去写作控制台"
             >
               ✍️ 去写作控制台 →
             </button>
@@ -220,14 +236,19 @@ export default function WorldBuild() {
         <div className="card">
           <h3 className="card__title">世界构建</h3>
           {!building && (
-            <button className="btn btn-primary" onClick={handleStart}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={handleStart}
+              aria-label="开始世界构建"
+            >
               ✨ 开始构建
             </button>
           )}
 
           {(building || progress > 0) && (
             <div className="mt-24">
-              <div className="progress-track">
+              <div className="progress-track" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
                 <div className="progress-fill" style={{ width: `${progress}%` }} />
               </div>
               <ul className="stage-list">
