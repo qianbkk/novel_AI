@@ -27,13 +27,8 @@ from _test_db import isolated_test_db  # noqa: E402,F401
 
 
 @pytest.fixture
-def client(isolated_test_db):
-    from fastapi.testclient import TestClient
-    from app.main import app
-    from app.database import Base, engine
-    Base.metadata.create_all(bind=engine)
-    with TestClient(app) as c:
-        yield c
+def client(api_client):
+    yield api_client
 
 
 @pytest.fixture(autouse=True)
