@@ -123,10 +123,13 @@ def invalidate_setting_cache() -> None:
 
 
 def _config() -> dict:
-    if not CONFIG_PATH.exists():
+    # NOVEL_AI_DIR env 优先，与 push-concept 的写入位置保持一致
+    from .config.paths import novel_config_path
+    config_path = novel_config_path()
+    if not config_path.exists():
         return {"novel_id": "default", "platform": "fanqie", "genre": "都市",
                 "setting_concept": "", "budget_limit_usd": 500.0}
-    with open(CONFIG_PATH, encoding="utf-8") as f:
+    with open(config_path, encoding="utf-8") as f:
         return json.load(f)
 
 

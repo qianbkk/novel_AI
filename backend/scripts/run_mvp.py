@@ -5,7 +5,7 @@
     python -m scripts.run_mvp <project_id> [--api http://localhost:8132] [--chapters 1] [--select A]
 
 跑法:
-    1. push-concept          推世界构建到 novel_AI/config/novel_config.json
+    1. push-concept          推世界构建到 backend/data/engine/config/novel_config.json
     2. planner               生成设定包
     3. pull-setting          回灌到 DB
     4. bootstrap             黄金三章 A/B/C
@@ -17,7 +17,6 @@
 """
 import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -26,7 +25,8 @@ from urllib.parse import urlencode
 import httpx
 
 BACKEND_ROOT = Path(__file__).resolve().parent.parent
-NOVEL_AI_DIR = BACKEND_ROOT.parent / "novel_AI"
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
 
 
 def stream_sse(client: httpx.Client, url: str, run_id: str, label: str) -> dict:
@@ -83,19 +83,9 @@ def call_bridge_run(client: httpx.Client, project_id: str, command: str, args: l
 
 def select_bootstrap_version(project_id: str, chapter: int, version: str) -> None:
     """bootstrap select N X — 直接 import 调 select_version(project_id)。
-    走 subprocess 的话 CLI 不接受 --novel_id，memory 会落到默认 key。"""
-    sys.path.insert(0, str(NOVEL_AI_DIR))
-    # 加载 novel_AI/.env（select_version 间接依赖 env 里的 API key，但 MVP
-    # 阶段只要 .env 存在就 OK；真的用 memory 还要有真 key）
-    env_file = NOVEL_AI_DIR / ".env"
-    if env_file.exists():
-        for line in env_file.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line and not line.startswith("#") and "=" in line:
-                k, v = line.split("=", 1)
-                os.environ.setdefault(k.strip(), v.strip())
-
-    from tools.bootstrap import select_version
+    走 subprocess 的话 CLI 不接受 --novel_id，memory 会落到默认 key。
+    select_version 纯文件操作 + 记忆初始化，不发 LLM 调用，无需 API key。"""
+    from engine.tools.bootstrap import select_version
     print(f"\n{'='*60}\n[bootstrap select {chapter} {version}] novel_id={project_id}\n{'='*60}")
     select_version(chapter, version, novel_id=project_id)
 
@@ -189,9 +179,10 @@ def main() -> int:
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
     # 检查 chapters 落盘
-    chapters_dir = NOVEL_AI_DIR / "output" / "chapters"
+    from engine.config.paths import CHAPTERS_DIR
+    chapters_dir = Path(CHAPTERS_DIR)
     ch_files = sorted(chapters_dir.glob("ch_*.txt")) if chapters_dir.exists() else []
-    print(f"\nnovel_AI/output/chapters/ 共 {len(ch_files)} 个章节文件")
+    print(f"\n{chapters_dir} 共 {len(ch_files)} 个章节文件")
     for f in ch_files[-3:]:
         size = f.stat().st_size
         print(f"  {f.name}  ({size} bytes)")

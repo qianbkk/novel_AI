@@ -18,17 +18,17 @@ if str(_BACKEND_ROOT) not in sys.path:
 
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
-from ..config.paths import NOVEL_CONFIG_PATH, SETTING_PATH_STR
+from ..config.paths import SETTING_PATH_STR, novel_config_path
 from ..utils import parse_llm_json_response, atomic_write_json
 from app.schema_validator import validate_setting_package, SchemaError
 
 
 def _find_novel_config() -> Path:
-    """novel_config.json 的真实落盘位置（backend 自己的路径，已通过 config.paths 集中管理）。
+    """novel_config.json 的真实落盘位置（NOVEL_AI_DIR env 优先，与 push-concept 写入端一致）。
 
     历史：早期版本曾 fallback 到 novel_AI/config/ 兼容旧 CLI 引擎；该目录已于 2026-07-16 删除。
     """
-    return Path(NOVEL_CONFIG_PATH)
+    return novel_config_path()
 
 
 def _load_novel_config() -> dict:

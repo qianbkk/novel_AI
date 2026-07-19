@@ -970,14 +970,15 @@ class TestPlannerAtomicWrite:
         # mock LLM 返回 valid JSON
         mock_router = MagicMock()
         mock_router.call.return_value = ('{"novel_id":"x","arc_outline":[],"key_characters":[],"power_system":{"levels":[]}}', 0.001)
-        # 写一个最小 novel_config.json 到 tmp_path，monkeypatch 覆盖 planner 自己 import 进来的常量
-        # （修订 2026-07-16：之前依赖 backend/data/engine/config/novel_config.json 真实存在，
-        # 跟外部状态耦合，环境 clean 时 fail。planner.py 在 import 时把 NOVEL_CONFIG_PATH
-        # 拷到了自己命名空间，所以要 patch planner_mod 而不是 paths_mod）
-        fake_cfg = tmp_path / "novel_config.json"
-        fake_cfg.write_text('{"novel_id":"x","platform":"fanqie","genre":"都市","setting_concept":"","budget_limit_usd":1.0}',
-                            encoding="utf-8")
-        monkeypatch.setattr(planner_mod, "NOVEL_CONFIG_PATH", fake_cfg)
+        # 写一个最小 novel_config.json 到 tmp_path，经 NOVEL_AI_DIR env 注入
+        # （修订 2026-07-19：planner 改用 env-aware novel_config_path()，
+        # 不再持有模块级 NOVEL_CONFIG_PATH 常量；测试与生产同走 env 路径）
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir()
+        (cfg_dir / "novel_config.json").write_text(
+            '{"novel_id":"x","platform":"fanqie","genre":"都市","setting_concept":"","budget_limit_usd":1.0}',
+            encoding="utf-8")
+        monkeypatch.setenv("NOVEL_AI_DIR", str(tmp_path))
         with patch.object(planner_mod, "get_active_router", return_value=mock_router), \
              patch.object(planner_mod, "validate_setting_package"):
             out_dir = tmp_path / "out"

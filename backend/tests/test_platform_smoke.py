@@ -224,6 +224,26 @@ def test_run_mvp_importable():
     assert callable(getattr(mod, "stream_sse", None))
 
 
+def test_run_mvp_select_uses_engine_bootstrap(capsys):
+    """select 步骤必须走 engine.tools.bootstrap，而不是已删除的 novel_AI/tools。
+
+    回归：独立版 novel_AI/ 删除后 run_mvp 仍从 novel_AI/tools 导入
+    select_version，新用户跑到 MVP 第 5 步必抛 ModuleNotFoundError。
+    传入不存在的章号：正确实现应打印「版本文件不存在」并安全返回。
+    """
+    from scripts.run_mvp import select_bootstrap_version
+
+    select_bootstrap_version("smoke-nonexistent-project", 9999, "A")
+    out = capsys.readouterr().out
+    assert "不存在" in out
+
+
+def test_run_mvp_has_no_stale_novel_ai_paths():
+    """run_mvp.py 不得再引用已删除的 novel_AI/ 目录（导入路径与产物检查路径）。"""
+    src = (_BACKEND / "scripts" / "run_mvp.py").read_text(encoding="utf-8")
+    assert 'parent / "novel_AI"' not in src, "run_mvp.py 仍指向已删除的 novel_AI/ 目录"
+
+
 def test_dashboard_command(client, project_id):
     """dashboard 命令走通 — novel_AI 实现自身的 bug 不归我们管，只断言事件流完整。
     TestClient 下 event loop 复用；shared client 保证不会触发

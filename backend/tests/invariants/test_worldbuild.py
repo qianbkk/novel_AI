@@ -815,6 +815,53 @@ class TestGraphPyEnvAwareOutputDir:
         )
 
 
+class TestNovelConfigEnvAware:
+    """novel_config.json 读取必须与 push-concept 的写入位置一致。
+
+    push-concept 写到 binding.novel_ai_dir/config/novel_config.json，
+    引擎子进程通过 NOVEL_AI_DIR env 拿到同一目录。若 planner /
+    orchestrator 只读固定的 backend/data/engine/config/ 路径，
+    绑定非默认目录的项目会读到上一个项目残留的设定概念（跨项目串味）。
+    """
+
+    def _make_config_dir(self, tmp_path):
+        import json
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir(parents=True)
+        cfg = {"novel_id": "env-aware-proof", "platform": "personal",
+               "genre": "都市", "setting_concept": "env 目录里的概念",
+               "budget_limit_usd": 1.0}
+        (cfg_dir / "novel_config.json").write_text(
+            json.dumps(cfg, ensure_ascii=False), encoding="utf-8")
+        return cfg
+
+    def test_planner_reads_config_from_novel_ai_dir(self, tmp_path, monkeypatch):
+        """NOVEL_AI_DIR 设置时，planner 读 env 目录下的 novel_config.json"""
+        expected = self._make_config_dir(tmp_path)
+        monkeypatch.setenv("NOVEL_AI_DIR", str(tmp_path))
+        from engine.agents.planner import _load_novel_config
+        cfg = _load_novel_config()
+        assert cfg.get("novel_id") == expected["novel_id"], (
+            "planner 忽略 NOVEL_AI_DIR，读了固定 backend 路径的 novel_config.json"
+        )
+
+    def test_orchestrator_reads_config_from_novel_ai_dir(self, tmp_path, monkeypatch):
+        """NOVEL_AI_DIR 设置时，orchestrator._config() 读 env 目录"""
+        expected = self._make_config_dir(tmp_path)
+        monkeypatch.setenv("NOVEL_AI_DIR", str(tmp_path))
+        from engine.orchestrator import _config
+        cfg = _config()
+        assert cfg.get("novel_id") == expected["novel_id"], (
+            "orchestrator 忽略 NOVEL_AI_DIR，读了固定 backend 路径的 novel_config.json"
+        )
+
+    def test_config_falls_back_to_backend_path_without_env(self, monkeypatch):
+        """NOVEL_AI_DIR 未设时，回退固定 backend/data/engine/config 路径（向后兼容）"""
+        monkeypatch.delenv("NOVEL_AI_DIR", raising=False)
+        from engine.config.paths import novel_config_path, NOVEL_CONFIG_PATH
+        assert str(novel_config_path()) == str(NOVEL_CONFIG_PATH)
+
+
 class TestPullSettingFKCascade:
     """P0 修复（iter #85）：setting_sync.py 删 Character 时没先删子表
     ChapterCharacter/EntityRelation/Foreshadowing 等 FK 引用，DELETE 报

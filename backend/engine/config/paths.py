@@ -44,6 +44,21 @@ for d in (DATA_DIR, ENGINE_DATA_DIR, OUTPUT_DIR, CHAPTERS_DIR,
     d.mkdir(parents=True, exist_ok=True)
 
 
+def novel_config_path() -> Path:
+    """novel_config.json 的运行时落盘位置（env-aware）。
+
+    push-concept 写到 binding.novel_ai_dir/config/novel_config.json，
+    引擎子进程经 NOVEL_AI_DIR env 拿到同一目录；读取端必须与写入端一致，
+    否则绑定非默认目录的项目会读到固定路径下残留的旧配置（跨项目串味）。
+    与 graph._engine_output_dir 同理：每次调用重读 os.environ，
+    不用 import-time 缓存（测试在 import 后改 env 时缓存会过时）。
+    """
+    val = os.environ.get("NOVEL_AI_DIR")
+    if val:
+        return Path(val) / "config" / "novel_config.json"
+    return NOVEL_CONFIG_PATH
+
+
 # Backward-compat string aliases (the old api_client.py and orchestrator
 # used string paths in some places).
 def _as_str(p: Path) -> str:
