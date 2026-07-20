@@ -17,6 +17,7 @@ from .logging_setup import get_logger
 from .models import (
     Character, Chapter, ChapterCharacter, EntityRelation, Faction,
     Foreshadowing, PowerSystem, WorldSetting,
+    Project,
 )
 from .schema_validator import (
     SchemaError, validate_character_card, validate_entity_relation_rich,
@@ -539,6 +540,14 @@ async def extract_setting_from_chapters(
             project_id, misc_payload, name_to_id, warnings, db,
         )
         rebuilt_edges = _rebuild_chapter_character_edges(project_id, db)
+        # 标记 project.status=ready，让 push-concept 的 _worldbuild_done 放行。
+        # 与 worldbuild/orchestrator.py:75 同语义 —— 「有完整设定可推」即 ready。
+        # worldbuild 仍能覆盖（_check_conflict_and_prepare 默认 raise 409 保护，
+        # 但 API 路径上 worldbuild 入口是直接跑 STAGES，不经过 extract 接口），
+        # 本任务只解决「提取后能 push-concept / 跑引擎」这一段。
+        project = db.get(Project, project_id)
+        if project is not None:
+            project.status = "ready"
         db.commit()
     except ExtractConflictError:
         db.rollback()

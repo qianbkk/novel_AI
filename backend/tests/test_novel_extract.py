@@ -372,3 +372,69 @@ class TestExtractSettingApi:
             json={},
         )
         assert r.status_code == 200
+
+    def test_extract_marks_project_ready(
+        self, api_client, project_with_chapters,
+    ):
+        """提取成功后 project.status 应为 'ready'，让 push-concept 的
+        _worldbuild_done 放行 —— 否则 400 'worldbuild must be completed'。
+
+        这是 task #4 e2e 验证发现的真实缺环：extract 与 worldbuild 写同一组
+        表，但只有后者会标 ready，会让 push-concept 误以为没跑过。
+        """
+        # 初始状态：fixture 新建时 status 默认 'draft'/'idle'（具体值不重要）
+        from app.database import SessionLocal
+        from app.models import Project
+        db = SessionLocal()
+        try:
+            before = db.get(Project, project_with_chapters)
+            assert before is not None
+            initial_status = before.status
+            assert initial_status != "ready", "fixture 应保证初始非 ready"
+        finally:
+            db.close()
+
+        r = api_client.post(
+            f"/projects/{project_with_chapters}/chapters/extract-setting",
+            json={},
+        )
+        assert r.status_code == 200, r.text
+
+        db = SessionLocal()
+        try:
+            after = db.get(Project, project_with_chapters)
+            assert after.status == "ready", \
+                f"extract 成功后 project.status 应为 'ready'，实际 {after.status!r}"
+        finally:
+            db.close()
+
+    def test_extract_ready_unblocks_push_concept(
+        self, api_client, project_with_chapters,
+    ):
+        """extract 成功后 push-concept 不再 400 —— e2e 链路打通。
+
+        push-concept 还需要 NovelAIBinding（_get_project_and_binding），所以
+        这里也种一个 binding，再验证 200。
+        """
+        from app.database import SessionLocal
+        from app.models import NovelAIBinding
+
+        db = SessionLocal()
+        try:
+            db.add(NovelAIBinding(
+                project_id=project_with_chapters,
+                novel_ai_dir="backend/data/engine-e2e",
+                novel_id=project_with_chapters,
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        api_client.post(
+            f"/projects/{project_with_chapters}/chapters/extract-setting",
+            json={},
+        )
+        r = api_client.post(
+            f"/projects/{project_with_chapters}/bridge/push-concept",
+        )
+        assert r.status_code == 200, r.text
