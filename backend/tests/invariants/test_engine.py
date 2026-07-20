@@ -2483,3 +2483,144 @@ class TestPlannerMockPayloadValid:
             "tracker mock 必须携带 active_threads（writer 的【当前剧情线】依赖）"
         )
         assert saved, "run_tracker 必须调用 save_l2 落盘"
+
+    def test_mock_injects_snapshot_into_outline_text(self, tmp_path, monkeypatch):
+        """task #6：router._mock 在有 worldbuild_snapshot 时必须把主角名/配角名/
+        力量体系/伏笔注入 outline / tracker / compliance 等 mock 文本，避免落
+        盘 ch_0001.txt 全是「（Mock）主角」硬编码。
+
+        没有 snapshot 时旧行为保留（向后兼容）。"""
+        from engine.llm import router as router_mod
+        from engine.llm.router import _MOCK_RESPONSES, LLMRouter
+
+        # 1) 写一个含 worldbuild_snapshot 的 novel_config.json
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir()
+        snapshot = {
+            "characters": [
+                {"name": "林渊", "role": "主角"},
+                {"name": "苏晚栀", "role": "重要配角"},
+                {"name": "孟浩", "role": "反派"},
+            ],
+            "world_view_rich": {
+                "geography": "（Snap）云州七区是凡人聚居之地",
+                "cosmos": "（Snap）天道与灵气并行运转",
+            },
+            "power_systems": [{
+                "name": "（Snap）债感修炼体系",
+                "tiers": [{"level": 1, "name": "感债者"}, {"level": 2, "name": "识债者"}],
+            }],
+            "foreshadowings": [
+                {"content": "（Snap）主角父母早年破产与孟家旧怨有关"},
+            ],
+        }
+        cfg_payload = {
+            "novel_id": "snap-mock", "platform": "fanqie", "genre": "都市",
+            "setting_concept": "（无）", "budget_limit_usd": 1.0,
+            "worldbuild_snapshot": snapshot,
+        }
+        (cfg_dir / "novel_config.json").write_text(
+            __import__("json").dumps(cfg_payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("NOVEL_AI_DIR", str(tmp_path))
+
+        router = LLMRouter()
+        # outline 是 JSON 数组（mock_text 含多个 chapter task）
+        outline_text, _ = router._mock(
+            "outline", "", "", "mock", 4096, 0.7,
+        )
+        # tracker 是 dict 含「（Mock）主角」
+        tracker_text, _ = router._mock(
+            "tracker", "", "", "mock", 4096, 0.7,
+        )
+
+        # 主角名必须出现，且「（Mock）主角」硬编码必须消失（mock 注入成功）
+        assert "林渊" in outline_text, (
+            f"outline mock 没注入主角名。实际开头:\n{outline_text[:400]}"
+        )
+        assert "苏晚栀" in outline_text or "孟浩" in outline_text, (
+            f"outline mock 没注入配角/反派名。\n{outline_text[:400]}"
+        )
+        assert "（Mock）主角" not in outline_text, (
+            "outline mock 文本里还残留「（Mock）主角」硬编码"
+        )
+
+        # tracker 字段也注入
+        import json as _json
+        tracker = _json.loads(tracker_text)
+        # character_states 旧 mock 写的是「（Mock）主角」；现在应该含「林渊」
+        assert any("林渊" in k for k in (tracker.get("character_states") or {})), \
+            f"tracker.character_states 没含林渊：{tracker}"
+        assert "（Mock）主角" not in tracker_text
+
+    def test_mock_no_snapshot_keeps_hardcoded(self, tmp_path, monkeypatch):
+        """task #6 负向：没有 worldbuild_snapshot 时 mock 文本保持旧的
+        「（Mock）主角」硬编码（向后兼容，不破坏旧测试）。"""
+        from engine.llm import router as router_mod
+        from engine.llm.router import LLMRouter
+
+        # 写一个不含 snapshot 的 novel_config.json
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir()
+        (cfg_dir / "novel_config.json").write_text(
+            '{"novel_id":"no-snap","platform":"fanqie","genre":"都市",'
+            '"setting_concept":"","budget_limit_usd":1.0}',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("NOVEL_AI_DIR", str(tmp_path))
+
+        router = LLMRouter()
+        outline_text, _ = router._mock(
+            "outline", "", "", "mock", 4096, 0.7,
+        )
+        tracker_text, _ = router._mock(
+            "tracker", "", "", "mock", 4096, 0.7,
+        )
+        # 旧硬编码保留
+        assert "（Mock）主角" in outline_text
+        assert "（Mock）主角" in tracker_text
+
+    def test_writer_mock_injects_snapshot_characters(self, tmp_path, monkeypatch):
+        """task #6：writer mock 在有 snapshot 时生成的章节文本必须含主角名 +
+        世界关键词。ch_0001.txt 的落盘 e2e 验证就靠这个。"""
+        from engine.llm import router as router_mod
+        from engine.llm.router import LLMRouter
+
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir()
+        snapshot = {
+            "characters": [
+                {"name": "林渊", "role": "主角"},
+                {"name": "苏晚栀", "role": "重要配角"},
+            ],
+            "world_view_rich": {
+                "geography": "（Snap）云州七区是凡人聚居之地",
+            },
+            "foreshadowings": [
+                {"content": "（Snap）父母破产与孟家旧怨有关"},
+            ],
+        }
+        (cfg_dir / "novel_config.json").write_text(
+            __import__("json").dumps({
+                "novel_id": "writer-snap", "platform": "fanqie", "genre": "都市",
+                "setting_concept": "", "budget_limit_usd": 1.0,
+                "worldbuild_snapshot": snapshot,
+            }, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("NOVEL_AI_DIR", str(tmp_path))
+
+        router = LLMRouter()
+        text, _ = router._mock(
+            "writer", "", "", "mock", 4000, 0.7,
+        )
+        # writer 章节必须含 snapshot 关键词（这是 ch_0001.txt 落盘的内容）
+        assert "林渊" in text, f"writer mock 章节没含主角名:\n{text[:600]}"
+        assert "苏晚栀" in text, f"writer mock 章节没含配角名:\n{text[:600]}"
+        # 世界关键词（geography 第一句前缀 ≤18 字）
+        assert "云州" in text, f"writer mock 章节没含世界关键词:\n{text[:600]}"
+        # 长度满足 call_with_length_budget 区间（≥ target_chars 附近）
+        assert len(text) >= 3000, f"writer mock 章节字数不足：{len(text)}"
+        # 仍含「（Mock）」标记，证明是 mock 模式（不是误认为真 LLM）
+        assert "（Mock）" in text

@@ -319,17 +319,56 @@ class LLMRouter:
         结构以模拟真实生成场景。writer 模拟生成 ~2000 字章节文本（满足
         call_with_length_budget 区间），其他 agent 返回符合 schema 的 JSON。
 
+        task #6 增补：当 NOVEL_AI_DIR/config/novel_config.json 含 worldbuild_snapshot
+        （导入小说走 extract 路径，或 worldbuild 完成后），把 snapshot 里的主角名
+        /配角名/世界关键词注入静态模板 —— 否则落盘 ch_0001.txt 全是「（Mock）主角」
+        这样的硬编码，与用户在 worldbuild 阶段定稿的实体脱节，e2e 链路断在最后一公里。
+        注：snapshot 真实 shape 来自 _build_worldbuild_snapshot（setting_sync.py:65），
+        字段扁平（name/role/basic/personality/background/abilities/...）。
+
         注意：Mock 模式**只是引擎机制测试**，不验证生成内容质量。生产
         生成质量仍要走真 provider。
         """
         text = _MOCK_RESPONSES.get(agent, _MOCK_DEFAULT_TEXT)
         # writer 模拟接近目标字数的章节（满足 call_with_length_budget）
         if agent == "writer":
-            text = _mock_chapter_text(agent_name=agent, target_chars=max_tokens)
+            text = _mock_chapter_text(
+                agent_name=agent, target_chars=max_tokens,
+                snapshot=self._load_snapshot(),
+            )
+        else:
+            # outline / tracker / compliance 等：把快照字段注入 JSON 文本
+            snap = self._load_snapshot()
+            if snap:
+                text = _inject_snapshot_into_mock_text(agent, text, snap)
         # 计费：模拟 $0.001/调用
         cost = 0.001
         self._record(agent, cost, len(user_prompt) // 4, len(text) // 4)
         return text, cost
+
+    def _load_snapshot(self) -> dict:
+        """从 NOVEL_AI_DIR/config/novel_config.json 读 worldbuild_snapshot。
+        单进程内缓存一次，进程内后续调用零 IO。失败/缺文件 → 返回 {}，
+        此时 mock 走纯硬编码（保留旧行为，向后兼容）。
+
+        task #6：让 outline / writer / tracker 的 mock 在有快照时反映用户
+        在 worldbuild 阶段定稿的实体（主角名/配角名/伏笔），而不是永远
+        返回「（Mock）主角」硬编码。
+        """
+        if hasattr(self, "_cached_snapshot"):
+            return self._cached_snapshot  # type: ignore[attr-defined]
+        snap: dict = {}
+        try:
+            from ..config.paths import novel_config_path
+            cfg_path = novel_config_path()
+            if cfg_path.exists():
+                import json as _json
+                cfg = _json.loads(cfg_path.read_text(encoding="utf-8"))
+                snap = cfg.get("worldbuild_snapshot") or {}
+        except Exception:
+            snap = {}
+        self._cached_snapshot = snap  # type: ignore[attr-defined]
+        return snap
 
     def _anthropic(self, agent, system_prompt, user_prompt, model, max_tokens,
                    temperature, use_cache=False, cached_system=None):
@@ -870,20 +909,100 @@ _MOCK_RESPONSES: dict[str, str] = {
 _MOCK_DEFAULT_TEXT = "（Mock）默认响应：未识别的 agent，请检查 routes 配置。"
 
 
-def _mock_chapter_text(agent_name: str, target_chars: int) -> str:
+def _mock_chapter_text(agent_name: str, target_chars: int, snapshot: dict | None = None) -> str:
     """生成接近 target_chars 字数的章节文本（满足 call_with_length_budget）。
 
     中文字符，每个字占 1 字符；句末用「。」保证 _truncate_at_sentence_boundary
     能找到句子边界。
+
+    task #6：snapshot 非空时，首段注入主角名 + 配角名 + 世界关键词 + 伏笔，让
+    ch_0001.txt 含 snapshot 关键词（落盘 e2e 验证用）。后续重复段保持基本 unit。
     """
-    sentence_unit = "（Mock）这是 mock writer 生成的测试章节，用于验证 engine 端到端机制，包括 schema 校验、字数 budget 截断 + 续写、orchestrator 编排。"
-    # 重复直到接近 target_chars
-    out = ""
+    snap = snapshot or {}
+    snap_chars = snap.get("characters") or []
+    snap_main = next((c for c in snap_chars if c.get("role") == "主角"), snap_chars[0] if snap_chars else None)
+    main_name = (snap_main or {}).get("name") or "（Mock）主角"
+    other_names = [
+        c.get("name") for c in snap_chars
+        if c.get("name") and c.get("name") != main_name
+    ][:2]
+    other_str = "、".join(other_names) if other_names else "（Mock）配角"
+    wvr = snap.get("world_view_rich") or {}
+    world_kw = (wvr.get("geography") or wvr.get("cosmos") or "").split("。")[0][:20]
+    world_kw = world_kw or "（Mock）云州"
+    fs = snap.get("foreshadowings") or []
+    fs_first = fs[0].get("content", "（Mock）神秘符号") if fs else "（Mock）神秘符号"
+
+    opening = (
+        f"（Mock）{main_name}站在{world_kw}的清晨，身旁是{other_str}。"
+        f"{main_name}摸了摸怀里的老旧铜怀表，想起上一世的某个深夜。"
+        f"系统提示音在脑海中响起——本章埋下伏笔：「{fs_first}」。"
+    )
+    sentence_unit = (
+        f"（Mock）{main_name}与{other_str}合计，第一笔交易开始启动。"
+        f"{main_name}深吸一口气，{world_kw}的风带着灵气与烟火气。"
+        f"对{other_str}说：「账上说话。」这一句在{world_kw}上空回荡。"
+        f"引擎继续推进 orchestrator 编排、字数 budget、schema 校验。"
+    )
+    out = opening
     while len(out) < target_chars:
         out += sentence_unit
-    # 截到 target_chars 附近 + 句末标点
     cut = _truncate_at_sentence_boundary(out, target_chars)
     return cut if cut else out[:target_chars]
+
+
+def _inject_snapshot_into_mock_text(agent: str, text: str, snapshot: dict) -> str:
+    """把 snapshot 字段注入 mock 文本（outline / tracker / compliance 等）。
+
+    策略：把模板里所有出现的「（Mock）主角」替换成 snapshot 的主角名；
+    「（Mock）配角A」替换成第一个配角名；「（Mock）反派B」替换成第二个；
+    「（Mock）云州」替换成 snapshot.world_view_rich.geography 第一句前缀；
+    「（Mock）债感修炼体系」/「（Mock）感债者」替换成 snapshot 力量体系。
+    这样 ch_0001.txt 与 outline task 都会含 snapshot 关键词。
+
+    替换失败时（snapshot 缺字段）→ 文本原样保留旧 mock 字面量，向后兼容。
+    """
+    if not snapshot:
+        return text
+
+    chars = snapshot.get("characters") or []
+    if not chars:
+        return text
+    main_char = next((c for c in chars if c.get("role") == "主角"), chars[0])
+    main_name = main_char.get("name") or "（Mock）主角"
+    others = [c.get("name") for c in chars if c.get("name") and c.get("name") != main_name]
+    second_name = others[0] if len(others) >= 1 else "（Mock）配角A"
+    third_name  = others[1] if len(others) >= 2 else "（Mock）反派B"
+
+    # 世界关键词（地理 / 表世界名）
+    wvr = snapshot.get("world_view_rich") or {}
+    geo = (wvr.get("geography") or wvr.get("cosmos") or "").split("。")[0][:18]
+    geo = geo or "（Mock）云州"
+
+    # 力量体系
+    powers = snapshot.get("power_systems") or []
+    ps_name = (powers[0].get("name") if powers else None) or "（Mock）债感修炼体系"
+    tiers = (powers[0].get("tiers") or []) if powers else []
+    tier_name = (tiers[0].get("name") if tiers else None) or "（Mock）感债者"
+
+    # 伏笔
+    fs = snapshot.get("foreshadowings") or []
+    fs_desc = (fs[0].get("content") if fs else "（Mock）伏笔：神秘符号")[:30]
+
+    # 仅替换「（Mock）X」格式；普通文本不动
+    replacements: list[tuple[str, str]] = [
+        ("（Mock）主角", main_name),
+        ("（Mock）配角A", second_name),
+        ("（Mock）反派B", third_name),
+        ("（Mock）云州", geo),
+        ("（Mock）债感修炼体系", ps_name),
+        ("（Mock）感债者", tier_name),
+        ("（Mock）伏笔：神秘符号", f"（Mock）{fs_desc}"),
+    ]
+    out = text
+    for old, new in replacements:
+        out = out.replace(old, new)
+    return out
 
 
 def _truncate_at_sentence_boundary_for_mock(text: str, max_chars: int) -> str:
