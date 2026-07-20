@@ -191,6 +191,275 @@ budget_limit_usd: {budget}
 直接输出 JSON。"""
 
 
+def _merge_snapshot_into_setting(setting: dict, snap: dict) -> dict:
+    """把 worldbuild_snapshot 字段覆盖到 setting 上（snap 权威，setting 补缺）。
+
+    字段映射：
+      snap.characters[role=主角]   → setting.protagonist
+      snap.characters（全部）        → setting.key_characters
+      snap.world_view_rich          → setting.world_setting.{hidden,surface,history,unique}
+      snap.story_core_struct        → setting.protagonist.background / tagline
+      snap.power_systems[0]         → setting.power_system（含 levels）
+      snap.factions                 → setting.world_setting.unique_elements 追加
+      snap.foreshadowings           → setting.foreshadowing_seeds
+      snap.history_timeline         → setting.world_setting.hidden_world_history 拼接
+      snap.plot_skeleton            → setting.arc_outline（卷→弧结构，最低补到 2 弧）
+
+    snap.characters 的形状来自 backend/app/bridge/setting_sync.py:65
+    _build_worldbuild_snapshot —— **扁平字段**（name/role/basic/personality/
+    background/abilities/catchphrase/arc），不是 worldbuild stages.py 的
+    {card: {...}} 嵌套格式。两套 shape 必须都能容忍。
+
+    不动 setting 的 title_candidates / tagline / golden_chapter_hooks —— 这些
+    是 planner 的增量价值，snapshot 里没有等价字段。
+    """
+    # ── 主角 ──
+    chars = snap.get("characters") or []
+    protagonist = None
+    if chars:
+        # 优先 role=="主角"；否则取第一个
+        main = next((c for c in chars if c.get("role") == "主角"), chars[0])
+        # 兼容两种 shape：扁平（snapshot 默认）或嵌套 {card: {...}}（stages 原始）
+        card = main.get("card") if isinstance(main.get("card"), dict) else main
+        basic = card.get("basic") or {}
+        if not isinstance(basic, dict):
+            basic = {}
+        background_obj = card.get("background") or {}
+        if not isinstance(background_obj, dict):
+            background_obj = {}
+        abilities = card.get("abilities") or {}
+        if not isinstance(abilities, dict):
+            abilities = {}
+        personality_obj = card.get("personality") or {}
+        if not isinstance(personality_obj, dict):
+            # 极端 case：personality 写成字符串 → 当成 personality 文本
+            personality_obj = {}
+        tags = personality_obj.get("tags") or []
+        catchphrase_obj = card.get("catchphrase") or {}
+        if not isinstance(catchphrase_obj, dict):
+            catchphrase_obj = {}
+        lines = catchphrase_obj.get("lines") or []
+        arc = card.get("arc") or {}
+        if not isinstance(arc, dict):
+            arc = {}
+
+        age_raw = basic.get("age")
+        try:
+            age = int(age_raw)
+        except (TypeError, ValueError):
+            age = 25
+        origin = background_obj.get("origin") or ""
+        motivation = background_obj.get("motivation") or ""
+        bg = " / ".join(filter(None, [origin, motivation])) or basic.get("identity") or ""
+
+        # personality 兜底：tags 空时尝试 summary，否则用 role 或 name 兜底
+        if isinstance(tags, list) and tags:
+            personality_str = "、".join(str(t) for t in tags)
+        else:
+            summary = personality_obj.get("summary") if isinstance(personality_obj, dict) else ""
+            personality_str = str(summary or main.get("role") or "未知")
+
+        protagonist = {
+            "name":                main.get("name") or "主角",
+            "age":                 age,
+            "background":          bg or "（来自世界构建快照）",
+            "personality":         personality_str,
+            "speech_quirks":       [str(x) for x in lines[:2] if x],
+            "awakening_trigger":   arc.get("catalyst") or "（来自快照）",
+            "initial_power_level": abilities.get("current_tier") or "（来自快照）",
+        }
+        setting["protagonist"] = protagonist
+
+    # ── 关键配角 ──
+    if chars:
+        key_chars: list[dict] = []
+        for c in chars:
+            card = c.get("card") if isinstance(c.get("card"), dict) else c
+            name = c.get("name") or ""
+            if not name:
+                continue
+            personality_obj = card.get("personality") or {}
+            if not isinstance(personality_obj, dict):
+                personality_obj = {}
+            catchphrase_obj = card.get("catchphrase") or {}
+            if not isinstance(catchphrase_obj, dict):
+                catchphrase_obj = {}
+            lines = catchphrase_obj.get("lines") or []
+            background_obj = card.get("background") or {}
+            if not isinstance(background_obj, dict):
+                background_obj = {}
+            basic = card.get("basic") or {}
+            if not isinstance(basic, dict):
+                basic = {}
+            kc = {
+                "name": name,
+                "role": c.get("role") or "配角",
+                "speech_quirks": [str(x) for x in lines[:2] if x],
+                "background": str(background_obj.get("origin") or basic.get("identity") or ""),
+            }
+            key_chars.append(kc)
+        # setting 已有的 key_characters（mock/LLM 生成）丢弃，由 snapshot 覆盖
+        setting["key_characters"] = key_chars
+
+    # ── 世界观 ──
+    wvr = snap.get("world_view_rich") or {}
+    if wvr:
+        ws = dict(setting.get("world_setting") or {})
+        # hidden_world_name 取 cosmos 截断；surface_world_name 取 geography 截断
+        cosmos = wvr.get("cosmos") or ""
+        geography = wvr.get("geography") or ""
+        history = wvr.get("history") or ""
+        society = wvr.get("society") or ""
+        technology = wvr.get("technology") or ""
+        races = wvr.get("races") or ""
+        customs = wvr.get("customs") or ""
+
+        ws["hidden_world_name"] = _one_line_label(cosmos, fallback="里世界")
+        ws["surface_world_name"] = _one_line_label(geography, fallback="表世界")
+        # 历史 + 社会 + 种族 + 习俗 拼接成一段，确保 ≥50 字
+        history_combined = " | ".join(filter(None, [history, society, races, customs]))
+        if len(history_combined) < 50:
+            history_combined = (history_combined + " " * 50)[:50]
+        ws["hidden_world_history"] = history_combined[:600]
+        # unique_elements：technology + customs 各取前一句
+        unique = []
+        for txt in (technology, customs):
+            first = _first_sentence(txt)
+            if first:
+                unique.append(first)
+        if unique:
+            ws["unique_elements"] = unique[:6]
+        setting["world_setting"] = ws
+
+    # ── 力量体系 ──
+    powers = snap.get("power_systems") or []
+    if powers:
+        ps0 = powers[0]
+        levels_raw = ps0.get("tiers") or []
+        # 转成 setting.power_system.levels（含 point_threshold 兜底递增）
+        levels = []
+        for i, lv in enumerate(levels_raw[:6]):
+            try:
+                lv_num = int(lv.get("level", i + 1))
+            except (TypeError, ValueError):
+                lv_num = i + 1
+            levels.append({
+                "level": lv_num,
+                "name": lv.get("name") or f"境界{lv_num}",
+                "point_threshold": _tier_threshold(i),
+                "ability": lv.get("summary") or lv.get("break_condition") or "",
+            })
+        ps_new = {
+            "name": ps0.get("name") or "（来自快照）力量体系",
+            "currency": "（来自快照）",
+            "description": ps0.get("description") or "",
+            "levels": levels,
+        }
+        setting["power_system"] = ps_new
+
+    # ── 伏笔 ──
+    foreshadowings = snap.get("foreshadowings") or []
+    if foreshadowings:
+        fs_seeds = []
+        for fs in foreshadowings:
+            content = fs.get("content") or ""
+            if not content:
+                continue
+            # target_arc 来自 payoff_chapter_hint 整数解析，否则 2
+            try:
+                target_arc = int(str(fs.get("payoff_chapter_hint") or "2").split("-")[0] or 2) // 30 + 1
+                if target_arc < 1:
+                    target_arc = 2
+            except (TypeError, ValueError):
+                target_arc = 2
+            fs_seeds.append({
+                "content": content,
+                "target_arc": min(max(target_arc, 1), 6),
+                "linked_character": "",
+                "importance": {"高": "high", "中": "medium", "低": "low"}.get(
+                    fs.get("importance") or "中", "medium",
+                ),
+            })
+        if fs_seeds:
+            # snapshot 的伏笔权威；已有的 foreshadowing_seeds 丢弃
+            setting["foreshadowing_seeds"] = fs_seeds
+
+    # ── 卷级骨架 → arc_outline ──
+    plot_skel = snap.get("plot_skeleton") or []
+    if plot_skel:
+        arcs: list[dict] = []
+        for i, vol in enumerate(plot_skel[:6], start=1):
+            arcs.append({
+                "arc_id": i,
+                "arc_name": vol.get("title") or f"第{i}弧",
+                "arc_goal": vol.get("summary") or "",
+                "estimated_chapters": 30,
+                "arc_climax_description": vol.get("summary") or "",
+                "arc_climax_chapter_offset": 22,
+                "emotion_curve": "低开→持续上升→高潮→收尾",
+                "new_characters_introduced": [],
+                "arc_ending_state": vol.get("summary") or "",
+                "is_final_arc": i == len(plot_skel),
+            })
+        # planner 必须满足 ≥4 弧硬约束；plot_skeleton 不足 4 时用 snapshot
+        # 弧 + setting 原有的 arc_outline 末尾补齐（保留 planner 的增量）
+        if len(arcs) < 4:
+            existing = list(setting.get("arc_outline") or [])
+            for ea in existing:
+                ea.setdefault("arc_id", len(arcs) + 1)
+                arcs.append(ea)
+                if len(arcs) >= 4:
+                    break
+            while len(arcs) < 4:
+                arcs.append({
+                    "arc_id": len(arcs) + 1,
+                    "arc_name": f"第{len(arcs) + 1}弧",
+                    "arc_goal": "（来自 planner 增量）",
+                    "estimated_chapters": 30,
+                    "arc_climax_description": "（来自 planner 增量）",
+                    "arc_climax_chapter_offset": 22,
+                    "emotion_curve": "低开→持续上升→高潮→收尾",
+                    "new_characters_introduced": [],
+                    "arc_ending_state": "（来自 planner 增量）",
+                    "is_final_arc": len(arcs) == 3,
+                })
+        setting["arc_outline"] = arcs
+
+    # ── tagline / title_candidates 不动：planner 的增量价值 ──
+    return setting
+
+
+def _tier_threshold(idx: int) -> int:
+    """硬约束：6 个境界 point_threshold 必须递增（0/500/2000/8000/30000/100000）。
+    这里只兜底 3-6 境界，超过 6 个被截断。"""
+    return [0, 500, 2000, 8000, 30000, 100000][min(idx, 5)]
+
+
+def _one_line_label(text: str, fallback: str) -> str:
+    """从一段长文本里抽一句话当 world name；空时回退 fallback。"""
+    if not text:
+        return fallback
+    # 优先第一个句号/逗号前；否则前 8 字
+    for sep in ("。", "；", "，", ","):
+        if sep in text:
+            return text.split(sep, 1)[0][:12] or fallback
+    return text[:8] or fallback
+
+
+def _first_sentence(text: str) -> str:
+    if not text:
+        return ""
+    for sep in ("。", "；", "；", "\n"):
+        if sep in text:
+            return text.split(sep, 1)[0][:40]
+    return text[:40]
+
+
+def basic_identity(card: dict) -> str:
+    b = card.get("basic") or {}
+    return b.get("identity") or ""
+
+
 def run_planner(args, output_dir: str) -> dict:
     """Planner 命令主入口。"""
     cfg = _load_novel_config()
@@ -228,6 +497,23 @@ def run_planner(args, output_dir: str) -> dict:
     setting.setdefault("platform", cfg.get("platform", "fanqie"))
     setting.setdefault("genre", cfg.get("genre", "玄幻"))
     setting.setdefault("budget_limit_usd", cfg.get("budget_limit_usd", 500.0))
+
+    # ── task #5 修复（一期根因 #3 的执行位）：
+    # 当 push-concept 写入了 worldbuild_snapshot（导入小说走 extract 路径，
+    # 或 worldbuild 10 阶段完成后），planner 的 LLM/mock 经常忽略 prompt
+    # 里的【必须沿用】指令，仍生成自己的角色/力量体系 —— 后续 pull-setting
+    # 会把这些覆盖到 DB，覆盖掉用户在 worldbuild 阶段定稿的实体。
+    # 修法：在写盘前再 overlay 一次 snapshot，snap 字段权威，setting 仅
+    # 补全 snapshot 缺失的字段（title_candidates / tagline / arc_outline /
+    # golden_chapter_hooks 等增量工作）。这一层与 _snapshot_block 的 prompt
+    # 指令互补：prompt 让 LLM 沿用是首选，merge 是兜底。 ──
+    snap = cfg.get("worldbuild_snapshot") or {}
+    if snap:
+        setting = _merge_snapshot_into_setting(setting, snap)
+        print(f"   📌 snapshot 已合并："
+              f"characters={len(setting.get('key_characters', []))}, "
+              f"factions={len(snap.get('factions', []))}, "
+              f"foreshadowings={len(setting.get('foreshadowing_seeds', []))}")
 
     # v3: 写盘前 validate，防止「LLM 漏字段」再次让 pull_setting 后 5 张表全空
     try:

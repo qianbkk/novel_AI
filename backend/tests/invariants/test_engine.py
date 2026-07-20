@@ -1043,6 +1043,243 @@ class TestPlannerAtomicWrite:
             assert not (out_dir / "setting_package.json.tmp").exists(), \
                 "atomic write 完成后 .tmp 必须被替换走"
 
+    def test_planner_honors_worldbuild_snapshot(self, tmp_path, monkeypatch):
+        """task #5：planner 必须把 worldbuild_snapshot 字段覆盖到 setting 上。
+
+        之前 _snapshot_block 模板已经告诉 LLM「必须沿用」，但 mock 模式是
+        硬编码 JSON 不读 prompt，真实 LLM 也常漂移 —— 导致 pull-setting 后
+        覆盖掉 DB 里的 extracted/worldbuild 实体。
+        修法：写盘前 merge 一次，snap 权威。
+        """
+        from unittest.mock import patch, MagicMock
+        from engine.agents import planner as planner_mod
+
+        # mock LLM 返回标准的 planner mock（含「（Mock）主角」硬编码）—— 没有
+        # snapshot 提示，会被 merge 覆盖
+        from engine.llm.router import _MOCK_RESPONSES
+        mock_text = _MOCK_RESPONSES["planner"]
+        mock_router = MagicMock()
+        mock_router.call.return_value = (mock_text, 0.001)
+
+        snapshot = {
+            "world_view_rich": {
+                "cosmos":     "（Snapshot）天道与灵气并行运转的世界",
+                "geography":  "（Snapshot）云州七区横贯北方",
+                "history":    "（Snapshot）灵气复苏百年，修士家族崛起为隐性财阀",
+                "society":    "（Snapshot）修士与凡人共治，修士享有债务豁免权",
+                "technology": "（Snapshot）灵网+5G 双轨通讯，飞剑公交与高铁混运",
+                "races":      "（Snapshot）人族七成、古妖族、幽冥族、混血族",
+                "customs":    "（Snapshot）新人入门三年苦修，下山写债书",
+            },
+            "story_core_struct": {
+                "goal": "改写破产命运", "conflict": "前世债主与今世新敌",
+                "theme": "个体与时代的协商", "hook": "为什么与上一世不同",
+            },
+            "history_timeline": [
+                {"era": "1984", "event": "灵气复苏", "impact": "结构重塑"},
+            ],
+            "characters": [
+                {
+                    "name": "林渊", "role": "主角",
+                    "card": {
+                        "basic":   {"gender": "男", "age": 32, "identity": "云州林氏长子"},
+                        "personality": {"tags": ["克制", "精算"],
+                                        "summary": "外表冷峻内心压着火。"},
+                        "background": {"origin": "云州林氏",
+                                       "motivation": "改写破产命运"},
+                        "abilities": {"power_name": "先知回响",
+                                      "current_tier": "感债者（一品）"},
+                        "catchphrase": {"lines": ["这局我来开局。", "债还不完。"]},
+                        "arc": {"start_state": "破产边缘",
+                                "catalyst": "重生到 2012",
+                                "end_state": "商盟领袖"},
+                    },
+                },
+                {
+                    "name": "苏晚栀", "role": "重要配角",
+                    "card": {
+                        "basic": {"gender": "女", "age": 28, "identity": "财务总监"},
+                        "personality": {"tags": ["精明"], "summary": "数字敏感。"},
+                        "background": {"origin": "云州苏氏旁支"},
+                        "catchphrase": {"lines": ["账上说话。"]},
+                        "arc": {"start_state": "旁支女", "catalyst": "被林渊拉入",
+                                "end_state": "苏氏掌权人"},
+                    },
+                },
+            ],
+            "factions": [
+                {"name": "（Snap）云州商会"},
+            ],
+            "power_systems": [
+                {"name": "（Snap）债感修炼体系",
+                 "description": "通过回应他人对你的债来修炼",
+                 "tiers": [
+                     {"level": 1, "name": "感债者", "summary": "模糊感知"},
+                     {"level": 2, "name": "识债者", "summary": "精确识别"},
+                 ]},
+            ],
+            "foreshadowings": [
+                {"content": "（Snap）主角父母早年破产与孟家旧怨有关",
+                 "importance": "高", "status": "已铺垫"},
+            ],
+            "plot_skeleton": [
+                {"title": "第1卷 债起云州", "summary": "主角重生"},
+                {"title": "第2卷 入局云州", "summary": "建立根据地"},
+            ],
+        }
+
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir()
+        cfg_payload = {
+            "novel_id": "snap-test", "platform": "fanqie", "genre": "都市",
+            "setting_concept": "（无）", "budget_limit_usd": 1.0,
+            "worldbuild_snapshot": snapshot,
+        }
+        (cfg_dir / "novel_config.json").write_text(
+            __import__("json").dumps(cfg_payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("NOVEL_AI_DIR", str(tmp_path))
+
+        with patch.object(planner_mod, "get_active_router", return_value=mock_router), \
+             patch.object(planner_mod, "validate_setting_package"):
+            out_dir = tmp_path / "out"
+            out_dir.mkdir()
+            planner_mod.run_planner(args=[], output_dir=str(out_dir))
+
+        out_path = out_dir / "setting_package.json"
+        assert out_path.exists(), "setting_package.json 必须被写入"
+        written = __import__("json").loads(out_path.read_text(encoding="utf-8"))
+
+        # ── 关键断言：snap 权威，mock 的「（Mock）主角」必须消失 ──
+        assert written["protagonist"]["name"] == "林渊", \
+            f"protagonist 必须来自 snapshot，实际: {written['protagonist'].get('name')!r}"
+        names = [c.get("name") for c in written["key_characters"]]
+        assert "林渊" in names and "苏晚栀" in names, \
+            f"key_characters 必须含 snapshot 的两名角色，实际: {names}"
+        assert not any("（Mock）" in n for n in names), \
+            f"mock 硬编码的角色名必须被覆盖掉，实际: {names}"
+        # 力量体系来自 snapshot
+        ps = written["power_system"]
+        assert ps["name"].startswith("（Snap）"), f"power_system.name: {ps.get('name')!r}"
+        lv_names = [l.get("name") for l in ps.get("levels", [])]
+        assert "感债者" in lv_names and "识债者" in lv_names, lv_names
+        # 伏笔
+        fs = written["foreshadowing_seeds"]
+        assert any("孟家旧怨" in f.get("content", "") for f in fs), fs
+        # 弧规划
+        arc_names = [a.get("arc_name") for a in written["arc_outline"]]
+        assert any("债起云州" in n for n in arc_names), arc_names
+        assert len(written["arc_outline"]) >= 2
+        # 世界观从 snap 注入
+        ws = written["world_setting"]
+        assert ws["surface_world_name"], "surface_world_name 必须有值"
+        assert ws["hidden_world_history"], "hidden_world_history 必须有值"
+        # 增量价值保留：planner 出的 title_candidates / tagline 不应被 snap 抹掉
+        assert written["title_candidates"], "planner 的 title_candidates 增量应保留"
+        assert written["tagline"], "planner 的 tagline 增量应保留"
+
+    def test_planner_without_snapshot_unchanged(self, tmp_path, monkeypatch):
+        """task #5 负向：没有 worldbuild_snapshot 时 planner 输出与 LLM/mock
+        一致（merge 是 no-op，不能破坏旧行为）。"""
+        from unittest.mock import patch, MagicMock
+        from engine.agents import planner as planner_mod
+        from engine.llm.router import _MOCK_RESPONSES
+
+        mock_router = MagicMock()
+        mock_router.call.return_value = (_MOCK_RESPONSES["planner"], 0.001)
+
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir()
+        (cfg_dir / "novel_config.json").write_text(
+            '{"novel_id":"no-snap","platform":"fanqie","genre":"都市",'
+            '"setting_concept":"","budget_limit_usd":1.0}',
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("NOVEL_AI_DIR", str(tmp_path))
+
+        with patch.object(planner_mod, "get_active_router", return_value=mock_router), \
+             patch.object(planner_mod, "validate_setting_package"):
+            out_dir = tmp_path / "out"
+            out_dir.mkdir()
+            planner_mod.run_planner(args=[], output_dir=str(out_dir))
+
+        out_path = out_dir / "setting_package.json"
+        written = __import__("json").loads(out_path.read_text(encoding="utf-8"))
+        # 没有 snapshot → mock 内容原样落盘
+        assert written["protagonist"]["name"] == "（Mock）主角"
+        assert any("（Mock）" in c["name"] for c in written["key_characters"])
+
+    def test_planner_honors_flat_snapshot_shape(self, tmp_path, monkeypatch):
+        """task #5 补强：snapshot 的真实 shape 来自 _build_worldbuild_snapshot
+        （setting_sync.py:65），字段是**扁平**（basic/personality/... 直接挂在
+        character 上），不是 worldbuild stages.py 的 {card:{...}} 嵌套。
+
+        之前 merge 写死 `card = main.get("card")` → 拿到 None → 主角
+        personality 写成空 → schema 校验失败 → planner exit_code=1，链
+        路断在 push-concept 之后。
+
+        这个测试就是 e2e 真实触发的路径，必须能落盘。
+        """
+        from unittest.mock import patch, MagicMock
+        from engine.agents import planner as planner_mod
+
+        mock_router = MagicMock()
+        # 注意：这里**不**patch validate_setting_package —— 要让它真的跑
+        # （不然后面的 schema 错误就被吞了）
+        from engine.llm.router import _MOCK_RESPONSES
+        mock_router.call.return_value = (_MOCK_RESPONSES["planner"], 0.001)
+
+        snapshot = {
+            "characters": [
+                # 扁平 shape —— _build_worldbuild_snapshot 的真实产物
+                {
+                    "name": "林渊", "role": "主角",
+                    "basic": {"gender": "男", "age": 32, "identity": "云州林氏长子"},
+                    "personality": {"tags": ["克制", "精算"],
+                                    "summary": "外表冷峻内心压着火。"},
+                    "background": {"origin": "云州林氏",
+                                   "motivation": "改写破产命运"},
+                    "abilities": {"power_name": "先知回响",
+                                  "current_tier": "感债者（一品）"},
+                    "catchphrase": {"lines": ["这局我来开局。"]},
+                    "arc": {"start_state": "破产边缘",
+                            "catalyst": "重生到 2012",
+                            "end_state": "商盟领袖"},
+                },
+            ],
+        }
+
+        cfg_dir = tmp_path / "config"
+        cfg_dir.mkdir()
+        cfg_payload = {
+            "novel_id": "flat-snap", "platform": "fanqie", "genre": "都市",
+            "setting_concept": "（无）", "budget_limit_usd": 1.0,
+            "worldbuild_snapshot": snapshot,
+        }
+        (cfg_dir / "novel_config.json").write_text(
+            __import__("json").dumps(cfg_payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("NOVEL_AI_DIR", str(tmp_path))
+
+        # 不 patch validate_setting_package：让它真跑，能验证 schema 也通过
+        with patch.object(planner_mod, "get_active_router", return_value=mock_router):
+            out_dir = tmp_path / "out"
+            out_dir.mkdir()
+            # 如果 schema 校验失败，会抛 SchemaError；这里要它成功
+            planner_mod.run_planner(args=[], output_dir=str(out_dir))
+
+        out_path = out_dir / "setting_package.json"
+        assert out_path.exists(), "flat-shape snapshot merge 后必须落盘"
+        written = __import__("json").loads(out_path.read_text(encoding="utf-8"))
+        assert written["protagonist"]["name"] == "林渊"
+        # personality 必须非空（schema 必填项 minLength=1）
+        assert written["protagonist"]["personality"], \
+            f"personality 必须非空，实际 {written['protagonist']['personality']!r}"
+        # 至少含 personality.tags 的内容
+        assert "克制" in written["protagonist"]["personality"]
+
 
 class TestTrackerParseFailureLogged:
     """迭代 #40: tracker.py 之前 parse_llm_json_response(resp, {}) — parse
