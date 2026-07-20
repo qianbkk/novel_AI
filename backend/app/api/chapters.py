@@ -3,6 +3,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..auth_scope import require_owned_project
+from ..chapter_rewrite import (
+    ChapterNotFoundError, RewriteConflictError, rewrite_chapter,
+)
 from ..database import get_db
 from ..llm_client import LLMError
 from ..models import Chapter, ChapterCharacter, Character
@@ -287,3 +290,113 @@ async def extract_setting(
         # 不暴露 provider/role 等内部信息（CLAUDE.md 敏感信息不变量；
         # LLMError 本身只含 provider/role/重试次数，相对安全，但统一文案更稳）
         raise HTTPException(502, "LLM 提取失败，请重试")
+
+
+class ChapterRewriteRequest(BaseModel):
+    instruction: str
+    version_label: str | None = Field(default=None, min_length=1, max_length=1)
+    replace: bool = False
+
+
+@router.post("/{chapter_no}/rewrite")
+async def rewrite_chapter_endpoint(
+    project_id: str,
+    chapter_no: int,
+    payload: ChapterRewriteRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
+    """单章改写：保留原章，产出新候选版本（ch_NNNN_vX.txt）。
+
+    与 novel_import / novel_extract 同链路（goal 2026-07-19 授权）。
+    不变量（CLAUDE.md）：绝不覆盖原章节 —— ch_NNNN.txt 与 Chapter.content
+    不动；候选只写到 ch_NNNN_vX.txt（version_label 默认 D 之后，避免与
+    bootstrap A/B/C 撞）。同 label 已存在时默认 409，需 replace=true 才覆盖。
+
+    链路：rewrite_chapter() → engine mock writer（task #6 已注入 snapshot
+    关键词：林渊/苏晚栀/云州 等）→ 原子写候选文件 → 更新 rewrite_candidates.json
+    索引。
+    """
+    try:
+        result = await rewrite_chapter(
+            project_id=project_id,
+            chapter_no=chapter_no,
+            instruction=payload.instruction,
+            db=db,
+            version_label=payload.version_label,
+            replace=payload.replace,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except ChapterNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except RewriteConflictError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "rewrite_label_exists",
+                "message": str(e),
+                "hint": "覆盖请带 {\"replace\": true}",
+            },
+        )
+    except LLMError:
+        raise HTTPException(502, "LLM 改写失败，请重试")
+
+
+@router.get("/{chapter_no}/candidates")
+async def list_chapter_candidates(
+    project_id: str,
+    chapter_no: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
+    """列出某章的所有改写候选（ch_NNNN_vX.txt 元信息 + bootstrap A/B/C）。
+
+    简单实现：扫 chapters_dir + 读 rewrite_candidates.json 与
+    bootstrap_candidates.json 两个索引文件并集返回。
+    """
+    from ..chapter_rewrite import _resolve_engine_paths
+    dirs = _resolve_engine_paths(project_id, db)
+    ch_dir = dirs["chapters_dir"]
+    candidates: list[dict] = []
+
+    # bootstrap A/B/C + 改写 D-Z 一起扫
+    if ch_dir.exists():
+        import re as _re
+        for p in sorted(ch_dir.glob(f"ch_{chapter_no:04d}_v*.txt")):
+            m = _re.match(rf"^ch_{chapter_no:04d}_v([A-Z])\.txt$", p.name)
+            if not m:
+                continue
+            try:
+                text = p.read_text(encoding="utf-8")
+                word_count = len(text)
+                snippet = text[:120].replace("\n", " ")
+            except Exception:
+                word_count = 0
+                snippet = ""
+            candidates.append({
+                "version": m.group(1),
+                "path": str(p.relative_to(dirs["novel_ai_dir"])),
+                "word_count": word_count,
+                "snippet": snippet,
+            })
+
+    # 改写索引里的 instruction_preview 附加
+    import json as _json
+    index_path = dirs["output_dir"] / "rewrite_candidates.json"
+    if index_path.exists():
+        try:
+            idx = _json.loads(index_path.read_text(encoding="utf-8"))
+            for e in idx.get(f"chapter_{chapter_no}", []):
+                for c in candidates:
+                    if c["version"] == e.get("version"):
+                        c["instruction_preview"] = e.get("instruction_preview", "")
+                        c["created_at"] = e.get("created_at")
+                        break
+        except Exception:
+            pass
+
+    return {"chapter_no": chapter_no, "candidates": candidates}
