@@ -64,18 +64,31 @@ class TestMockLLMProvider:
         )
 
     def test_mock_provider_returns_schema_valid_json(self):
-        """checker / tracker / outline 等 agent 的 mock 响应必须是合法 JSON。"""
+        """checker / tracker / outline 等 agent 的 mock 响应必须是合法 JSON，
+        且顶层类型与真实消费方一致：
+          - tracker / compliance / checker_main → dict（parse_llm_json_response 消费）
+          - outline → **array**（run_outline 期望"章节任务数组"；
+            e2e 实跑 2026-07-19 发现旧 mock 是 object → outline 解析
+            "Extra data" 失败，mock 模式下 init_arc/run 全断）
+        """
         import json
         from engine.llm.router import LLMRouter
+        expected_type = {
+            "tracker": dict,
+            "compliance": dict,
+            "checker_main": dict,
+            "outline": list,
+        }
         r = LLMRouter("test")
-        for agent in ["tracker", "compliance", "checker_main", "outline"]:
+        for agent, typ in expected_type.items():
             r.routes[agent] = ("mock", "mock-model")
             text, _ = r.call(agent, "sys", "user", max_tokens=4000, temperature=0.7)
             parsed = json.loads(text)  # 必须能 parse
-            assert isinstance(parsed, dict), (
-                f"mock {agent} 响应必须是 JSON dict，实际 {type(parsed).__name__}"
+            assert isinstance(parsed, typ), (
+                f"mock {agent} 响应顶层必须是 {typ.__name__}（与真实消费方契约一致），"
+                f"实际 {type(parsed).__name__}"
             )
-            assert len(parsed) > 0, f"mock {agent} 响应不能是空 dict"
+            assert len(parsed) > 0, f"mock {agent} 响应不能为空"
 
     def test_mock_provider_does_not_break_stats(self):
         """mock 调用应该正常累计 stats（不抛异常）。"""

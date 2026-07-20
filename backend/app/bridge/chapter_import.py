@@ -8,6 +8,7 @@
 显示像样的标题，而不是"第1章 【修改后正文】"这种跑冒烟测试时的占位。
 """
 import json
+import re
 from pathlib import Path
 
 from sqlalchemy.orm import Session
@@ -18,6 +19,20 @@ from ..logging_setup import get_logger
 from datetime import datetime, timezone
 
 log = get_logger("novel_ai.chapter_import")
+
+# 正式章节文件名：ch_<数字>.txt（严格匹配）。
+# bootstrap 候选 ch_NNNN_vA/vB/vC.txt 同样落在 chapters/ 且能被
+# glob("ch_*.txt") 命中——之前 split("_")[1] 取章号把候选也当正式章节，
+# reimport（force 覆盖）按文件名排序最后写入，用 vC 候选覆盖用户已
+# 选定的正式稿。候选只能经 bootstrap select 复制为 ch_NNNN.txt 后导入。
+_FINAL_CHAPTER_RE = re.compile(r"^ch_(\d+)\.txt$")
+_CANDIDATE_RE = re.compile(r"^ch_\d+_v[A-Za-z]\.txt$")
+
+
+def _final_chapter_number(filename: str) -> int | None:
+    """ch_0001.txt → 1；候选版本 / meta / 畸形名 → None。"""
+    m = _FINAL_CHAPTER_RE.match(filename)
+    return int(m.group(1)) if m else None
 
 
 def _clean_content_for_import(content: str) -> str:
@@ -248,11 +263,11 @@ async def import_chapters_from_novel_ai(project_id: str, novel_ai_dir: str, db: 
         # 迭代 #31：每个文件独立 try/except，单文件坏不能阻断整批 import。
         # 之前一行错就全抛异常 → 用户看到的现象是"0 章导入"，没法定位是哪个文件坏。
         try:
-            # 文件名 ch_<N>.txt → 取 N；malformed 跳过
-            try:
-                n = int(txt_path.stem.split("_")[1])
-            except (IndexError, ValueError):
-                log.warning("import-chapters: 跳过畸形文件名 %s", txt_path.name)
+            # 只导 ch_<N>.txt 正式稿；A/B/C 候选静默跳过，畸形名警告
+            n = _final_chapter_number(txt_path.name)
+            if n is None:
+                if not _CANDIDATE_RE.match(txt_path.name):
+                    log.warning("import-chapters: 跳过畸形文件名 %s", txt_path.name)
                 continue
 
             content = txt_path.read_text(encoding="utf-8")
@@ -318,10 +333,11 @@ async def _force_reimport(project_id: str, novel_ai_dir: str, db: Session) -> li
     for txt_path in sorted(chapters_dir.glob("ch_*.txt")):
         # 迭代 #31：同 import_chapters_from_novel_ai，单文件坏不能阻断整批
         try:
-            try:
-                n = int(txt_path.stem.split("_")[1])
-            except (IndexError, ValueError):
-                log.warning("_force_reimport: 跳过畸形文件名 %s", txt_path.name)
+            # 只重导 ch_<N>.txt 正式稿——候选文件绝不能覆盖已选定内容
+            n = _final_chapter_number(txt_path.name)
+            if n is None:
+                if not _CANDIDATE_RE.match(txt_path.name):
+                    log.warning("_force_reimport: 跳过畸形文件名 %s", txt_path.name)
                 continue
 
             content = txt_path.read_text(encoding="utf-8")

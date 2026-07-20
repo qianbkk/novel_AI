@@ -111,6 +111,17 @@ class OrchestratorState(TypedDict):
     outline_candidates: List[Dict]   # card 模式：每弧 3 个候选分支
     talk_questions: List[Dict]       # talk 模式：每弧引导性问题
 
+    # 瞬态失败标记（修订 2026-07-19）：LangGraph 按本 TypedDict 的字段
+    # 合并节点返回值，未声明的键会被静默丢弃——node_load_arc_tasks 置的
+    # _outline_failed 之前就因此丢失，run_orchestrator 的 fail-fast 检测
+    # 从未生效（outline 失败后流程继续空转）。必须在 schema 里声明。
+    # 旧 state JSON 无此键 → load 后 .get() 返回 None，向后兼容。
+    _outline_failed: bool
+    # 规则层预检（三期）：跨章开场重复检测的滑动窗口 + 每章规则得分记录。
+    # 同样必须声明才能在节点间存活（之前未声明 → 每章都拿不到历史开场）。
+    _recent_chapter_openings: List[str]
+    audit_rule_layer: List[Dict]
+
     # 元数据
     style_samples: List[str]
     style_samples_source: str   # external|internal

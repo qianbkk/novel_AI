@@ -939,6 +939,59 @@ class TestHumanEscalationNotEndRun:
         )
 
 
+class TestEnginePathsEnvAware:
+    """修订 2026-07-19: paths.py 全套常量必须在 NOVEL_AI_DIR 下迁移。
+
+    e2e 实跑发现：graph._engine_output_dir / orchestrator.OUTPUT_DIR 已
+    env-aware，但 bootstrap / memory / exporter 等从 paths.py import 的
+    SETTING_PATH / CHAPTERS_DIR / L2_DIR 仍固定指向 backend/data/engine/
+    → 绑定非默认目录的项目，planner 写 A 目录、bootstrap 读 B 目录的
+    空旧文件（KeyError: 'protagonist'），多小说隔离断裂。
+
+    引擎经 Popen 注入 env 后才 import，所以 paths.py import 时读
+    NOVEL_AI_DIR 即正确；用子进程做干净 import 验证（in-process reload
+    会污染其他测试已 import 的常量副本）。
+    """
+
+    def _paths_via_subprocess(self, extra_env: dict) -> dict:
+        import os
+        import subprocess
+        code = (
+            "import json, engine.config.paths as p;"
+            "print(json.dumps({'setting': str(p.SETTING_PATH),"
+            " 'chapters': str(p.CHAPTERS_DIR),"
+            " 'state': str(p.STATE_PATH),"
+            " 'l2': str(p.L2_DIR), 'l5': str(p.L5_DIR),"
+            " 'style': str(p.STYLE_SAMPLES_DIR),"
+            " 'config': str(p.NOVEL_CONFIG_PATH)}))"
+        )
+        env = {**os.environ, **extra_env}
+        env.pop("NOVEL_AI_DIR", None) if not extra_env.get("NOVEL_AI_DIR") else None
+        proc = subprocess.run(
+            [sys.executable, "-c", code], capture_output=True, text=True,
+            env=env, cwd=str(BACKEND_ROOT), timeout=60,
+        )
+        assert proc.returncode == 0, f"import engine.config.paths 失败: {proc.stderr}"
+        return json.loads(proc.stdout)
+
+    def test_all_paths_relocate_under_novel_ai_dir(self, tmp_path):
+        target = str(tmp_path / "bound-novel")
+        paths = self._paths_via_subprocess({"NOVEL_AI_DIR": target})
+        for key, val in paths.items():
+            assert val.startswith(target), (
+                f"NOVEL_AI_DIR 设置后 paths.{key} 仍指向 {val}，"
+                f"未迁移到 {target} — 该消费者会读写到其他项目的数据"
+            )
+
+    def test_paths_default_to_backend_data_engine_without_env(self):
+        paths = self._paths_via_subprocess({"NOVEL_AI_DIR": ""})
+        default_root = str(BACKEND_ROOT / "data" / "engine")
+        for key, val in paths.items():
+            assert val.startswith(default_root), (
+                f"无 NOVEL_AI_DIR 时 paths.{key} 应落在 {default_root}，实际 {val}"
+            )
+
+
 class TestPlannerAtomicWrite:
     """迭代 #39: planner.py 写 setting_package.json 之前直接 open(w)，
     写一半被杀 → 文件损坏 → 后续 5 张表全空。改用 atomic_write_json。
@@ -2088,6 +2141,51 @@ class TestPlannerMockPayloadValid:
             raise AssertionError(
                 f"_MOCK_RESPONSES['planner'] parse 后未通过 schema 校验: {e}\n"
                 f"parsed keys: {list(parsed.keys())}"
+            )
+
+    def test_outline_mock_is_valid_task_array(self):
+        """_MOCK_RESPONSES['outline'] 必须是 run_outline 期待的章节任务
+        JSON 数组（每章含 chapter_number / chapter_role / ending_hook_type
+        等字段，hook 类型必须合法）。
+
+        历史缺陷（e2e 实跑 2026-07-19）：mock 是 {"arcs":...,"chapters":...}
+        对象——与 run_outline 的数组 schema 不符 → mock 模式下 run 命令
+        的 outline 阶段必然 JSON 解析失败，全链路 mock 从未真正跑通。"""
+        import json
+        from engine.llm.router import _MOCK_RESPONSES
+        from engine.config.prompt_templates import HOOK_TYPES
+        parsed = json.loads(_MOCK_RESPONSES["outline"])
+        assert isinstance(parsed, list) and parsed, (
+            "_MOCK_RESPONSES['outline'] 必须是非空 JSON 数组（章节任务单）"
+        )
+        for i, task in enumerate(parsed):
+            for field in ("chapter_number", "chapter_role", "chapter_goal",
+                          "ending_hook_type", "foreshadowing_ops",
+                          "target_length"):
+                assert field in task, f"outline mock 第{i}项缺字段 '{field}'"
+            assert task["ending_hook_type"] in HOOK_TYPES, (
+                f"outline mock 第{i}项 ending_hook_type "
+                f"'{task['ending_hook_type']}' 不在合法钩子类型中"
+            )
+            assert isinstance(task["foreshadowing_ops"], list)
+
+    def test_checker_mocks_carry_dimensions_and_pass(self):
+        """checker_main / cross1 / cross2 的 mock 必须带 dimensions 字段
+        且加权分 ≥ 6.5（PASS_WITH_NOTE 线）。
+
+        历史缺陷（e2e 实跑 2026-07-19）：mock 只有 {"score":7.5,"verdict":
+        "PASS"}——calculate_weighted_score 读不到 dimensions → 全维度兜底
+        6 分 → 加权 6.0 < 6.5 → mock 模式下每章必然重写 3 次后升级人工，
+        全链路 mock run 永远写不出一章。"""
+        import json
+        from engine.llm.router import _MOCK_RESPONSES
+        from engine.agents.checker import calculate_weighted_score
+        for key in ("checker_main", "checker_cross1", "checker_cross2"):
+            parsed = json.loads(_MOCK_RESPONSES[key])
+            assert "dimensions" in parsed, f"{key} mock 缺 dimensions 字段"
+            score = calculate_weighted_score(parsed["dimensions"])
+            assert score >= 6.5, (
+                f"{key} mock 加权分 {score} < 6.5，mock 章节永远过不了质量门"
             )
 
     def test_planner_mock_has_all_required_fields(self):

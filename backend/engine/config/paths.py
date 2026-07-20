@@ -18,7 +18,15 @@ BACKEND_DIR = ENGINE_DIR.parent                                # backend/
 DATA_DIR    = BACKEND_DIR / "data"
 
 # ── Engine data layout ──
-ENGINE_DATA_DIR    = DATA_DIR / "engine"
+# NOVEL_AI_DIR env 优先（与 binding.novel_ai_dir 一致）：bridge 在 Popen
+# 引擎子进程前注入该 env，paths.py 在子进程内 import 时读到的即为最终值，
+# 因此 import-time 求值在生产链路上是正确的（orchestrator.OUTPUT_DIR 块
+# 同一模式）。此前只有 graph/orchestrator 局部 env-aware，bootstrap /
+# memory / exporter 等经本模块拿到的仍是固定路径 → 绑定非默认目录的项目
+# 读写混入默认目录（多小说隔离断裂）。in-process 测试若需 import 后改
+# env，用 novel_config_path() 这类 call-time 函数或子进程干净 import。
+_ENV_NOVEL_AI_DIR  = os.environ.get("NOVEL_AI_DIR")
+ENGINE_DATA_DIR    = Path(_ENV_NOVEL_AI_DIR) if _ENV_NOVEL_AI_DIR else DATA_DIR / "engine"
 OUTPUT_DIR         = ENGINE_DATA_DIR / "output"
 CHAPTERS_DIR       = OUTPUT_DIR / "chapters"
 STATE_PATH         = OUTPUT_DIR / "orchestrator_state.json"

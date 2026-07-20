@@ -741,14 +741,68 @@ _MOCK_RESPONSES: dict[str, str] = {
         },
     }, ensure_ascii=False),
 
-    "outline": json.dumps({
-        "arcs": [
-            {"arc_no": 1, "title": "（Mock）第 1 弧", "summary": "测试弧，schema 校验 + 字数 budget 验证。"},
-        ],
-        "chapters": [
-            {"chapter_no": 1, "arc_no": 1, "title": "（Mock）第 1 章", "goal": "跑通 schema 校验", "key_beats": ["开场", "冲突", "收束"]},
-        ],
-    }, ensure_ascii=False),
+    # run_outline 期待「章节任务 JSON 数组」（见 outline.py OUTLINE_SYSTEM
+    # schema）。修订 2026-07-19：之前是 {"arcs":...,"chapters":...} 对象，
+    # mock 模式下 outline 阶段必然解析失败，全链路 mock run 从未跑通。
+    "outline": json.dumps([
+        {
+            "chapter_number": 1, "chapter_role": "铺垫",
+            "chapter_goal": "（Mock）主角遭遇异常事件，确立本弧目标",
+            "core_conflict": "（Mock）主角 vs 未知异象",
+            "main_characters": ["（Mock）主角"],
+            "shuang_type": None, "shuang_description": "",
+            "ending_hook_type": "悬念钩",
+            "ending_hook_description": "（Mock）结尾抛出未解之谜",
+            "foreshadowing_ops": [
+                {"op": "plant", "desc": "（Mock）伏笔：神秘符号", "target_chapter": 3},
+            ],
+            "emotion_shift": "平静→紧张",
+            "plot_progression": "（Mock）主线启动",
+            "setting_constraints": ["（Mock）遵守世界观基本设定"],
+            "forbidden_actions": [],
+            "target_length": "2000-2200",
+            "audit_mode": "full",
+            "is_arc_climax": False,
+        },
+        {
+            "chapter_number": 2, "chapter_role": "爽点",
+            "chapter_goal": "（Mock）主角首次运用能力化解危机",
+            "core_conflict": "（Mock）主角 vs 反派B",
+            "main_characters": ["（Mock）主角", "（Mock）反派B"],
+            "shuang_type": "打脸", "shuang_description": "（Mock）当众反杀质疑者",
+            "ending_hook_type": "危机钩",
+            "ending_hook_description": "（Mock）更大的威胁浮出水面",
+            "foreshadowing_ops": [
+                {"op": "reinforce", "desc": "（Mock）伏笔：神秘符号", "target_chapter": 3},
+            ],
+            "emotion_shift": "紧张→释然",
+            "plot_progression": "（Mock）能力首秀",
+            "setting_constraints": ["（Mock）遵守世界观基本设定"],
+            "forbidden_actions": [],
+            "target_length": "2200-2500",
+            "audit_mode": "full",
+            "is_arc_climax": False,
+        },
+        {
+            "chapter_number": 3, "chapter_role": "弧高潮",
+            "chapter_goal": "（Mock）主角揭开符号真相，击败本弧反派",
+            "core_conflict": "（Mock）主角 vs 反派B（决战）",
+            "main_characters": ["（Mock）主角", "（Mock）配角A", "（Mock）反派B"],
+            "shuang_type": "碾压", "shuang_description": "（Mock）实力碾压收尾",
+            "ending_hook_type": "升级钩",
+            "ending_hook_description": "（Mock）新地图/新层级展开",
+            "foreshadowing_ops": [
+                {"op": "resolve", "desc": "（Mock）伏笔：神秘符号", "target_chapter": 3},
+            ],
+            "emotion_shift": "压抑→爆发",
+            "plot_progression": "（Mock）本弧收束",
+            "setting_constraints": ["（Mock）遵守世界观基本设定"],
+            "forbidden_actions": [],
+            "target_length": "3000-3300",
+            "audit_mode": "full",
+            "is_arc_climax": True,
+        },
+    ], ensure_ascii=False),
 
     "tracker": json.dumps({
         "entity_updates": [
@@ -770,25 +824,36 @@ _MOCK_RESPONSES: dict[str, str] = {
         "rationale": "（Mock）合规通过：mock 文本不触发任何禁忌词。",
     }, ensure_ascii=False),
 
+    # score_chapter 的真实 schema 是 dimensions + overall_score（见
+    # checker.py CHECKER_SYSTEM / default）。修订 2026-07-19：之前只有
+    # {"score":...,"verdict":...} → calculate_weighted_score 读不到
+    # dimensions → 全维度兜底 6 分 → 加权 6.0 < 6.5 → mock 模式每章
+    # 必然重写 3 次后升级人工，mock run 永远写不出一章。
     "checker_main": json.dumps({
-        "score": 7.5,
-        "verdict": "PASS",
-        "issues": [],
-        "rationale": "（Mock）checker_main 通过：mock 章节符合目标区间。",
+        "dimensions": {"pacing": 8, "character_voice": 8, "plot_logic": 8,
+                       "consistency": 8, "writing_naturalness": 7, "hook_power": 8},
+        "overall_score": 7.9,
+        "strongest_point": "（Mock）checker_main：节奏与钩子到位。",
+        "weakest_point": "",
+        "specific_feedback": "（Mock）checker_main 通过：mock 章节符合目标区间。",
     }, ensure_ascii=False),
 
     "checker_cross1": json.dumps({
-        "score": 7.2,
-        "verdict": "PASS",
-        "issues": [],
-        "rationale": "（Mock）checker_cross1 通过：与前情一致性无矛盾。",
+        "dimensions": {"pacing": 8, "character_voice": 7, "plot_logic": 8,
+                       "consistency": 8, "writing_naturalness": 7, "hook_power": 8},
+        "overall_score": 7.7,
+        "strongest_point": "（Mock）checker_cross1：与前情一致性无矛盾。",
+        "weakest_point": "",
+        "specific_feedback": "（Mock）checker_cross1 通过。",
     }, ensure_ascii=False),
 
     "checker_cross2": json.dumps({
-        "score": 7.0,
-        "verdict": "PASS",
-        "issues": [],
-        "rationale": "（Mock）checker_cross2 通过：人物动机连贯。",
+        "dimensions": {"pacing": 7, "character_voice": 8, "plot_logic": 8,
+                       "consistency": 8, "writing_naturalness": 7, "hook_power": 7},
+        "overall_score": 7.5,
+        "strongest_point": "（Mock）checker_cross2：人物动机连贯。",
+        "weakest_point": "",
+        "specific_feedback": "（Mock）checker_cross2 通过。",
     }, ensure_ascii=False),
 
     "rewriter": "（Mock）改写后章节：与原章节同义但用词略有调整，验证 rewriter 路径可正常返回。",

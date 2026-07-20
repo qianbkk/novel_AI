@@ -125,6 +125,18 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
     for t in tasks:
         t["foreshadowing_ops"] = normalize_foreshadow_ops(t.get("foreshadowing_ops"))
 
+    # 章号契约（修订 2026-07-19）：任务章号必须从 start_chapter 连续编号。
+    # LLM 偶尔返回绝对章号（如固定从 1 开始）→ get_next_task 把
+    # current_chapter 拉回旧值 → 队列耗尽后按 current_chapter+1 重拆出
+    # 同一批章节 → 无限循环烧预算。章号本就可由 start_chapter 推导，
+    # 与期望不符时确定性重编号（LLM 给的编号只是建议值）。
+    expected = list(range(start_chapter, start_chapter + len(tasks)))
+    got = [t.get("chapter_number") for t in tasks]
+    if got != expected:
+        print(f"  ⚠ outline 返回章号 {got} 与期望 {expected} 不符，已重编号")
+        for i, t in enumerate(tasks):
+            t["chapter_number"] = start_chapter + i
+
     print(f"  ✅ {len(tasks)}章任务，成本${cost:.4f}")
     return tasks, cost
 

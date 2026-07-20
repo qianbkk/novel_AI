@@ -445,7 +445,19 @@ def node_get_next_task(state: OrchestratorState) -> OrchestratorState:
 
 
 def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
-    task    = state["current_task"]
+    task = state.get("current_task")
+    if task is None:
+        # arc_plans 为空（新项目漏跑 init_arc）或任务已耗尽时，
+        # load_arc_tasks 标 phase=done 但图的边仍无条件走到这里。
+        # 之前直接 state["current_task"] → NoneType 裸崩 exit_code=1，
+        # 用户看不到缺哪步。这里短路 + 保持/标记 done，沿既有
+        # route_after_pipeline("done"→save) → save_and_track 短路 →
+        # route_after_save("done") 走到 END，不改图拓扑。
+        if state.get("current_phase") not in ("done", "budget_paused"):
+            state["current_phase"] = "done"
+        log("⚠ 无待写任务（arc_plans 为空或已全部完成）。"
+            "新项目请先运行 init_arc 生成弧任务单，再执行 run", state)
+        return state
     setting = _setting()
     setting = {**setting, "novel_id": state.get("novel_id", "default")}
 
@@ -548,7 +560,9 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
     try:
         from .tools.rule_checker import analyze_chapter, format_issues_for_prompt
         prev_opens = state.get("_recent_chapter_openings", []) or []
-        rule_result = analyze_chapter(clean_text, prev_openings)
+        # 修订 2026-07-19：之前误写 prev_openings（未定义）→ NameError
+        # 被下面的非阻塞 except 吞掉，规则层自加入起从未生效。
+        rule_result = analyze_chapter(clean_text, prev_opens)
         state.setdefault("audit_rule_layer", []).append({
             "chapter": task["chapter_number"],
             "score": rule_result["score"],
@@ -689,7 +703,12 @@ def node_rewrite(state: OrchestratorState) -> OrchestratorState:
 
 
 def node_save_and_track(state: OrchestratorState) -> OrchestratorState:
-    task   = state["current_task"]
+    task = state.get("current_task")
+    if task is None:
+        # 与 node_write_pipeline 的 no-task 短路配对：phase=done 时
+        # route_after_pipeline 返回 "save" 会落到这里，无章可存，
+        # 直接透传让 route_after_save 走 done → END。
+        return state
     text   = task.get("_draft_text", "")
     cr     = task.get("_checker_result", {})
     memory = get_l2(state.get("novel_id", "default"))
@@ -943,6 +962,11 @@ def run_orchestrator(state: OrchestratorState, max_chapters: int = 10) -> Orches
             save_state(new_state, str(STATE_PATH))
             return new_state
         if node_name == "save_and_track":
+            if new_state.get("current_task") is None:
+                # no-task 短路（write_pipeline/save_and_track 守卫）透传到这里，
+                # 没有真实章节落盘，不计数、不打 "✅ 完成"（否则误导用户）。
+                state = new_state
+                continue
             chapters_done += 1
             print(f"\n✅ [{chapters_done}/{max_chapters}] Ch{new_state.get('current_chapter',0)} "
                   f"完成 | ${new_state.get('budget_used_usd',0):.4f}\n")

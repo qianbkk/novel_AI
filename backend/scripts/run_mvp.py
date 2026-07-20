@@ -81,6 +81,22 @@ def call_bridge_run(client: httpx.Client, project_id: str, command: str, args: l
     return final
 
 
+def sync_novel_ai_dir_env(client: httpx.Client, project_id: str) -> str | None:
+    """把项目 binding.novel_ai_dir 设进 NOVEL_AI_DIR env。
+
+    引擎子进程由 bridge 注入该 env；CLI 进程内的 select 步骤和终章检查
+    也会 import engine 模块，必须在首次 import 前对齐同一目录，否则绑定
+    非默认目录的项目会读写到默认目录（与其他项目串味）。"""
+    import os
+    r = client.get(f"/projects/{project_id}/bridge/binding")
+    if r.status_code != 200:
+        return None
+    novel_ai_dir = r.json().get("novel_ai_dir")
+    if novel_ai_dir:
+        os.environ["NOVEL_AI_DIR"] = novel_ai_dir
+    return novel_ai_dir
+
+
 def select_bootstrap_version(project_id: str, chapter: int, version: str) -> None:
     """bootstrap select N X — 直接 import 调 select_version(project_id)。
     走 subprocess 的话 CLI 不接受 --novel_id，memory 会落到默认 key。
@@ -111,6 +127,11 @@ def main() -> int:
             print(f"✗ 后端 {args.api} 不可达：{e}\n  请先在另一个终端跑: cd backend && uvicorn app.main:app --reload --port 8132")
             return 1
 
+        # 0.5 对齐 NOVEL_AI_DIR（select / 终章检查在 CLI 进程内 import engine）
+        bound_dir = sync_novel_ai_dir_env(client, args.project_id)
+        if bound_dir:
+            print(f"[binding] NOVEL_AI_DIR={bound_dir}")
+
         # 1. push-concept
         try:
             r = client.post(f"/projects/{args.project_id}/bridge/push-concept")
@@ -119,7 +140,11 @@ def main() -> int:
             summary["steps"].append({"step": "push-concept", "ok": True})
         except httpx.HTTPStatusError as e:
             print(f"✗ push-concept 失败: {e.response.status_code} {e.response.text}")
-            print("  提示: 必须先在 frontend 完成 worldbuild (10 阶段)")
+            if e.response.status_code == 400 and "NovelAIBinding" in e.response.text:
+                print("  提示: 先绑定 engine 目录 — PUT /projects/<id>/bridge/binding")
+                print('        body: {"novel_ai_dir": "<engine 数据目录>"}（frontend 写作引擎控制台也可绑定）')
+            else:
+                print("  提示: 必须先在 frontend 完成 worldbuild (10 阶段)")
             return 1
 
         # 2. planner
@@ -154,8 +179,18 @@ def main() -> int:
             except Exception as e:
                 print(f"✗ select 失败: {e}")
                 return 1
+            # 5.5 init_arc — 把 setting_package.arc_outline 转成 orchestrator
+            # state.arc_plans（不调 LLM）。缺这步 run 会因 arc_plans=[] 直接
+            # 结束（e2e 实跑发现的流水线缺口）。
+            # 注意：init_arc 会重建 state（进度清零），所以只在 fresh 路径跑；
+            # --skip-bootstrap 表示之前跑过，state 已有 arc_plans 和进度。
+            final = call_bridge_run(client, args.project_id, "init_arc", [])
+            if final.get("exit_code") != 0:
+                print(f"✗ init_arc 失败（exit_code={final.get('exit_code')}）")
+                return 1
+            summary["steps"].append({"step": "init_arc", "exit_code": 0})
         else:
-            print(f"\n[4-5/7] bootstrap + select (skipped via --skip-bootstrap)")
+            print(f"\n[4-5/7] bootstrap + select + init_arc (skipped via --skip-bootstrap)")
 
         # 6. run N
         final = call_bridge_run(client, args.project_id, "run", [str(args.chapters)])
