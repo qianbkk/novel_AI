@@ -4,7 +4,9 @@ from sqlalchemy.orm import Session
 
 from ..auth_scope import require_owned_project
 from ..database import get_db
+from ..llm_client import LLMError
 from ..models import Chapter, ChapterCharacter, Character
+from ..novel_extract import ExtractConflictError, extract_setting_from_chapters
 from ..schemas import ChapterCreate, ChapterFull
 from ..rag.retrieval import add_chapter, semantic_search_chapters, DuplicateChapterError
 
@@ -236,3 +238,52 @@ async def import_novel_text(
         "skipped": skipped,
         "skipped_empty": skipped_empty,
     }
+
+
+class ExtractSettingRequest(BaseModel):
+    max_chapters: int = Field(default=20, ge=1, le=200)
+    replace: bool = False
+
+
+@router.post("/extract-setting")
+async def extract_setting(
+    project_id: str,
+    payload: ExtractSettingRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
+    """从已导入的章节反向提取世界观/人物/关系/势力/力量体系/伏笔，
+    写入现有 WorldSetting / Character / Faction / PowerSystem /
+    Foreshadowing / EntityRelation 表。push-concept 会自动把这些结构化
+    数据打包进 novel_config.json 的 worldbuild_snapshot 字段，引擎
+    planner 有则沿用——无需额外接入即可让续写带着提取设定。
+
+    幂等：默认拒绝覆盖已有设定（409，detail.code=setting_exists），
+    设 replace=true 时删旧重建（单事务）。
+    """
+    try:
+        result = await extract_setting_from_chapters(
+            project_id=project_id,
+            db=db,
+            max_chapters=payload.max_chapters,
+            replace=payload.replace,
+        )
+        return result
+    except ValueError as e:
+        # "没有可提取的章节" 等 caller 错误
+        raise HTTPException(400, str(e))
+    except ExtractConflictError as e:
+        # 409 风格与 duplicate_chapter_no 一致
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "setting_exists",
+                "message": str(e),
+                "hint": "重跑请带 {\"replace\": true}",
+            },
+        )
+    except LLMError:
+        # 不暴露 provider/role 等内部信息（CLAUDE.md 敏感信息不变量；
+        # LLMError 本身只含 provider/role/重试次数，相对安全，但统一文案更稳）
+        raise HTTPException(502, "LLM 提取失败，请重试")
