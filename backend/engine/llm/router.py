@@ -804,15 +804,21 @@ _MOCK_RESPONSES: dict[str, str] = {
         },
     ], ensure_ascii=False),
 
+    # run_tracker（agents/tracker.py TRACKER_SYSTEM）消费的字段是
+    # chapter_summary / character_states / active_threads / last_chapter_ending
+    # / new_foreshadowing 等。旧 mock 用的 entity_updates/foreshadow_updates
+    # 在代码库里没有任何消费方——能 parse 但全部被静默忽略，mock 闭环跑完
+    # 记忆热层仍是空（writer 拿不到上章结尾/近期事件），2026-07-19 e2e 发现。
     "tracker": json.dumps({
-        "entity_updates": [
-            {"name": "（Mock）主角", "type": "character", "status": "active",
-             "new_detail": {"name": "（Mock）主角", "role": "主角", "first_appearance_chapter": 1}},
+        "chapter_summary": "（Mock）本章摘要：主角初次触发系统，埋下神秘符号伏笔。",
+        "character_states": {"（Mock）主角": "获得系统，尚未向外界暴露"},
+        "active_threads": ["（Mock）主线：查明系统来历"],
+        "last_chapter_ending": "（Mock）上章结尾：主角盯着掌心浮现的神秘符号，听见系统提示音再次响起。",
+        "scene_location": "（Mock）主角出租屋",
+        "time_context": "（Mock）第一天深夜",
+        "new_foreshadowing": [
+            {"desc": "（Mock）伏笔：神秘符号", "target_arc": 1},
         ],
-        "foreshadow_updates": [
-            {"id": "fs_mock_1", "status": "已铺垫", "planted_chapter": 1},
-        ],
-        "continuity_alerts": [],
     }, ensure_ascii=False),
 
     "summarizer": "（Mock）本章摘要：跑通 mock LLM → parse_llm_json_response → orchestrator 状态更新整条链路。",

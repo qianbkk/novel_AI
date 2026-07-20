@@ -2199,3 +2199,50 @@ class TestPlannerMockPayloadValid:
             assert required in parsed, (
                 f"_MOCK_RESPONSES['planner'] 缺 required 字段 '{required}'"
             )
+
+    def test_tracker_mock_actually_updates_hot_memory(self, monkeypatch):
+        """_MOCK_RESPONSES['tracker'] 喂给 run_tracker 后热层必须真的更新。
+
+        历史缺陷（e2e 实跑 2026-07-19，L2 落盘文件证实）：tracker mock 是
+        {"entity_updates": ..., "foreshadow_updates": ..., "continuity_alerts": ...}
+        ——这套字段在整个代码库里没有任何消费方（run_tracker 消费的是
+        chapter_summary / character_states / active_threads /
+        last_chapter_ending / new_foreshadowing）。mock 能 parse 成合法
+        JSON 所以不报错，但所有键被静默忽略 → mock 模式跑完 N 章后
+        recent_summaries / last_chapter_ending / character_states /
+        active_threads 全空，writer 的【上章结尾】【近期事件】上下文
+        永远为空，记忆链路在 mock 闭环中从未真正验证过。"""
+        import json
+        from unittest.mock import MagicMock
+        import engine.agents.tracker as tracker_mod
+        from engine.llm.router import _MOCK_RESPONSES
+        from engine.memory.manager import empty_l2
+
+        mock_router = MagicMock()
+        mock_router.call.return_value = (_MOCK_RESPONSES["tracker"], 0.001)
+        monkeypatch.setattr(tracker_mod, "get_active_router", lambda: mock_router)
+        # 不许碰真实 L2 目录
+        saved = {}
+        monkeypatch.setattr(tracker_mod, "save_l2",
+                            lambda novel_id, mem: saved.update({novel_id: mem}))
+
+        task = {"chapter_number": 1, "chapter_role": "铺垫",
+                "chapter_goal": "g", "main_characters": []}
+        mem, _cost = tracker_mod.run_tracker(
+            "测试正文。" * 200, task, empty_l2(), "tracker-mock-contract")
+
+        hot = mem.get("hot", {})
+        assert hot.get("recent_summaries"), (
+            "tracker mock 必须携带 chapter_summary → recent_summaries 非空"
+            "（否则 writer 的【近期事件】永远为空）"
+        )
+        assert hot.get("last_chapter_ending"), (
+            "tracker mock 必须携带 last_chapter_ending（writer 的【上章结尾】依赖）"
+        )
+        assert hot.get("character_states"), (
+            "tracker mock 必须携带 character_states（writer 的【本章人物状态】依赖）"
+        )
+        assert hot.get("active_threads"), (
+            "tracker mock 必须携带 active_threads（writer 的【当前剧情线】依赖）"
+        )
+        assert saved, "run_tracker 必须调用 save_l2 落盘"
