@@ -314,7 +314,10 @@ def _check_conflict_and_prepare(project_id: str, db: Session, replace: bool) -> 
     db.query(WorldSetting).filter_by(project_id=project_id).delete(synchronize_session=False)
 
 
-def _persist_world(project_id: str, payload: dict, warnings: list[str], db: Session) -> bool:
+def _persist_world(
+    project_id: str, payload: dict, plot_skeleton: list[dict],
+    warnings: list[str], db: Session,
+) -> bool:
     rich = payload.get("world_view_rich") or {}
     struct = payload.get("story_core_struct") or {}
     timeline = payload.get("history_timeline") or []
@@ -337,6 +340,9 @@ def _persist_world(project_id: str, payload: dict, warnings: list[str], db: Sess
         ws.story_core_struct_json = struct
     if timeline:
         ws.history_timeline_json = timeline
+    if plot_skeleton:
+        # task #7：把 LLM 反推的卷级骨架写到 plot_skeleton_json
+        ws.plot_skeleton_json = plot_skeleton
 
     # legacy 字段兜底：把 rich 拼成一段文本，方便 push-concept 的"无 rich 就用 legacy"分支
     if rich:
@@ -350,6 +356,33 @@ def _persist_world(project_id: str, payload: dict, warnings: list[str], db: Sess
         )[:2000]
 
     return bool(rich) and rich_passed
+
+
+def _persist_chapter_summaries(
+    project_id: str, summaries: list[dict], db: Session,
+) -> int:
+    """task #7：把 LLM 给每章写的摘要回填到 Chapter.summary 列。
+
+    只更新匹配 chapter_no 的行；summary 为空时不动现有值（避免把已有
+    摘要清空）。返回实际更新的行数。
+    """
+    if not summaries:
+        return 0
+    # 把 summaries 按 chapter_no 索引
+    by_no = {s["chapter_no"]: s["summary"] for s in summaries if s.get("summary")}
+    rows = (
+        db.query(Chapter)
+        .filter_by(project_id=project_id)
+        .filter(Chapter.chapter_no.in_(by_no.keys()))
+        .all()
+    )
+    written = 0
+    for r in rows:
+        new_sum = by_no.get(r.chapter_no)
+        if new_sum and r.summary != new_sum:
+            r.summary = new_sum
+            written += 1
+    return written
 
 
 def _persist_characters(
@@ -493,6 +526,78 @@ def _rebuild_chapter_character_edges(project_id: str, db: Session) -> int:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# 卷级骨架 + 单章摘要（task #7）
+# ═══════════════════════════════════════════════════════════════════════════════
+PLOT_SKELETON_SYSTEM = (
+    "你是小说情节脉络提取助手。基于已有小说正文，做两件事："
+    "1) 把全文归并为 2-5 卷的卷级骨架（plot_skeleton），每卷含 title 与 summary；"
+    "2) 给每章写一句中文摘要（chapter_summaries），按 chapter_no 顺序，"
+    "   列表项 {chapter_no, summary}。"
+    "返回 JSON：{ plot_skeleton: [{title, summary}, ...], "
+    "chapter_summaries: [{chapter_no, summary}, ...] }。"
+    "plot_skeleton 每卷 summary 不超过 80 字；chapter_summaries 每条 20-50 字；"
+    "两者都要基于原文证据，不要凭空编剧情。"
+)
+
+
+_PLOT_SKELETON_MOCK: dict[str, Any] = {
+    "plot_skeleton": [
+        {"title": "（Mock提取）第1卷 债起云州",
+         "summary": "主角重生回到 2012，云州林氏长子清晨醒来，与苏晚栀首次合计，面对债主委员会的第一波追债"},
+        {"title": "（Mock提取）第2卷 入局云州",
+         "summary": "林渊建立第一个商业根据地，被前世债主发现踪迹，云州商会介入"},
+    ],
+    "chapter_summaries": [
+        {"chapter_no": 1, "summary": "（Mock提取）林渊在云州清晨醒来，债主委员会已登门，苏晚栀递过账本。"},
+        {"chapter_no": 2, "summary": "（Mock提取）林渊与苏晚栀合计第一笔交易，债街钟声响起七下。"},
+    ],
+}
+
+
+async def _extract_plot_skeleton(
+    chapters: list[Chapter],
+) -> tuple[list[dict], list[dict], list[str]]:
+    """返回 (plot_skeleton, chapter_summaries, warnings)。
+
+    plot_skeleton: [{title, summary}]；空时返回 []（不阻断主流程）。
+    chapter_summaries: [{chapter_no, summary}]；按 chapter_no 排序；长度
+    与 chapters 不一致时全部丢弃（不强行补齐，避免幻觉）。
+    """
+    corpus = _build_corpus(chapters)
+    payload = await call_llm_json(
+        role="structured_logic",
+        system_prompt=PLOT_SKELETON_SYSTEM,
+        user_prompt=("已有小说正文（已截断）：\n" + corpus[:_TOTAL_CORPUS_CHAR_BUDGET]),
+        mock_payload=_PLOT_SKELETON_MOCK,
+    )
+    warnings: list[str] = []
+    plot_skel = payload.get("plot_skeleton") or []
+    summaries = payload.get("chapter_summaries") or []
+    # 容错：summary 必须是 string 且非空
+    plot_skel = [
+        {"title": str(p.get("title") or "").strip(),
+         "summary": str(p.get("summary") or "").strip()}
+        for p in plot_skel
+        if p.get("title") or p.get("summary")
+    ]
+    summaries = [
+        {"chapter_no": int(s["chapter_no"]),
+         "summary": str(s.get("summary") or "").strip()}
+        for s in summaries
+        if isinstance(s, dict)
+        and isinstance(s.get("chapter_no"), (int, str))
+        and str(s.get("chapter_no")).isdigit()
+        and s.get("summary")
+    ]
+    summaries = [s for s in summaries if s["summary"]]
+    if not plot_skel:
+        warnings.append("plot_skeleton 为空：LLM 返回无有效卷级骨架")
+    if not summaries:
+        warnings.append("chapter_summaries 为空：LLM 返回无有效单章摘要")
+    return plot_skel, summaries, warnings
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 顶层入口
 # ═══════════════════════════════════════════════════════════════════════════════
 async def extract_setting_from_chapters(
@@ -524,10 +629,15 @@ async def extract_setting_from_chapters(
     misc_payload, m_warn = await _extract_misc(corpus)
     warnings.extend(m_warn)
 
+    plot_skeleton, chapter_summaries, ps_warn = await _extract_plot_skeleton(chapters)
+    warnings.extend(ps_warn)
+
     # 进入持久化阶段（单事务）
     try:
         _check_conflict_and_prepare(project_id, db, replace)
-        world_ok = _persist_world(project_id, world_payload, warnings, db)
+        world_ok = _persist_world(
+            project_id, world_payload, plot_skeleton, warnings, db,
+        )
         written_chars, written_rels = _persist_characters(
             project_id, characters, relations, warnings, db,
         )
@@ -540,6 +650,10 @@ async def extract_setting_from_chapters(
             project_id, misc_payload, name_to_id, warnings, db,
         )
         rebuilt_edges = _rebuild_chapter_character_edges(project_id, db)
+        # task #7：回填单章摘要到 Chapter.summary 列
+        written_summaries = _persist_chapter_summaries(
+            project_id, chapter_summaries, db,
+        )
         # 标记 project.status=ready，让 push-concept 的 _worldbuild_done 放行。
         # 与 worldbuild/orchestrator.py:75 同语义 —— 「有完整设定可推」即 ready。
         # worldbuild 仍能覆盖（_check_conflict_and_prepare 默认 raise 409 保护，
@@ -563,6 +677,8 @@ async def extract_setting_from_chapters(
         "factions": written_factions,
         "power_systems": written_powers,
         "foreshadowings": written_fs,
+        "plot_skeleton_volumes": len(plot_skeleton),
+        "chapter_summaries_backfilled": written_summaries,
         "chapter_character_edges_rebuilt": rebuilt_edges,
         "chapters_used": len(chapters),
         "warnings": warnings,

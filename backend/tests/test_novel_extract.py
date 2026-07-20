@@ -438,3 +438,83 @@ class TestExtractSettingApi:
             f"/projects/{project_with_chapters}/bridge/push-concept",
         )
         assert r.status_code == 200, r.text
+
+    def test_extract_writes_plot_skeleton_and_summaries(
+        self, api_client, project_with_chapters,
+    ):
+        """task #7：extract 应同时反推 plot_skeleton（卷级骨架）和回填
+        每章 Chapter.summary。push-concept 的 worldbuild_snapshot 才能带
+        plot_skeleton，planner 输出 arc_outline.arc_name 才不会是
+        「（Mock）第 1 弧」。
+        """
+        r = api_client.post(
+            f"/projects/{project_with_chapters}/chapters/extract-setting",
+            json={},
+        )
+        assert r.status_code == 200, r.text
+        body = r.json()
+        assert body["plot_skeleton_volumes"] == 2, body
+        assert body["chapter_summaries_backfilled"] >= 2, body
+
+        from app.database import SessionLocal
+        from app.models import Chapter, WorldSetting
+        db = SessionLocal()
+        try:
+            ws = db.query(WorldSetting).filter_by(
+                project_id=project_with_chapters,
+            ).first()
+            assert ws is not None
+            skel = ws.plot_skeleton_json
+            assert isinstance(skel, list) and len(skel) == 2
+            for v in skel:
+                assert v.get("title") and v.get("summary"), v
+                # mock payload 卷名含「债起/入局」
+                assert "债起" in v["title"] or "入局" in v["title"], v
+
+            # Chapter.summary 应被回填
+            for ch in db.query(Chapter).filter_by(
+                project_id=project_with_chapters,
+            ).order_by(Chapter.chapter_no.asc()).all():
+                assert ch.summary and "（Mock提取）" in ch.summary, \
+                    f"ch{ch.chapter_no} summary missing: {ch.summary!r}"
+        finally:
+            db.close()
+
+    def test_extract_summaries_idempotent(
+        self, api_client, project_with_chapters,
+    ):
+        """re-extract 不应把已有 summary 清空（backfill 只在不一致时更新）。"""
+        api_client.post(
+            f"/projects/{project_with_chapters}/chapters/extract-setting",
+            json={},
+        )
+        from app.database import SessionLocal
+        from app.models import Chapter
+        db = SessionLocal()
+        try:
+            first_summaries = {
+                ch.chapter_no: ch.summary
+                for ch in db.query(Chapter).filter_by(
+                    project_id=project_with_chapters,
+                ).all()
+            }
+        finally:
+            db.close()
+        assert all(s and "（Mock提取）" in s for s in first_summaries.values())
+
+        # replace=true 再跑一遍：摘要应保持不变
+        r2 = api_client.post(
+            f"/projects/{project_with_chapters}/chapters/extract-setting",
+            json={"replace": True},
+        )
+        assert r2.status_code == 200, r2.text
+
+        db = SessionLocal()
+        try:
+            for ch in db.query(Chapter).filter_by(
+                project_id=project_with_chapters,
+            ).all():
+                assert ch.summary and ch.summary == first_summaries[ch.chapter_no], \
+                    f"ch{ch.chapter_no} summary changed unexpectedly"
+        finally:
+            db.close()
