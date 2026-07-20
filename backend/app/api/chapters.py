@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..auth_scope import require_owned_project
@@ -179,3 +180,59 @@ async def create_chapter(
                 "existing_chapter_id": e.existing_chapter_id,
             },
         )
+
+
+class NovelTextImport(BaseModel):
+    text: str
+    start_chapter_no: int = Field(default=1, ge=1)
+
+
+@router.post("/import-text")
+async def import_novel_text(
+    project_id: str,
+    payload: NovelTextImport,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
+    """导入已有小说的整本纯文本：确定性切章（split_novel_text）后逐章
+    走 add_chapter（embedding + 人物标记 + 重复度检测，与手动建章同链路）。
+
+    幂等语义：chapter_no 已存在的章节跳过（skipped），**绝不覆盖**——
+    覆盖已有正文属于破坏性操作，需要用户显式删除后重导。
+    续篇导入用 start_chapter_no 接在已有章节之后。
+    正文为空的切分产物（标题连标题）不入库，计入 skipped_empty。
+    """
+    from ..novel_import import split_novel_text
+
+    if not payload.text or not payload.text.strip():
+        raise HTTPException(400, "text 为空")
+    parts = split_novel_text(payload.text, start_chapter_no=payload.start_chapter_no)
+    if not parts:
+        raise HTTPException(400, "未能从文本中切分出任何章节")
+
+    imported: list[dict] = []
+    skipped: list[int] = []
+    skipped_empty: list[int] = []
+    for p in parts:
+        if not p["content"].strip():
+            skipped_empty.append(p["chapter_no"])
+            continue
+        try:
+            result = await add_chapter(
+                project_id, p["chapter_no"], p["title"], p["content"], db,
+            )
+            imported.append({
+                "chapter_no": p["chapter_no"],
+                "chapter_id": result["chapter_id"],
+                "title": p["title"],
+                "repetition_warnings": result.get("repetition_warnings", []),
+            })
+        except DuplicateChapterError:
+            skipped.append(p["chapter_no"])
+    return {
+        "total_parsed": len(parts),
+        "imported": imported,
+        "skipped": skipped,
+        "skipped_empty": skipped_empty,
+    }
