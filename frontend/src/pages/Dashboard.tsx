@@ -166,6 +166,7 @@ function ModuleCompass({ projects, chapterMap }: { projects: Project[]; chapterM
 export default function Dashboard() {
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [chapterMap, setChapterMap] = useState<Record<string, ChapterListItem[]>>({});
+  const [chapterLoadFailures, setChapterLoadFailures] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const [q, setQ] = useState(searchParams.get("q") || "");
@@ -189,18 +190,32 @@ export default function Dashboard() {
       const ps = await api.listProjects({ q, genre });
       if (!mountedRef.current) return;
       setProjects(ps);
-      const entries = await Promise.all(
-        ps.map(async (p) => {
-          try {
-            const chs = await api.listChapters(p.id);
-            return [p.id, chs] as const;
-          } catch {
-            return [p.id, [] as ChapterListItem[]] as const;
-          }
-        }),
-      );
+      // 审计 #2（2026-07-22）：串行 + 4 并发限制，避免全量并发导致
+      // 大量项目首屏加载变慢。不引入 p-limit 依赖，手写 chunk 即可。
+      const concurrency = 4;
+      const entries: Array<readonly [string, ChapterListItem[], boolean]> = [];
+      for (let i = 0; i < ps.length; i += concurrency) {
+        const slice = ps.slice(i, i + concurrency);
+        const sub = await Promise.all(
+          slice.map(async (p) => {
+            try {
+              const chs = await api.listChapters(p.id);
+              return [p.id, chs, false] as const;
+            } catch (e) {
+              // 审计 #1（2026-07-22）：不再静默吞单个项目章节加载失败，
+              // console.warn 让开发者看到，同时 hasError=true 让 UI 能区分
+              // 「真的没有章节」与「加载失败」（前端用 hasError 标灰）。
+              console.warn(`[Dashboard] listChapters failed for ${p.id}:`, e);
+              return [p.id, [] as ChapterListItem[], true] as const;
+            }
+          }),
+        );
+        entries.push(...sub);
+      }
       if (!mountedRef.current) return;
-      setChapterMap(Object.fromEntries(entries));
+      // chapterMap: id -> chapters；failures: id -> true（前端可标灰）
+      setChapterMap(Object.fromEntries(entries.map(([id, chs]) => [id, chs])));
+      setChapterLoadFailures(Object.fromEntries(entries.map(([id, _chs, err]) => [id, err])));
     } catch (e) {
       if (!mountedRef.current) return;
       setError(String(e));
