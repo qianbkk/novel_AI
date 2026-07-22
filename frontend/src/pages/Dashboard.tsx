@@ -473,7 +473,13 @@ export default function Dashboard() {
 
                 {/* 章节预览 fan（3D 叠层） */}
                 {recent.length > 0 && (
-                  <div className="chapter-fan" aria-hidden="true">
+                  // 审计 #11 (2026-07-20)：纯视觉装饰，禁止吞掉鼠标事件，
+                  // 否则点击预览会冒泡到父级 project card 触发导航。
+                  <div
+                    className="chapter-fan"
+                    aria-hidden="true"
+                    style={{ pointerEvents: "none" }}
+                  >
                     {recent.map((c, idx) => (
                       <div
                         key={c.id}

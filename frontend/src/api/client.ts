@@ -41,6 +41,12 @@ import type {
 const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8132";
 
 // ─── JWT token 管理 ───
+// 审计 #10 (2026-07-20)：token 存 localStorage（不是 cookie）。
+// 后端 login/register 同时下发 HttpOnly cookie，但当前后端只解
+// Authorization 头（见 backend/app/auth.py:_extract_bearer），所以
+// 真正生效的鉴权来源是这里 setItem 的值。Cookie 是"未来 cookie-only
+// 切换"预留通道——切换涉及 CSRF 防护 / 反代 HTTPS 强制 / 多 worker
+// 同步，超出最小实现边界。XSS 防护前提：当前前端无 dangerouslySetInnerHTML。
 const TOKEN_KEY = "novel_ai_jwt";
 
 export function getStoredToken(): string | null {
@@ -94,6 +100,12 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   if (!resp.ok) {
+    // 审计 #4 (2026-07-20)：5xx 错误体可能含 SQL/堆栈/内部路径，
+    // 直接拼到 Error message 会经 toast / setLoadError 展示给用户。
+    // 4xx 通常是业务错误（detail 是用户可读信息）→ 保留 body 透传。
+    if (resp.status >= 500 && resp.status < 600) {
+      throw new Error(`服务器错误 ${resp.status} (${path})`);
+    }
     const text = await resp.text().catch(() => "");
     throw new Error(`请求失败 ${resp.status}: ${path} ${text}`);
   }
