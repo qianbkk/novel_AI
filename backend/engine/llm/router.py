@@ -147,14 +147,23 @@ _PROVIDER_PROXY: dict[str, str] = {}
 
 
 @retry(
-    stop=stop_after_attempt(3),
-    wait=wait_exponential(min=1, max=10),
+    stop=stop_after_attempt(6),
+    wait=wait_exponential(multiplier=2, min=2, max=60),
     retry=retry_if_exception_type((httpx.TransportError, httpx.HTTPStatusError)),
     reraise=True,
 )
 def _post_with_retry(client: httpx.Client, url: str, **kwargs) -> httpx.Response:
-    """POST + auto-retry on network errors and 5xx (3 attempts, exp backoff 1-10s).
-    4xx errors are NOT retried (auth/quota fail-fast)."""
+    """POST + auto-retry on network errors and 5xx (default 6 attempts, exp backoff 2-60s).
+
+    4xx errors are NOT retried (auth/quota fail-fast)。
+
+    2026-07-22 真实 LLM 30 章测试观察：
+    MiniMax-M3 在连续多章调用后会返 HTTP 529（服务器过载，类 Cloudflare 5xx）。
+    之前 3 attempts + 1-10s exp backoff 不够——3 次重试全部 529，写出来 6 个
+    占位章节。提升到 6 attempts + 2-60s backoff：总等待上限 2+4+8+16+32+60
+    ≈ 2 分钟，给 MiniMax 临时过载喘息窗口。返回的内容侧仍受 orchestrator
+    3-retry-then-placeholder 兜底（独立机制，本函数只控制单次 HTTP 重试）。
+    """
     r = client.post(url, **kwargs)
     if 500 <= r.status_code < 600:
         r.raise_for_status()  # HTTPStatusError → caught by tenacity
