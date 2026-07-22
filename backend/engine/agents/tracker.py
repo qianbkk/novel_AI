@@ -77,6 +77,55 @@ def _append_dedup(existing: list, additions: list) -> list:
     return result
 
 
+def _merge_character_states(
+    existing: dict, updates: dict, *,
+    window: int = 50,
+) -> dict:
+    """2026-07-22 Phase 2 #5：character_states 字段的 fuzzy-key dedup 合并。
+
+    之前 `char_states = dict(...); char_states.update(updates.get(...))` 是
+    dict.update() 纯替换——LLM 在不同章节可能用不同叫法指同一角色
+    （\"林渊\" / \"逍遥兄\" / \"林兄\"），会新增独立 key 而不更新旧 key。
+    长篇（30+ 章）实测里这种碎片化导致 character_states key 数无限
+    增长，writer 检索时拿到多份互不同步的角色快照，表现为「某个配角
+    的状态/设定突然对不上」且日志里无任何报错。
+
+    修法（与 _merge_threads 同模式）：对每个 update key 在已有 keys 里
+    fuzzy-equal 匹配（substring 互相包含视为同义改写）；命中则 merge value
+    （更新值优先，未变化保留旧值），未命中则作为新 key 添加。
+    window=50 防 LLM 一次性返 N 个新角色时 O(n²) 爆炸。
+    """
+    result: dict = dict(existing or {})
+    existing_keys: list = list(result.keys())
+    for new_name, new_state in (updates or {}).items():
+        new_name_s = str(new_name).strip()
+        new_state_s = str(new_state).strip() if new_state else ""
+        if not new_name_s:
+            continue
+        merged_into = None
+        for kept in existing_keys[-window:]:
+            kept_s = str(kept).strip()
+            # substring 互相包含视为同义（含 \"林渊\"/\"林渊兄\" 类的短叫法）
+            if new_name_s == kept_s:
+                merged_into = kept
+                break
+            if new_name_s in kept_s or kept_s in new_name_s:
+                merged_into = kept
+                break
+        if merged_into is not None:
+            # 用更新值覆盖（LLM 这次状态比上次新），但保留旧 key 字符串以稳定检索
+            old_state = str(result.get(merged_into, "") or "").strip()
+            if new_state_s and new_state_s != old_state:
+                result[merged_into] = new_state_s
+            # 新名作为别名不另存——避免同一角色多 key
+        else:
+            # 真新角色 / 全新叫法
+            if new_state_s:
+                result[new_name_s] = new_state_s
+            existing_keys.append(new_name_s)
+    return result
+
+
 TRACKER_SYSTEM = """你是叙事状态追踪AI。阅读本章正文，提取状态变化并更新记录。
 严格输出JSON，不输出任何其他内容。
 
@@ -198,9 +247,13 @@ def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: s
             inv.remove(item)
     hot["inventory"] = inv
 
-    char_states = dict(hot.get("character_states", {}))
-    char_states.update(updates.get("character_states", {}))
-    hot["character_states"] = char_states
+    # Phase 2 #5 (2026-07-22)：character_states 走 fuzzy-key dedup，
+    # 避免 LLM 在不同章节用不同叫法指同一角色时新增独立 key 导致碎片化。
+    if "character_states" in updates:
+        hot["character_states"] = _merge_character_states(
+            hot.get("character_states", {}),
+            updates.get("character_states", {}),
+        )
 
     # Phase 8 fix #8：active_threads 不能 LLM 一旦漏列就被静默删除。
     # 之前 `hot["active_threads"] = updates["active_threads"]` 是破坏性替换。
