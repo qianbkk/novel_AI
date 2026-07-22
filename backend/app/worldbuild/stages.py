@@ -255,11 +255,19 @@ async def stage_characters(ctx: dict, db: Session):
             continue
         seen_names.add(name)
 
-        # schema 校验
+        # 2026-07-23 修复（问题 #9）：schema 校验失败时降级补默认值，不抛。
+        # 之前 strict 模式 → real LLM 偶有缺 personality.summary / catchphrase.lines 等字段
+        # 就 RuntimeError 让整个 worldbuild 崩，30 章测试中断。
+        # 修法：缺关键字段时用合理默认填上，log warning 让运维知道 LLM 输出缺字段。
         try:
             validate_character_card(card)
         except SchemaError as e:
-            raise RuntimeError(f"角色 {name} 角色卡 schema 校验失败：{e}") from e
+            log.warning(
+                "stage_characters: 角色 %s 8 段缺字段，校验失败（%s）— "
+                "降级补默认值继续",
+                name, e,
+            )
+            card = _fill_missing_card_defaults(card, name, role)
 
         row = Character(
             project_id=ctx["project"].id,
@@ -293,6 +301,74 @@ async def stage_characters(ctx: dict, db: Session):
 
 
 # Mock：主角 + 3 个配角，每人完整 8 段
+def _fill_missing_card_defaults(card: dict, name: str, role: str) -> dict:
+    """2026-07-23（问题 #9 修复）：补 8 段 character_card 缺失字段的默认值。
+
+    real LLM 偶有漏字段（特别是 personality.summary / catchphrase.lines / arc 三个
+    "必填 + 长度约束" 字段），strict 校验会让整个 worldbuild 崩。
+    修法：缺关键字段时用合理默认填上，让 character row 仍能写入，
+    前端 CharacterCard 8 段展示时"待补全"提示给用户。
+    """
+    card = dict(card)  # 不改 caller 引用
+    # basic: {gender, age, identity, faction_id}
+    if "basic" not in card or not isinstance(card["basic"], dict):
+        card["basic"] = {}
+    basic = card["basic"]
+    basic.setdefault("gender", "未知")
+    basic.setdefault("age", 0)
+    basic.setdefault("identity", name)
+    basic.setdefault("faction_id", None)
+    # appearance
+    if "appearance" not in card or not isinstance(card["appearance"], dict):
+        card["appearance"] = {}
+    app = card["appearance"]
+    app.setdefault("height", "")
+    app.setdefault("hair", "")
+    app.setdefault("outfit", "")
+    app.setdefault("distinguishing_feature", "")
+    # personality: tags + summary（summary 必填且 ≥ 10 字符）
+    if "personality" not in card or not isinstance(card["personality"], dict):
+        card["personality"] = {}
+    pers = card["personality"]
+    pers.setdefault("tags", ["未知"])
+    if not pers.get("summary") or len(pers.get("summary", "")) < 10:
+        pers["summary"] = f"{role}，性格待补全（LLM 输出缺 summary）"
+    # background
+    if "background" not in card or not isinstance(card["background"], dict):
+        card["background"] = {}
+    bg = card["background"]
+    bg.setdefault("origin", "")
+    bg.setdefault("motivation", "")
+    bg.setdefault("secret", "")
+    # abilities
+    if "abilities" not in card or not isinstance(card["abilities"], dict):
+        card["abilities"] = {}
+    ab = card["abilities"]
+    ab.setdefault("power_name", "")
+    ab.setdefault("current_tier", "")
+    ab.setdefault("growth_potential", "")
+    # catchphrase: lines (non-empty)
+    if "catchphrase" not in card or not isinstance(card["catchphrase"], dict):
+        card["catchphrase"] = {}
+    cp = card["catchphrase"]
+    if not cp.get("lines") or not isinstance(cp["lines"], list) or len(cp["lines"]) == 0:
+        cp["lines"] = ["（待补全）"]
+    # props
+    if "props" not in card or not isinstance(card["props"], dict):
+        card["props"] = {}
+    pr = card["props"]
+    pr.setdefault("signature_item", "")
+    pr.setdefault("companion", "无")
+    # arc
+    if "arc" not in card or not isinstance(card["arc"], dict):
+        card["arc"] = {}
+    ar = card["arc"]
+    ar.setdefault("start_state", "登场")
+    ar.setdefault("catalyst", "（待补全）")
+    ar.setdefault("end_state", "（待补全）")
+    return card
+
+
 _CHARACTERS_MOCK = [
     {
         "name": "林渊", "role": "主角",

@@ -60,7 +60,7 @@ def _clean_content_for_import(content: str) -> str:
 
     # 整段是 JSON 包装：委托 utils.extract_llm_response_body 剥 body
     if stripped.startswith("{") and '"body"' in stripped[:200]:
-        from ...engine.utils import extract_llm_response_body
+        from engine.utils import extract_llm_response_body
         body, _title = extract_llm_response_body(stripped)
         if body:
             return body

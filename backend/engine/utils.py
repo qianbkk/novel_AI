@@ -236,6 +236,23 @@ def extract_llm_response_body(
 
     text = raw.strip()
 
+    # 策略 0 (中文 prompt 特化)：「【标题】: xxx」或「【标题】：xxx」前缀 + 正文
+    # 之前在 writer._extract_title 第 3 级单独处理，2026-07-23 simplify 抽到这里。
+    import re as _re
+    m = _re.match(r"【标题】\s*[:：]\s*(.+?)(?:\n|$)", text)
+    if m:
+        title = m.group(1).strip()[:50]
+        body = text[m.end():].strip()
+        if body:
+            return body, title
+    # 也支持 "标题: xxx"（无书名号）
+    m = _re.match(r"^标题\s*[:：]\s*(.+?)(?:\n|$)", text)
+    if m:
+        title = m.group(1).strip()[:50]
+        body = text[m.end():].strip()
+        if body:
+            return body, title
+
     # 策略 1: parse_llm_json_response 严格 + 平衡 + 宽容解析
     parsed = parse_llm_json_response(text, default=None)
     if isinstance(parsed, dict):
@@ -243,6 +260,9 @@ def extract_llm_response_body(
         body = str(parsed.get("body") or "").strip()
         if body:
             return body, (title or _first_line_as_title(body) or fallback_title)
+        if title and not body:
+            # 给了 title 没 body → body 用原文本（保持兼容：旧测试期望保留 raw）
+            return text, title
 
     # 策略 2: 走 regex 手抽 title + body（处理 JSON 包装 + 真换行符）
     body = _manual_extract_body_from_json_wrapper(text)
