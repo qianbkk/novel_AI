@@ -298,7 +298,13 @@ def health():
 
     返回结构：
       - 200 OK: {"status": "ok", "db": "ok"}
-      - 503 Service Unavailable: {"status": "degraded", "db": "error", "detail": "..."}
+      - 503 Service Unavailable:
+        - prod (NOVEL_PRODUCTION=1): {"status": "degraded", "db": "error"}（无 detail）
+        - dev: {"status": "degraded", "db": "error", "detail": "..."}（限 80 字符）
+
+    审计 #5 (2026-07-20)：/health 端点无需认证，公网部署时返回
+    str(e)[:200] 可能暴露 SQL/文件路径/连接串片段。prod 模式脱敏；dev
+    模式保留但收紧到 80 字符。
     """
     from .database import SessionLocal
     from sqlalchemy import text
@@ -309,9 +315,17 @@ def health():
     except Exception as e:
         log.warning("/health DB ping failed: %s", e)
         from fastapi.responses import JSONResponse
-        return JSONResponse(
-            status_code=503,
-            content={"status": "degraded", "db": "error", "detail": str(e)[:200]},
-        )
+        # /simplify-2026-07-20：复用 auth_scope.is_production_mode()，
+        # 不再写 os.environ.get("NOVEL_PRODUCTION") == "1" 字面量。
+        from .auth_scope import is_production_mode
+        if is_production_mode():
+            body = {"status": "degraded", "db": "error"}
+        else:
+            body = {
+                "status": "degraded",
+                "db": "error",
+                "detail": str(e)[:80],
+            }
+        return JSONResponse(status_code=503, content=body)
     finally:
         db.close()
