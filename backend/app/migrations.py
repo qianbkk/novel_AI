@@ -109,7 +109,12 @@ def _table_exists(conn, table: str) -> bool:
 
 
 def _column_exists(conn, table: str, column: str) -> bool:
-    """检查 SQLite 表是否已有某列。"""
+    """检查 SQLite 表是否已有某列。
+
+    注：参数 `table` / `column` 来自硬编码 _MIGRATIONS 列表，
+    启动时一次性执行，注入面为 0。保留 f-string 是为了可读性 + 与
+    PRAGMA 语法对齐（参数化版本要用 quote_ident 包裹更繁琐）。
+    """
     rows = conn.execute(text(f"PRAGMA table_info({table})")).fetchall()
     return any(row[1] == column for row in rows)
 
@@ -156,6 +161,9 @@ def _apply_one_migration(conn, table: str, column: str, ddl_type: str) -> bool:
     # SQLite 不支持 IF NOT EXISTS on ADD COLUMN。
     log.info("migration applying: %s.%s (%s)", table, column, ddl_type)
     try:
+        # 审计（保留项 #1）：table / column / ddl_type 全部来自硬编码 _MIGRATIONS
+        # 列表，迁移启动时一次性执行，注入面为 0。保留 f-string 以对齐
+        # PRAGMA 风格 + 减少参数化 quote_ident 的繁琐。
         conn.execute(
             text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
         )
