@@ -76,7 +76,12 @@ def main():
         db.commit()
         print(f"  project.status=ready, job=done")
         print(f"\nPROJECT_ID={pid}")
-        with open("D:/AI/Codex_workspace/Novel_AI/docs/runs/30ch-real-2026-07-20/pid.txt", "w") as f:
+        pid_dir = Path(os.environ.get(
+            "NOVEL_RUN_DIR",
+            "D:/AI/Codex_workspace/Novel_AI/docs/runs/30ch-real-2026-07-22",
+        ))
+        pid_dir.mkdir(parents=True, exist_ok=True)
+        with open(pid_dir / "pid.txt", "w") as f:
             f.write(pid)
     finally:
         db.close()

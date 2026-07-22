@@ -17,7 +17,10 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 API = os.environ.get("NOVEL_API", "http://127.0.0.1:8132")
-RUN_DIR = Path("D:/AI/Codex_workspace/Novel_AI/docs/runs/30ch-real-2026-07-20")
+RUN_DIR = Path(os.environ.get(
+    "NOVEL_RUN_DIR",
+    "D:/AI/Codex_workspace/Novel_AI/docs/runs/30ch-real-2026-07-22",
+))
 RUN_DIR.mkdir(parents=True, exist_ok=True)
 LOG_FILE = RUN_DIR / "phase2.log"
 SUMMARY_FILE = RUN_DIR / "summary_phase2.json"

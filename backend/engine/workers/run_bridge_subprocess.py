@@ -37,6 +37,28 @@ BACKEND_ROOT = Path(__file__).resolve().parents[2]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+# 子进程独立 Python 进程；父进程 Popen 时不一定把所有 .env 字段灌进来。
+# 这里手动读 backend/.env，把 os.environ 里没设的 key 灌进来（父进程已设的不覆盖）。
+# 之前 `LLMRouter.__init__` 用 `os.getenv("MINIMAX_API_KEY", "")` 在子进程启动时
+# 读不到值 → planner 等真实 LLM 路径报 ValueError('MINIMAX_API_KEY 未设置')。
+import os
+_env_path = BACKEND_ROOT / ".env"
+if _env_path.exists():
+    try:
+        for _line in _env_path.read_text(encoding="utf-8").splitlines():
+            _line = _line.strip()
+            if not _line or _line.startswith("#") or "=" not in _line:
+                continue
+            _k, _, _v = _line.partition("=")
+            _k = _k.strip()
+            _v = _v.strip().strip('"').strip("'")
+            # 父进程已设的不覆盖（让父进程能精细控制单值）
+            if _k and _k not in os.environ:
+                os.environ[_k] = _v
+    except Exception:
+        # .env 缺失/损坏不影响运行——只是真实 LLM 路径会失败而已
+        pass
+
 
 def main() -> int:
     if len(sys.argv) < 5:
