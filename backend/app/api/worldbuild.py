@@ -146,6 +146,10 @@ def get_worldbuild_result(
         "map_nodes": [_serialize(m) for m in db.query(MapNode).filter_by(project_id=project_id).all()],
         "foreshadowings": [_serialize(f) for f in db.query(Foreshadowing).filter_by(project_id=project_id).all()],
         "currencies": [_serialize(c) for c in db.query(Currency).filter_by(project_id=project_id).all()],
+        # 2026-07-23 修复（问题 #5）：arc_plans 从 orchestrator_state.json 读，
+        # init_arc 阶段把 arc_plans 写到了 orchestrator_state 里但没回写到 DB Outline 表。
+        # 前端 worldbuild/result 现在能直接看到 4 弧规划。
+        "arc_plans": _load_arc_plans_from_engine(project_id),
         # 一致性校验清单：交给作者自己判断，不自动拦截——见 stage_consistency_check 的设计说明
         "consistency_warnings": (latest_job.consistency_warnings_json if latest_job else []) or [],
         # ─── Phase 3：新增结构化字段（前端 WorldBuild UI 用）───
@@ -160,6 +164,36 @@ def _serialize(row):
     if row is None:
         return None
     return {c.name: getattr(row, c.name) for c in row.__table__.columns}
+
+
+def _load_arc_plans_from_engine(project_id: str) -> list:
+    """2026-07-23（问题 #5 修复）：从 orchestrator_state.json 读 arc_plans。
+    init_arc 阶段把 4 弧规划写到磁盘，但没回写到 DB Outline 表。
+    世界构建 Tab 页需要直接显示，懒得回写。
+    失败/不存在 → 返 []，不抛。
+    """
+    try:
+        from pathlib import Path
+        import json
+        # orchestrator state 在每个项目自己的 engine 目录下
+        # 约定路径：backend/data/engine/output/orchestrator_state.json
+        # 但多项目时每个项目一个 novel_ai_dir，从 NovelAIBinding 拿
+        from ..models import NovelAIBinding
+        from ..database import SessionLocal
+        db = SessionLocal()
+        try:
+            binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
+            if not binding or not binding.novel_ai_dir:
+                return []
+            state_path = Path(binding.novel_ai_dir) / "output" / "orchestrator_state.json"
+            if not state_path.exists():
+                return []
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            return state.get("arc_plans", []) or []
+        finally:
+            db.close()
+    except Exception:
+        return []
 
 
 def _serialize_field(attr_name: str, row):

@@ -135,6 +135,22 @@ def _config() -> dict:
 
 def save_chapter(novel_id: str, ch_num: int, text: str, meta: dict) -> None:
     CHAPTERS_DIR.mkdir(parents=True, exist_ok=True)
+    # 2026-07-23 修复（问题 #8 根本原因 #2 → #3）：
+    # save_chapter 之前直接 f.write(text)，如果上游传入了含 JSON 包装
+    # 的 text（writer 解析失败时 _extract_title 第 4 级兜底把 JSON 包装
+    # 整段当 text 返回），磁盘上 ch_NNNN.txt 就带 {"title": "..."} 前缀，
+    # 后续 import 阶段必须再调 _clean_content_for_import 才能给前端纯 body。
+    # 现在 save_chapter 落盘前自己再调一次 _extract_title，把 {title, body}
+    # 包装剥成纯 body —— 让磁盘上的 ch_NNNN.txt 永远是纯正文。
+    # title 已经存到 meta.title 了，这里只需保 body 干净。
+    try:
+        from .agents.writer import _extract_title as _writer_extract_title
+        _t, clean_body = _writer_extract_title(text, fallback_goal=meta.get("chapter_goal", ""))
+        if clean_body and clean_body.strip():
+            text = clean_body
+    except Exception:
+        pass  # _extract_title 失败时保留原 text，下游 import 阶段兜底
+
     with open(CHAPTERS_DIR / f"ch_{ch_num:04d}.txt", "w", encoding="utf-8") as f:
         f.write(text)
     # 迭代 #43: ch_NNNN_meta.json 之前直接 open(w) + json.dump，半写损坏后
@@ -713,11 +729,24 @@ def node_save_and_track(state: OrchestratorState) -> OrchestratorState:
     cr     = task.get("_checker_result", {})
     memory = get_l2(state.get("novel_id", "default"))
 
+    # 2026-07-23 修复（问题 #8 步骤 C）：meta.title 写入前清洗。
+    # 之前 _draft_title 可能是 JSON 包装（writer 解析失败时降级把整段 raw 当 title），
+    # 落盘后 ch_NNNN_meta.json.title 是 `{"title": "xxx", "body":` 30 字截断。
+    # 修法：写入前检测 + 清洗 — 非标题特征（以 { 开头、含 "body"、过长）就返 fallback。
+    raw_title = (task.get("_draft_title", "") or "").strip()
+    fallback_goal = task.get("chapter_goal", "")
+    if raw_title.startswith("{") or '"body"' in raw_title or len(raw_title) > 30:
+        # 兜底：从 text 首句取
+        try:
+            from .agents.writer import _first_line_as_title as _flt
+            raw_title = _flt(text)
+        except Exception:
+            raw_title = (fallback_goal[:20] if fallback_goal else "未命名章节")
     meta = {
         "chapter_number": task["chapter_number"],
         "chapter_role":   task.get("chapter_role", ""),
         "chapter_goal":   task.get("chapter_goal", ""),
-        "title":          task.get("_draft_title", "") or "",  # 修订 2026-07-16
+        "title":          raw_title[:30] if raw_title else "",  # 修订 2026-07-23：清洗 + 上限 30 字
         "score":          cr.get("score", 0),
         "verdict":        cr.get("verdict", ""),
         "dimensions":     cr.get("dimensions", {}),

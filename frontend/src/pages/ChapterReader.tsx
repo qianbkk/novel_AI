@@ -222,7 +222,19 @@ export default function ChapterReader() {
           <article className="reader-article">
             <header className="reader-header">
               <div className="reader-header__no">第 {chapter.chapter_no} 章</div>
-              <h1 className="reader-header__title">{chapter.title || "（无标题）"}</h1>
+              {/* 2026-07-23 修复（问题 #8 步骤 E）：title 守卫。
+                  后端历史脏数据：title 字段可能是 JSON 字面量（`{"title": "...", "body":`），
+                  或 LLM 漂移的长串。展示前检测 + 降级，避免读者看到 JSON 包装。 */}
+              <h1 className="reader-header__title">
+                {(() => {
+                  const t = (chapter.title || "").trim();
+                  if (!t) return "（无标题）";
+                  if (t.startsWith("{") || t.length > 30) {
+                    return "（标题待生成）";
+                  }
+                  return t;
+                })()}
+              </h1>
               <div className="reader-header__meta">
                 {chapter.content.length.toLocaleString()} 字 ·{" "}
                 {chapter.created_at ? new Date(chapter.created_at).toLocaleDateString() : "未知日期"}

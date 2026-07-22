@@ -412,6 +412,16 @@ export default function Dashboard() {
                   {p.genre || "未分类"}
                   {p.audience ? ` · ${p.audience}` : ""}
                 </div>
+                {/* 2026-07-23 修复（问题 #7）：项目创建/修改时间。
+                    之前后端 ProjectOut schema 没暴露 created_at/updated_at，
+                    前端项目列表没法区分先后；现在 schema + types 已加，
+                    卡片标题下方加一行小字显示时间。 */}
+                <div className="project-card__time" style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 4 }}>
+                  {p.created_at ? `创建 ${new Date(p.created_at).toLocaleString("zh-CN", { hour12: false })}` : ""}
+                  {p.updated_at && p.updated_at !== p.created_at && p.updated_at !== null
+                    ? ` · 更新 ${new Date(p.updated_at).toLocaleString("zh-CN", { hour12: false })}`
+                    : ""}
+                </div>
 
                 {/* 三道记忆防线 · 缩略视图 */}
                 <div className="memory-stack" style={{ marginTop: 10, gap: 4 }}>

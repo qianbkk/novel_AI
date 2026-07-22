@@ -18,6 +18,10 @@ class ProjectOut(BaseModel):
     status: str
     budget_limit_usd: Optional[float] = None
     novel_ai_status: Optional[str] = None
+    # 2026-07-23 修复（问题 #7）：前端项目列表缺创建/修改时间。
+    # Project model 已有 created_at / updated_at，但 ProjectOut schema 没暴露。
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 

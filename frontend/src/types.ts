@@ -6,6 +6,10 @@ export interface Project {
   status: "draft" | "worldbuilding" | "ready";
   budget_limit_usd?: number | null;
   novel_ai_status?: string;
+  // 2026-07-23 修复（问题 #7）：后端 ProjectOut schema 现在返 created_at/updated_at。
+  // 旧数据可能为 null（force_reimport 覆盖时未写时间），前端用 string | null 容错。
+  created_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface JobStatus {

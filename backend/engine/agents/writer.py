@@ -330,6 +330,44 @@ def _extract_title(raw: str, fallback_goal: str = "") -> tuple[str, str]:
 
     text = raw.strip()
 
+    # 0) 2026-07-23 修复（问题 #8 根本原因 #2）：
+    #    LLM (MiniMax-M3) 返的 JSON 包装常含真换行符（在 body 字段里），
+    #    让 _json.loads 严格解析失败。如果检测到这是 LLM 半合法 JSON 包装
+    #    （开头 { 且含 "body"），手动扫描抽出 title 字段，绕过 json.loads。
+    #    这是 single source of truth 的第一道闸。
+    if text.startswith("{") and '"body"' in text[:200]:
+        m_title = _re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+        if m_title:
+            try:
+                title = _json.loads(f'"{m_title.group(1)}"')  # unescape
+                if isinstance(title, str) and title.strip():
+                    # 同样手动抽 body（处理真换行符 — 替换为 \n 文字序列再 unescape）
+                    m_body = _re.search(r'"body"\s*:\s*"', text)
+                    if m_body:
+                        i = m_body.end()
+                        out = []
+                        while i < len(text):
+                            ch = text[i]
+                            if ch == "\\" and i + 1 < len(text):
+                                nxt = text[i+1]
+                                if nxt == "n": out.append("\n")
+                                elif nxt == "r": out.append("\r")
+                                elif nxt == "t": out.append("\t")
+                                elif nxt == '"': out.append('"')
+                                elif nxt == "\\": out.append("\\")
+                                else: out.append(nxt)
+                                i += 2
+                                continue
+                            if ch == '"':
+                                break
+                            out.append(ch)
+                            i += 1
+                        body = "".join(out).strip()
+                        if body:
+                            return title.strip()[:50], body
+            except (_json.JSONDecodeError, ValueError):
+                pass  # 走下一级
+
     # 1) 尝试直接 JSON 解析
     try:
         d = _json.loads(text)

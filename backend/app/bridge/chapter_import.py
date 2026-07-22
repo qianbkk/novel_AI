@@ -116,13 +116,18 @@ def _derive_title(n: int, meta: dict, content: str) -> str:
 
     # 1) meta.title（writer 直接给的最准）
     raw_title = (meta.get("title") or "").strip()
+    # 2026-07-23 修复（问题 #8 步骤 D）：检测 meta.title 是否是 JSON 包装。
+    # 之前 _json.loads 失败时 fallback 用 raw_title[:40]（JSON 字面量），
+    # 导致 DB title 字段塞进 JSON 字符串。修法：JSON 解析失败时直接视为脏
+    # 数据，走第 2 级从 content 首句提取，不让脏数据透传到 DB。
     if raw_title.startswith("{") and '"title"' in raw_title:
         try:
             d = _json.loads(raw_title)
-            raw_title = d.get("title") or d.get("body", "")[:30]
+            raw_title = (d.get("title") or "").strip()
         except Exception:
-            raw_title = raw_title[:40]
-    if raw_title and raw_title not in ("未命名章节",):
+            # 解析失败 → 视为脏数据，让第 2 级从 content 取
+            raw_title = ""
+    if raw_title and raw_title not in ("未命名章节",) and not raw_title.startswith("{"):
         return f"第{n}章·{raw_title[:40]}"
 
     # 2) 内容首句抽取（跳过 junk 行）—— 即使有 chapter_goal，
