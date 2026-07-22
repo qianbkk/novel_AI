@@ -17,12 +17,15 @@
 from __future__ import annotations
 
 import json
-import os
 import re
+import threading
 import time
+from collections import defaultdict
 from pathlib import Path
 
 from sqlalchemy.orm import Session
+
+from engine.utils import atomic_write_json
 
 from .logging_setup import get_logger
 from .models import Chapter, NovelAIBinding
@@ -35,6 +38,14 @@ _REWRITE_FILE = "rewrite_candidates.json"   # 与 bootstrap_candidates.json 同�
 
 # instruction 的最低保护：长度上限，避免 LLM 输入爆炸
 _MAX_INSTRUCTION_CHARS = 2000
+
+# 审计 #3 (2026-07-20)：单进程内同章并发改写互斥。bridge.py 的 BridgeRun
+# 守卫只挡 bridge 路径，rewrite 是 API 路径直入。跨 worker 不保护
+# （README 已声明 workers>1 不支持 MasterKey 缓存，本约束同样适用）。
+# defaultdict 在 __getitem__ 时原子创建（Python GIL 保证 dict 操作原子），
+# 不需要额外的 guard lock。/simplify-2026-07-20：替代之前的
+# _REWRITE_LOCKS + _REWRITE_LOCKS_GUARD + _get_chapter_lock 三件套。
+_REWRITE_LOCKS: dict[tuple[str, int], threading.Lock] = defaultdict(threading.Lock)
 
 
 class RewriteConflictError(Exception):
@@ -196,85 +207,90 @@ async def rewrite_chapter(
     ch_dir = dirs["chapters_dir"]
     ch_dir.mkdir(parents=True, exist_ok=True)
 
-    existing = _existing_labels(ch_dir, chapter_no)
-    if version_label:
-        label = version_label.upper()
-        if not re.fullmatch(r"[A-Z]", label):
-            raise ValueError("version_label 必须是单个大写字母 A-Z")
-        if label in existing and not replace:
-            raise RewriteConflictError(
-                f"v{label} 已存在（ch_{chapter_no:04d}_v{label}.txt），"
-                f"覆盖请带 replace=true"
-            )
-    else:
-        label = _next_label(existing)
+    # 审计 #3 (2026-07-20) /simplify-2026-07-20：互斥只覆盖「扫盘选 label
+    # + 写候选 + 改索引」这一段；await call_llm_json 留在锁外，否则单
+    # 进程内同章并发会被一次 LLM 网络往返串行化。
+    lock = _REWRITE_LOCKS[(project_id, chapter_no)]
+    with lock:
+        existing = _existing_labels(ch_dir, chapter_no)
+        if version_label:
+            label = version_label.upper()
+            if not re.fullmatch(r"[A-Z]", label):
+                raise ValueError("version_label 必须是单个大写字母 A-Z")
+            if label in existing and not replace:
+                raise RewriteConflictError(
+                    f"v{label} 已存在（ch_{chapter_no:04d}_v{label}.txt），"
+                    f"覆盖请带 replace=true"
+                )
+        else:
+            label = _next_label(existing)
 
-    # 构造 prompt 并调 writer（task #6 已注入 snapshot 关键词）
-    setting = _load_setting_summary(dirs["novel_ai_dir"])
-    system, user_prompt = _build_rewrite_prompt(
-        chapter_no=chapter_no,
-        original={"title": chapter.title, "content": chapter.content},
-        instruction=instruction,
-        setting=setting,
-    )
+        # 构造 prompt 并调 writer（task #6 已注入 snapshot 关键词）
+        setting = _load_setting_summary(dirs["novel_ai_dir"])
+        system, user_prompt = _build_rewrite_prompt(
+            chapter_no=chapter_no,
+            original={"title": chapter.title, "content": chapter.content},
+            instruction=instruction,
+            setting=setting,
+        )
 
-    from .llm_client import call_llm_json, LLMError
-    # writer 不是 JSON，但 call_llm_json 在 mock 模式下走 mock_payload 路径
-    # —— 真实 LLM 路径会强制 JSON。这里直接走 engine router 更自然，但
-    # engine router 在 app 侧没暴露；最简方案：用 app 自己的 mock 分支
-    # 拿一段 mock 文本（task #6 改造后的 writer mock 已含 snapshot）。
-    # 注意：app 侧 settings.llm_provider=="mock" 时 resolve_provider→None，
-    # call_llm_json 直接返回 mock_payload；真实场景下生产应走 engine 子
-    # 进程的 writer.py，本服务接口预留 router injection 路径。
-    payload = await call_llm_json(
-        role="creative_detail",
-        system_prompt=system,
-        user_prompt=user_prompt,
-        mock_payload={
-            "title": f"（Rewrite v{label}）{chapter.title or ''}",
-            "body": (
-                f"（Mock改写 v{label}）林渊与苏晚栀合计，这一回改走"
-                f"用户指示方向：{instruction[:80]}。"
-                f"在云州的清晨，林渊摸了摸怀里的老旧铜怀表，"
-                f"想起上一世的某个深夜。苏晚栀递过账本，低声说："
-                f"「账上说话。」"
-                f"本章埋下伏笔：孟家旧怨与父母破产的关联。"
-                f"对林渊而言，这一笔交易只是开始。"
-            ),
-        },
-    )
-    body = payload.get("body") or json.dumps(payload, ensure_ascii=False)
-    if not isinstance(body, str):
-        body = str(body)
+        from .llm_client import call_llm_json, LLMError
+        # writer 不是 JSON，但 call_llm_json 在 mock 模式下走 mock_payload 路径
+        # —— 真实 LLM 路径会强制 JSON。这里直接走 engine router 更自然，但
+        # engine router 在 app 侧没暴露；最简方案：用 app 自己的 mock 分支
+        # 拿一段 mock 文本（task #6 改造后的 writer mock 已含 snapshot）。
+        # 注意：app 侧 settings.llm_provider=="mock" 时 resolve_provider→None，
+        # call_llm_json 直接返回 mock_payload；真实场景下生产应走 engine 子
+        # 进程的 writer.py，本服务接口预留 router injection 路径。
+        payload = await call_llm_json(
+            role="creative_detail",
+            system_prompt=system,
+            user_prompt=user_prompt,
+            mock_payload={
+                "title": f"（Rewrite v{label}）{chapter.title or ''}",
+                "body": (
+                    f"（Mock改写 v{label}）林渊与苏晚栀合计，这一回改走"
+                    f"用户指示方向：{instruction[:80]}。"
+                    f"在云州的清晨，林渊摸了摸怀里的老旧铜怀表，"
+                    f"想起上一世的某个深夜。苏晚栀递过账本，低声说："
+                    f"「账上说话。」"
+                    f"本章埋下伏笔：孟家旧怨与父母破产的关联。"
+                    f"对林渊而言，这一笔交易只是开始。"
+                ),
+            },
+        )
+        body = payload.get("body") or json.dumps(payload, ensure_ascii=False)
+        if not isinstance(body, str):
+            body = str(body)
 
-    # 原子写候选文件
-    candidate_path = ch_dir / f"ch_{chapter_no:04d}_v{label}.txt"
-    tmp_path = candidate_path.with_suffix(candidate_path.suffix + ".tmp")
-    tmp_path.write_text(body, encoding="utf-8")
-    tmp_path.replace(candidate_path)
+        # 原子写候选文件
+        candidate_path = ch_dir / f"ch_{chapter_no:04d}_v{label}.txt"
+        tmp_path = candidate_path.with_suffix(candidate_path.suffix + ".tmp")
+        tmp_path.write_text(body, encoding="utf-8")
+        tmp_path.replace(candidate_path)
 
-    # 更新 rewrite_candidates.json 索引（与 bootstrap_candidates.json 同风格）
-    index_path = dirs["output_dir"] / _REWRITE_FILE
-    existing_index: dict = {}
-    if index_path.exists():
-        try:
-            existing_index = json.loads(index_path.read_text(encoding="utf-8"))
-        except Exception:
-            existing_index = {}
-    key = f"chapter_{chapter_no}"
-    entries = existing_index.get(key, [])
-    entries.append({
-        "version": label,
-        "candidate_path": str(candidate_path.relative_to(dirs["novel_ai_dir"])),
-        "word_count": len(body),
-        "instruction_preview": instruction[:80],
-        "created_at": int(time.time()),
-    })
-    existing_index[key] = entries
-    index_path.write_text(
-        json.dumps(existing_index, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+        # 更新 rewrite_candidates.json 索引（与 bootstrap_candidates.json 同风格）
+        # /simplify-2026-07-20：复用 engine.utils.atomic_write_json 而非
+        # 重新发明 tmp+replace 模式，与 setting_sync / planner 等保持同源。
+        # 之前审计 #3 (2026-07-20) 修过 write_text 半写损坏问题。
+        index_path = dirs["output_dir"] / _REWRITE_FILE
+        existing_index: dict = {}
+        if index_path.exists():
+            try:
+                existing_index = json.loads(index_path.read_text(encoding="utf-8"))
+            except Exception:
+                existing_index = {}
+        key = f"chapter_{chapter_no}"
+        entries = existing_index.get(key, [])
+        entries.append({
+            "version": label,
+            "candidate_path": str(candidate_path.relative_to(dirs["novel_ai_dir"])),
+            "word_count": len(body),
+            "instruction_preview": instruction[:80],
+            "created_at": int(time.time()),
+        })
+        existing_index[key] = entries
+        atomic_write_json(str(index_path), existing_index)
 
     return {
         "chapter_no": chapter_no,
