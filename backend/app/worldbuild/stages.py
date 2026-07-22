@@ -11,6 +11,9 @@ Phase 2：10 阶段 worldbuild stages。prompt + mock_payload 全部升级为结
 所有 stage 写入前调用 schema_validator，与 setting_package / chapter_meta 同模式。
 """
 from sqlalchemy.orm import Session
+import logging
+
+log = logging.getLogger("novel_ai.worldbuild.stages")
 
 from ..models import (
     WorldSetting, Character, Faction, PowerSystem, MapNode,
@@ -233,10 +236,24 @@ async def stage_characters(ctx: dict, db: Session):
         raise RuntimeError("stage_characters LLM 返回空 characters 数组")
 
     ctx["characters"] = []
+    # 2026-07-23 修复（问题 #4 本质）：同 stage 内部去重。
+    # 30 章测试发现 characters 表「林渊」重复 2 行 —— preset_worldbuild 阶段某个
+    # mock 路径把同一 name 写入了两次。前端 /characters 返 5 条（林渊×2 + 3 个配角）。
+    # 修法：维护本 stage 写入的 name 集合；同名只保留第一条，后续 skip + log.warning。
+    # 兜底：DB 层 UNIQUE(project_id, name) 由 alembic migration 加（独立任务）。
+    seen_names: set[str] = set()
     for c in characters:
         name = c.get("name") or "未命名"
         role = c.get("role") or "配角"
         card = c.get("card") or {}
+
+        if name in seen_names:
+            log.warning(
+                "stage_characters: 重复 name=%s role=%s — 跳过（同 stage 第二次写入）",
+                name, role,
+            )
+            continue
+        seen_names.add(name)
 
         # schema 校验
         try:

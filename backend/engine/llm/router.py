@@ -151,6 +151,11 @@ _PROVIDER_PROXY: dict[str, str] = {}
     wait=wait_exponential(multiplier=2, min=2, max=60),
     retry=retry_if_exception_type((httpx.TransportError, httpx.HTTPStatusError)),
     reraise=True,
+    before_sleep=lambda rs: print(
+        f"  ⚠️  HTTP {rs.outcome.exception().response.status_code if rs.outcome.exception() and hasattr(rs.outcome.exception(), 'response') and rs.outcome.exception().response else 'err'}，"
+        f"等待 {rs.idle_for:.1f}s 后重试 attempt={rs.attempt_number}/6",
+        flush=True,
+    ),
 )
 def _post_with_retry(client: httpx.Client, url: str, **kwargs) -> httpx.Response:
     """POST + auto-retry on network errors and 5xx (default 6 attempts, exp backoff 2-60s).
@@ -163,6 +168,12 @@ def _post_with_retry(client: httpx.Client, url: str, **kwargs) -> httpx.Response
     占位章节。提升到 6 attempts + 2-60s backoff：总等待上限 2+4+8+16+32+60
     ≈ 2 分钟，给 MiniMax 临时过载喘息窗口。返回的内容侧仍受 orchestrator
     3-retry-then-placeholder 兜底（独立机制，本函数只控制单次 HTTP 重试）。
+
+    2026-07-23 修复（问题 #3 SSE 卡死）：加 before_sleep 钩子让 retry 实时可见。
+    之前 6 attempts × 60s = 2 分钟静默等待没有任何 print，
+    bridge watch dog 看到 stdout 1 分钟不动可能误判为 hang 强杀，
+    同时用户在前端看到 "生成版本C..." 之后无任何日志。
+    修法：tenacity before_sleep → print status_code + 重试间隔。
     """
     r = client.post(url, **kwargs)
     if 500 <= r.status_code < 600:

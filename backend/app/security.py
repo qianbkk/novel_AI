@@ -145,10 +145,16 @@ def get_master_key() -> bytes:
     persisted = _load_persisted_dev_key()
     if persisted is not None:
         _dev_master_key = persisted
+        # 2026-07-23 修复（问题 #2 本质）：明确 log 源 + 关键信息，
+        # 让漂移时（如文件被外部删除/覆盖）能立刻发现是磁盘文件 vs env。
+        # 之前 log 只说"持久化的 master key" 不说 key 来源路径 + 长度，
+        # 重启后 Provider 解密失败时无法快速定位是 key 不一致。
         log.info(
-            "dev mode: 使用持久化的 master key（%s）。"
-            "dev.bat --reload / 重启进程仍然能解密已存的 Provider key。",
+            "dev mode master key 来自磁盘 %s (len=%d, sha256_prefix=%s). "
+            "重启 / --reload 不会变. 生产部署务必设 MASTER_KEY env.",
             _DEV_MASTER_KEY_PATH,
+            len(persisted),
+            _key_fingerprint(persisted),
         )
         return _dev_master_key
 
@@ -156,12 +162,22 @@ def get_master_key() -> bytes:
     new_key = _generate_fernet_key()
     _dev_master_key = new_key
     log.warning(
-        "MASTER_KEY 环境变量未设置，dev 模式自动生成并持久化一个新 Fernet key 到 %s。\n"
+        "MASTER_KEY 环境变量未设置，dev 模式自动生成并持久化一个新 Fernet key 到 %s (len=%d, sha256_prefix=%s).\n"
         "  ✅ 持久化后 dev.bat --reload / 重启进程仍能解密已存的 Provider key。\n"
-        "  ⚠️  生产部署务必设置 MASTER_KEY env（推荐: export MASTER_KEY=\"$(python -m scripts.generate_master_key --print)\"）"
+        "  ⚠️  生产部署务必设置 MASTER_KEY env（推荐: export MASTER_KEY=\"$(python -m scripts.generate_master_key --print)\"）\n"
+        "  ⚠️  ⚠️  如果磁盘文件存在但 format 错 (例如空白/截断)，"
+        "会重写一个新 key —— 这会让旧 Provider api_key 全部解密失败 (问题 #2 现象)。",
+        _DEV_MASTER_KEY_PATH, len(new_key), _key_fingerprint(new_key),
     )
     _persist_dev_key(new_key)
     return new_key
+
+
+def _key_fingerprint(key: bytes) -> str:
+    """取 key 的 sha256 前 8 hex 字符作为 fingerprint。
+    log 里只展示 fingerprint 不展示完整 key — 即使 log 外泄也不会泄露 master key。"""
+    import hashlib
+    return hashlib.sha256(key).hexdigest()[:8]
 
 
 def reset_master_key_cache() -> None:

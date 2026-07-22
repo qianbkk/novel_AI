@@ -11,8 +11,13 @@ BACKEND_ROOT = Path(__file__).resolve().parent.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-# 用 mock 模式跑：settings.llm_provider 必须是 "mock"
-os.environ["NOVEL_LLM_PROVIDER"] = "mock"
+# 2026-07-23 修复（问题 #6 本质）：默认走真实 LLM 生成 8 段角色卡。
+# 之前强制 NOVEL_LLM_PROVIDER=mock，导致 stage_characters 走 mock payload
+# 不会调 LLM，characters 表 card_*_json 字段全部 NULL。
+# 现在：默认 NOVEL_LLM_PROVIDER=空（即从 Provider/RoleAssignment 走真实 LLM）；
+# 保留 NOVEL_LLM_PROVIDER=mock env 用于 CI 单元测试场景。
+if "NOVEL_LLM_PROVIDER" not in os.environ:
+    os.environ["NOVEL_LLM_PROVIDER"] = ""
 
 import asyncio
 from app.database import SessionLocal
