@@ -628,22 +628,38 @@ class TestDrainStdoutExceptionHandling:
             "_drain_stdout 循环里必须有 except Exception as loop_exc → 设 bridge_run failed"
 
     def test_drain_stdout_pushes_error_event_on_loop_exception(self):
-        """循环异常时必须 push {\"event\": \"error\", \"message\": ..., \"traceback\": ...} 到 queue。"""
+        """循环异常时 push {\"event\": \"error\", \"message\": ...} 到 queue。
+
+        审计 #1 (2026-07-20)：traceback 文本不再塞进 queue payload（会
+        经 SSE 泄漏堆栈到前端）；运维侧 traceback 由 log.exception 记录。
+        不变量改为「不再带 traceback 字段」「仍带 message 字段」。
+        """
         import inspect
         from app.api import bridge as bridge_mod
         src = inspect.getsource(bridge_mod._spawn_engine_subprocess)
+        # 关键正向：error 事件仍 push，且只携带 message 字段
         assert '"event": "error"' in src or "'event': 'error'" in src, \
             "_drain_stdout 异常时必须 push error 事件到 queue"
-        assert "traceback.format_exc" in src, \
-            "_drain_stdout 异常时必须带 traceback 信息"
+        assert '"event": "error", "message"' in src or "'event': 'error', 'message'" in src, \
+            "error payload 必须只透传 event + message 两个字段"
+        # 关键反向：error payload 不得再带 traceback（防 SSE 透传到前端）
+        assert "traceback.format_exc" not in src, (
+            "_drain_stdout 异常分支不应再调用 traceback.format_exc "
+            "（SSE 透传会泄漏堆栈到前端；完整堆栈走 log.exception）"
+        )
 
-    def test_bridge_module_imports_traceback(self):
-        import app.api.bridge as bridge_mod
-        # bridge.py 必须 import traceback 用于 #54 异常 traceback
+    def test_drain_stdout_logs_full_traceback(self):
+        """完整 traceback 仍要进 log（运维诊断需要），只是不进 SSE payload。
+
+        审计 #1 (2026-07-20)：与 test_drain_stdout_pushes_error_event 配对：
+        SSE 不带 traceback，但 log.exception 仍记录完整堆栈。
+        """
         import inspect
-        src = inspect.getsource(bridge_mod)
-        assert "import traceback" in src, \
-            "app/api/bridge.py 必须 import traceback（#54 用 traceback.format_exc）"
+        from app.api import bridge as bridge_mod
+        src = inspect.getsource(bridge_mod._spawn_engine_subprocess)
+        assert "log.exception" in src, (
+            "完整 traceback 必须通过 log.exception 记录（运维侧）"
+        )
 
 
 class TestBridgeRunConcurrencyGuard:

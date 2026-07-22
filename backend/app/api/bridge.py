@@ -61,10 +61,11 @@ def _kill_process_tree(pid: int, force: bool = False) -> None:
         pass
 
 
-# 向后兼容别名（/simplify-2026-07-13 合并两个 twin helper 后保留旧名）
-_terminate_process_tree = lambda pid: _kill_process_tree(pid, force=False)
-
 _run_queues: dict[str, Queue] = {}
+
+# 审计 #12 (2026-07-20)：stdout_text 长度上限。超过则保留尾部最近 N 字节，
+# 避免长任务导致 DB 写入放大 + 内存膨胀。SSE 实时流不受影响。
+_STDOUT_TEXT_MAX = 1_000_000
 # _project_locks 已删除（迭代 #30）：
 #   之前用 asyncio.Lock 做"同 project 重复 run"并发保护，但锁从未被 acquire
 #   （grep 证实无 `async with _get_project_lock`），检查永远 False
@@ -87,6 +88,23 @@ def cleanup_run_queue(run_id: str) -> None:
     生产长期跑 100 个 bridge run 后 dict 里堆 100 个 Queue，内存持续涨。
     """
     _run_queues.pop(run_id, None)
+
+
+def _append_stdout(current: str | None, new_chunks: list[str]) -> str:
+    """把 stdout 增量写入 BridgeRun.stdout_text，超过 _STDOUT_TEXT_MAX 时环形截断。
+
+    审计 #12 (2026-07-20)：之前直接 (current or "") + "".join(new_chunks)，
+    长任务会导致 DB TEXT 字段和内存 str 持续增长（多 worker/长跑时放大到 MB+）。
+    现在每次 append 前若总长度超上限则只保留尾部 N 字符（最近日志最有价值）。
+
+    /simplify-2026-07-20：current 已经在上限时先 slice 一次，避免
+    (1MB + 小块) 又 slice 一次的中间分配。
+    """
+    tail = "".join(new_chunks)
+    combined = (current or "") + tail
+    if len(combined) > _STDOUT_TEXT_MAX:
+        combined = combined[-_STDOUT_TEXT_MAX:]
+    return combined
 
 
 @router.get("/binding", response_model=NovelAIBindingOut)
@@ -352,20 +370,26 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                         queue.put({"event": "log", "line": line.rstrip()})
                         # 每 50 行 flush 到 DB（避免频繁 commit）
                         if len(stdout_chunks) >= 50:
-                            bridge_run.stdout_text = (bridge_run.stdout_text or "") + "".join(stdout_chunks)
+                            bridge_run.stdout_text = _append_stdout(
+                                bridge_run.stdout_text, stdout_chunks
+                            )
                             db.commit()
                             stdout_chunks = []
                     # 进程结束
                     exit_code = proc.wait()
                     if stdout_chunks:
-                        bridge_run.stdout_text = (bridge_run.stdout_text or "") + "".join(stdout_chunks)
+                        bridge_run.stdout_text = _append_stdout(
+                            bridge_run.stdout_text, stdout_chunks
+                        )
                     bridge_run.exit_code = exit_code
                     bridge_run.finished_at = datetime.now(timezone.utc)
                     # security-2026-07-13 #3: 看门狗 SIGTERM/-KILL 终止 → 标 failed(timeout)
                     if _activity["killed_by_watchdog"]:
                         bridge_run.status = "failed"
                         timeout_msg = f"engine subprocess killed by watchdog after {timeout_min_for_msg}min idle"
-                        bridge_run.stdout_text = (bridge_run.stdout_text or "") + f"\n[error] {timeout_msg}\n"
+                        bridge_run.stdout_text = _append_stdout(
+                            bridge_run.stdout_text, [f"\n[error] {timeout_msg}\n"]
+                        )
                     else:
                         bridge_run.status = "done" if exit_code == 0 else "failed"
                     db.commit()
@@ -377,6 +401,9 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                     # 卡在 "running"，下次 /bridge/run 触发 409 Conflict。
                     # 修法：把 bridge_run 标 failed + 记录异常 + 通过 queue
                     # 推送 error 事件，让 SSE consumer 看到真实原因。
+                    # 审计 #1 (2026-07-20)：不再把 traceback 文本塞进 queue payload，
+                    # 避免 SSE 把堆栈（含绝对路径/SQL/内部模块名）透传给前端。
+                    # 完整堆栈仍记在 log（运维看），SSE 只拿"内部错误"前缀 + 短消息。
                     log.exception("_drain_stdout loop failed")
                     try:
                         bridge_run.exit_code = -1
@@ -385,8 +412,8 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                         db.commit()
                     except Exception:
                         pass
-                    queue.put({"event": "error", "message": str(loop_exc),
-                               "traceback": traceback.format_exc()})
+                    safe_msg = (str(loop_exc) or "loop error")[:200]
+                    queue.put({"event": "error", "message": f"内部错误：{safe_msg}"})
             finally:
                 queue.put({"event": "done", "exit_code": proc.returncode})
                 db.close()
@@ -414,6 +441,9 @@ async def stream_bridge(project_id: str, run_id: str, request: Request, db: Sess
                 if payload.get("event") == "done":
                     yield {"event": "done", "data": json.dumps(payload, ensure_ascii=False, default=str)}
                     break
+                # /simplify-2026-07-20：error 事件脱敏放在 producer 侧
+                # （_drain_stdout 异常分支只 put 干净 payload），consumer
+                # 不再二次过滤；其他事件直接 json.dumps 透传。
                 yield {
                     "event": payload.get("event", "log"),
                     "data": json.dumps(payload, ensure_ascii=False, default=str),
