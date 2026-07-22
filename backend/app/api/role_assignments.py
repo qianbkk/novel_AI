@@ -8,6 +8,14 @@ from ..schemas import RoleAssignmentOut, RoleAssignmentUpdate
 
 router = APIRouter(prefix="/role-assignments", tags=["role-assignments"])
 
+# 审计 #9 (2026-07-20)：RoleAssignment 决定"某个 Agent 角色用哪个
+# Provider"，是全局共享配置。15 个角色通常共用 1-2 个 Provider 账号，
+# 没有"per-user 隔离"的合理动机。Phase 1 不带 owner 字段是设计现状。
+#   - dev 模式：seed_role_assignments 启动时种入 15 行；任意请求可改；
+#   - prod 模式：仍由 NOVEL_PRODUCTION 启动校验兜底。
+# 跨用户可见/可写是已知妥协。如未来要 per-user：加 user_role_overrides
+# 表（user_id, role_key, provider_id, model_override），不在本次范围。
+
 
 def seed_role_assignments(db: Session) -> None:
     existing = {row.role_key for row in db.query(RoleAssignment).all()}

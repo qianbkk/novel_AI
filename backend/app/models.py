@@ -258,6 +258,13 @@ class Provider(Base):
     api_key 加密存储（历史 bug：之前是明文存 SQLite，DB 泄漏 = 全部 key 曝光）：
       - api_key_encrypted: Fernet ciphertext（base64），读时解密
       - api_key_suffix: 明文后 4 位（UI 显示用，"sk-...xxxx" 形式）
+
+    审计 #9 (2026-07-20)：本表 Phase 1 没有 owner 字段，dev 模式任意
+    访问、prod 模式也允许跨用户读写 —— 这是设计现状，不是 bug。
+    CLAUDE.md 规定「未经授权不增加数据库表」，因此 per-user 隔离
+    需要单独任务（加 provider_owners 关联表）落地，不在本次范围。
+    Provider / RoleAssignment 的所有路由在 app/api/providers.py 和
+    app/api/role_assignments.py 顶部已加显式 dev/prod 注释。
     """
     __tablename__ = "providers"
 

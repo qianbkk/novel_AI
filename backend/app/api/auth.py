@@ -59,6 +59,12 @@ def _set_auth_cookie(response: Response, token: str) -> None:
       - Secure: 走 HTTPS 才发 cookie；dev 模式 http://localhost 不带，
         生产模式 NOVEL_PRODUCTION=1 时强制带
       - Path=/: 全站可用（不止 /auth/）
+
+    注（审计 #10 2026-07-20）：cookie 当前未在请求路径中被读取——
+    后端只解 Authorization 头（见 app/auth.py:_extract_bearer），
+    前端把 token 存 localStorage（见 frontend/src/api/client.ts
+    TOKEN_KEY = "novel_ai_jwt"）。cookie 仅作"未来切 cookie-only"
+    路径的预留通道，不在本次修复范围。
     """
     secure_cookie = os.environ.get("NOVEL_PRODUCTION") == "1"
     response.set_cookie(

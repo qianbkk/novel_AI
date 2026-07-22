@@ -211,6 +211,18 @@ def decode_token(token: str) -> Optional[dict]:
 # FastAPI 依赖
 # ─────────────────────────────────────────────
 def _extract_bearer(request: Request) -> Optional[str]:
+    """从 Authorization: Bearer 头解析 token。
+
+    审计 #10 (2026-07-20)：当前 cookie 暂未被读取——
+    /auth/register 与 /auth/login 都会通过 _set_auth_cookie 下发
+    HttpOnly cookie（见 app/api/auth.py:50-72），但本函数及全仓
+    都没有 request.cookies 的使用点（grep 验证 0 命中）。实际生效
+    的鉴权路径是前端把 token 存 localStorage（见
+    frontend/src/api/client.ts:TOKEN_KEY = "novel_ai_jwt"），再
+    拼到 Authorization 头。Cookie 是"未来 cookie-only 切换"的
+    预留通道，本次不切换（涉及 CSRF 防护 / 反代 X-Forwarded-Proto
+    / 多 worker 同步，超出最小实现边界）。
+    """
     auth = request.headers.get("Authorization", "").strip()
     if not auth.lower().startswith("bearer "):
         return None

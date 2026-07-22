@@ -8,6 +8,17 @@ from ..security import encrypt_api_key, decrypt_api_key, key_suffix
 
 router = APIRouter(prefix="/providers", tags=["providers"])
 
+# 审计 #9 (2026-07-20)：本路由族 Phase 1 是"全局共享配置"—— Provider /
+# RoleAssignment 两张表无 owner 字段。设计原因：15 个写作角色需要
+# 可复用同一组 Provider 配置；本地原型阶段共享是预期行为。
+#   - dev 模式（默认）：任意请求均可 list/create/update/delete；
+#   - prod 模式（NOVEL_PRODUCTION=1）：仍由 NOVEL_PRODUCTION 启动时的
+#     fail-fast 兜底（强制 JWT_SECRET / MASTER_KEY 等），跨用户访问
+#     当前没有 owner 校验——属于已知设计现状，README 已声明"原型阶段"。
+# 如未来要做 per-user Provider 隔离：加 provider_owners(provider_id, user_id)
+# 关联表 + 在 list / update 路径挂 owner_filter，CLAUDE.md 禁止未经
+# 任务授权增加表，故本次范围仅做注释。
+
 
 def _to_out(provider) -> ProviderOut:
     """ORM Provider 或 ProviderOut → ProviderOut。
