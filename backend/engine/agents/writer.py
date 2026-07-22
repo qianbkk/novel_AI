@@ -155,21 +155,34 @@ def _build_world_block(task: dict, setting: dict) -> str:
         lv_str = " → ".join(f"{l.get('name','?')}" for l in levels)
         parts.append(f"力量体系「{ps.get('name','')}」：{lv_str}（资源：{ps.get('currency','')}）")
 
-    # 本章出场人物的设定卡（只注入 main_characters 相关的，控制预算）
+    # 本章关键人物设定（吞设定修复 2026-07-20）：
+    # 审计 /simplify #1 — 之前只注入 main_characters 命中的配角，导致配角完全
+    # 不在 writer 视野里，LLM 写出来章节里没出现顾青锋等关键人物。
+    # 现在：main_characters 全量注入；其它 key_characters 也注入（带 cap 5 控预算），
+    # LLM 至少知道「这些人物存在」才能自然引用，符合「严禁吞设定」的业务约束。
     main_chars = set(task.get("main_characters", []) or [])
     key_chars = setting.get("key_characters", []) or []
-    char_lines = []
+    char_lines: list[str] = []
+    seen_names: set[str] = set()
+    # 先 main_characters（出场必注入），再去重补 key_characters 凑够 5 个
     for c in key_chars:
         cname = c.get("name", "")
-        if not cname:
+        if not cname or cname in seen_names:
             continue
-        relevant = any(cname in mc or mc in cname for mc in main_chars)
-        if relevant or len(char_lines) < 2:  # 出场者必注入；否则最多带 2 个核心配角
-            quirks = "、".join(c.get("speech_quirks", [])[:2])
-            bg = (c.get("background", "") or "")[:60]
-            char_lines.append(f"  {cname}（{c.get('role','')}）：{bg}" + (f"｜口癖：{quirks}" if quirks else ""))
+        quirks = "、".join(c.get("speech_quirks", [])[:2])
+        bg = (c.get("background", "") or "")[:60]
+        char_lines.append(
+            f"  {cname}（{c.get('role','')}）：{bg}"
+            + (f"｜口癖：{quirks}" if quirks else "")
+        )
+        seen_names.add(cname)
+        if len(char_lines) >= 8:  # main + 配角 上限 8，控制 token
+            break
     if char_lines:
-        parts.append("关键人物设定：\n" + "\n".join(char_lines[:5]))
+        parts.append(
+            "【关键人物（main_characters 必出场，其它配角本章可自然引用，不要凭空增删）】\n"
+            + "\n".join(char_lines)
+        )
 
     if not parts:
         return ""
@@ -267,6 +280,12 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 {hook_guidance}
 
 【本章出场人物】{', '.join(task.get('main_characters', []) or [])}
+
+【世界观设定一致性硬约束】
+- 本章必须严格使用上面【关键人物】列出的角色名（林渊 / 苏晚栀 / 孟浩 / 顾青锋 等），不得改名、合并、拆分
+- 不得新增未列出的新角色名
+- 表世界「{('云州' if not (setting.get('world_setting') or {{}}).get('surface_world_name') else (setting.get('world_setting') or {{}}).get('surface_world_name'))}」+ 里世界设定（如力量体系 / 势力名 / 地名）必须原样复用，不要重新发明同义词
+- 严禁「吞设定」：本章正面提及的关键人物 / 伏笔 / 地名，本章正文里至少要出现一次
 
 【本章禁止事项】
 {forbidden_str}
