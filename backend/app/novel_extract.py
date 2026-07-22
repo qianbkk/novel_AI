@@ -396,15 +396,32 @@ def _persist_characters(
         if not name:
             continue
         card = c.get("card") or {}
+        # 真实 LLM (2026-07-20)：LLM 偶尔把 background / abilities 直接返回成字符串
+        # 而不是嵌套 dict。schema 验证会 accept 字符串（不是必需嵌套），
+        # 但下游 .get("origin") 之类的嵌套调用会 AttributeError。
+        # 容错：嵌套 → 取 origin；字符串 → 原样。
+        _bg = card.get("background")
+        if isinstance(_bg, dict):
+            _bg_str = _bg.get("origin", "")
+        elif isinstance(_bg, str):
+            _bg_str = _bg
+        else:
+            _bg_str = ""
+        _ab = card.get("abilities")
+        if isinstance(_ab, dict):
+            _ab_str = _ab.get("power_name", "") + " · " + _ab.get("current_tier", "")
+        elif isinstance(_ab, str):
+            _ab_str = _ab
+        else:
+            _ab_str = ""
         row = Character(
             project_id=project_id,
             name=name,
             role=c.get("role") or "配角",
             detail_json={
                 "card": card,
-                "background": (card.get("background") or {}).get("origin", ""),
-                "ability":    ((card.get("abilities") or {}).get("power_name", "") +
-                               " · " + (card.get("abilities") or {}).get("current_tier", "")),
+                "background": _bg_str,
+                "ability":    _ab_str,
             },
         )
         try:
@@ -489,19 +506,34 @@ def _persist_misc(
         if not fs.get("content"):
             continue
         linked_name = fs.get("linked_character_name") or ""
+        # 审计 #7 (2026-07-20)：LLM 给出 linked_character_name 但没匹配到
+        # 任何已入库角色时，原实现静默存 linked_character_id=None + 无提示。
+        # 现在把"关联失败"追加到 warnings，让 UI / 调用方能感知。
+        linked_id = name_to_id.get(linked_name) if linked_name else None
+        if linked_name and linked_id is None:
+            warnings.append(
+                f"伏笔关联角色名 '{linked_name}' 未匹配到已入库角色，"
+                f"伏笔 '{str(fs.get('content'))[:30]}...' 将以无关联角色入库"
+            )
         db.add(Foreshadowing(
             project_id=project_id,
             content=fs.get("content"),
             importance=fs.get("importance", "中"),
             status=fs.get("status", "已铺垫"),
-            linked_character_id=name_to_id.get(linked_name),
+            linked_character_id=linked_id,
         ))
         written_fs += 1
     return written_factions, written_powers, written_fs
 
 
 def _rebuild_chapter_character_edges(project_id: str, db: Session) -> int:
-    """重灌后重建 章节-人物 边：与 add_chapter 字符串匹配逻辑一致。"""
+    """重灌后重建 章节-人物 边：与 add_chapter 字符串匹配逻辑一致。
+
+    审计 #2 (2026-07-20)：之前 N×M 次「先查再插」，300 章项目可能产生
+    数千次 SQL 查询。改为：入口一次性预加载该 project 的已有边到内存
+    set，循环中命中后用 `if (ch.id, c.id) not in existing_edges:` 判断；
+    整个函数稳定 1 次查边 + N 次 insert（按新边数计）。匹配规则不变。
+    """
     chapters = (
         db.query(Chapter)
         .filter_by(project_id=project_id)
@@ -509,18 +541,21 @@ def _rebuild_chapter_character_edges(project_id: str, db: Session) -> int:
         .all()
     )
     characters = db.query(Character).filter_by(project_id=project_id).all()
+    # 一次预加载：join Chapter 把 project_id 过滤推到 SQL（仍只查本 project）
+    existing_edges: set[tuple[str, str]] = {
+        (cc.chapter_id, cc.character_id)
+        for cc in db.query(ChapterCharacter)
+        .join(Chapter, ChapterCharacter.chapter_id == Chapter.id)
+        .filter(Chapter.project_id == project_id)
+        .all()
+    }
     written = 0
     for ch in chapters:
         for c in characters:
             if c.name and c.name in (ch.content or ""):
-                # 避免重复（同章同人多条边没意义）
-                exists = (
-                    db.query(ChapterCharacter)
-                    .filter_by(chapter_id=ch.id, character_id=c.id)
-                    .first()
-                )
-                if exists is None:
+                if (ch.id, c.id) not in existing_edges:
                     db.add(ChapterCharacter(chapter_id=ch.id, character_id=c.id))
+                    existing_edges.add((ch.id, c.id))
                     written += 1
     return written
 
@@ -667,6 +702,10 @@ async def extract_setting_from_chapters(
         db.rollback()
         raise
     except Exception:
+        # 审计 #8 (2026-07-20)：持久化失败时缺日志，运维无法定位是 _persist_world
+        # / _persist_characters / _persist_misc / _rebuild_chapter_character_edges /
+        # _persist_chapter_summaries 哪一阶段挂的。先 log.exception 再 rollback。
+        log.exception("extract_setting persist failed for project_id=%s", project_id)
         db.rollback()
         raise
 
