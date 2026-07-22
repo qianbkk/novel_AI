@@ -42,9 +42,12 @@ def _clean_content_for_import(content: str) -> str:
     2. 整段是 JSON 包装 `{"title": "...", "body": "..."}` 的情况：剥外层取 body
     3. 行首既有 [待修订] + 紧跟 JSON 包装的情况：去掉 [待修订] 行再剥 JSON
 
+    2026-07-23 simplify：JSON 包装剥 body 逻辑委托到 engine.utils.extract_llm_response_body
+    （与 writer / orchestrator.save_chapter / _derive_title 4 处共用同一实现）。
+    之前的 30 行手抽 regex 代码删掉，行为完全等价。
+
     返回清洗后的正文（去掉了内容污染，但保留原始换行/段落）。
     """
-    import re as _re
     if not content:
         return ""
     stripped = content.lstrip()
@@ -55,46 +58,12 @@ def _clean_content_for_import(content: str) -> str:
         lines = lines[1:]
     stripped = "\n".join(lines).lstrip()
 
-    # 整段是 JSON 包装：剥外层取 body
+    # 整段是 JSON 包装：委托 utils.extract_llm_response_body 剥 body
     if stripped.startswith("{") and '"body"' in stripped[:200]:
-        # 1) 先试严格解析
-        try:
-            import json as _json
-            d = _json.loads(stripped)
-            if isinstance(d, dict) and "body" in d:
-                return str(d.get("body", ""))
-        except Exception:
-            pass
-        # 2) 解析失败：writer raw 输出有真换行符（违反 JSON 语法），手动扫描抽 body。
-        #    找 "body":" 起点，扫描到下一个非转义的 " 或 } 停止。
-        m_start = _re.search(r'"body"\s*:\s*"', stripped)
-        if m_start:
-            i = m_start.end()
-            out = []
-            while i < len(stripped):
-                ch = stripped[i]
-                if ch == "\\" and i + 1 < len(stripped):
-                    # 保留转义字符的反义（如 \" → "），\\ → \，\n → 真 newline
-                    nxt = stripped[i+1]
-                    if nxt == "n":
-                        out.append("\n")
-                    elif nxt == "r":
-                        out.append("\r")
-                    elif nxt == "t":
-                        out.append("\t")
-                    elif nxt == '"':
-                        out.append('"')
-                    elif nxt == "\\":
-                        out.append("\\")
-                    else:
-                        out.append(nxt)
-                    i += 2
-                    continue
-                if ch == '"' or ch == '}':
-                    break
-                out.append(ch)
-                i += 1
-            return "".join(out)
+        from ...engine.utils import extract_llm_response_body
+        body, _title = extract_llm_response_body(stripped)
+        if body:
+            return body
 
     return stripped
 

@@ -314,131 +314,31 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 def _extract_title(raw: str, fallback_goal: str = "") -> tuple[str, str]:
     """从 writer 输出里提取 (title, body)。
 
-    三级降级，最大限度容忍 LLM 漂移：
-    1. 严格 JSON 解析（首选）
-    2. markdown fence 包着的 JSON
-    3. 「【标题】: xxx」前缀 + 正文
-    4. 正文首句压缩成标题（兜底）
+    2026-07-23 simplify：4 级降级（严格 JSON / markdown fence / 「【标题】: xxx」前缀 /
+    首句兜底）抽到 `utils.extract_llm_response_body` 统一处理，本函数保留为兼容
+    旧调用点的薄壳，逻辑委托给 extract_llm_response_body。
 
     失败时用 chapter_goal 派生占位标题，避免下游报 "NoneType has no attribute"。
     """
-    import json as _json
-    import re as _re
-
+    from ..utils import extract_llm_response_body, _first_line_as_title as _flt
     if not raw or not raw.strip():
         return _goal_to_title(fallback_goal), ""
-
-    text = raw.strip()
-
-    # 0) 2026-07-23 修复（问题 #8 根本原因 #2）：
-    #    LLM (MiniMax-M3) 返的 JSON 包装常含真换行符（在 body 字段里），
-    #    让 _json.loads 严格解析失败。如果检测到这是 LLM 半合法 JSON 包装
-    #    （开头 { 且含 "body"），手动扫描抽出 title 字段，绕过 json.loads。
-    #    这是 single source of truth 的第一道闸。
-    if text.startswith("{") and '"body"' in text[:200]:
-        m_title = _re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
-        if m_title:
-            try:
-                title = _json.loads(f'"{m_title.group(1)}"')  # unescape
-                if isinstance(title, str) and title.strip():
-                    # 同样手动抽 body（处理真换行符 — 替换为 \n 文字序列再 unescape）
-                    m_body = _re.search(r'"body"\s*:\s*"', text)
-                    if m_body:
-                        i = m_body.end()
-                        out = []
-                        while i < len(text):
-                            ch = text[i]
-                            if ch == "\\" and i + 1 < len(text):
-                                nxt = text[i+1]
-                                if nxt == "n": out.append("\n")
-                                elif nxt == "r": out.append("\r")
-                                elif nxt == "t": out.append("\t")
-                                elif nxt == '"': out.append('"')
-                                elif nxt == "\\": out.append("\\")
-                                else: out.append(nxt)
-                                i += 2
-                                continue
-                            if ch == '"':
-                                break
-                            out.append(ch)
-                            i += 1
-                        body = "".join(out).strip()
-                        if body:
-                            return title.strip()[:50], body
-            except (_json.JSONDecodeError, ValueError):
-                pass  # 走下一级
-
-    # 1) 尝试直接 JSON 解析
-    try:
-        d = _json.loads(text)
-        if isinstance(d, dict):
-            title = (d.get("title") or "").strip()
-            body = (d.get("body") or "").strip()
-            if title and body:
-                return title[:50], body
-            if title and not body:
-                # 给了 title 但没 body → title 用 JSON 的，body 用原文本
-                return title[:50], text
-            if body and not title:
-                # 给了 body 但没给 title（或者 LLM 给了空 title） → 用正文首句
-                return _first_line_as_title(body), body
-    except _json.JSONDecodeError:
-        pass
-
-    # 2) markdown fence 包裹的 JSON
-    fence = _re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, _re.DOTALL)
-    if fence:
-        try:
-            d = _json.loads(fence.group(1))
-            title = (d.get("title") or "").strip()
-            body = (d.get("body") or "").strip()
-            if body:
-                return (title or _first_line_as_title(body))[:50], body
-        except _json.JSONDecodeError:
-            pass
-
-    # 3) "【标题】: xxx" 前缀（兼容半角/全角冒号）
-    m = _re.match(r"【标题】\s*[:：]\s*(.+?)(?:\n|$)", text)
-    if m:
-        title = m.group(1).strip()[:50]
-        body = text[m.end():].strip()
-        if body:
-            return title, body
-    # 也支持 "标题: xxx"（无书名号）
-    m = _re.match(r"^标题\s*[:：]\s*(.+?)(?:\n|$)", text)
-    if m:
-        title = m.group(1).strip()[:50]
-        body = text[m.end():].strip()
-        if body:
-            return title, body
-
-    # 4) 兜底：用正文首句作为标题
-    return _first_line_as_title(text), text
+    body, title = extract_llm_response_body(
+        raw, fallback_goal=fallback_goal, fallback_title=_goal_to_title(fallback_goal),
+    )
+    if not title:
+        title = _flt(body) if body else _goal_to_title(fallback_goal)
+    return title[:50], body
 
 
 def _first_line_as_title(text: str) -> str:
-    """从正文首行提取一个简洁标题（去掉 markdown heading / scene label / 第N章 前缀）。"""
-    import re as _re
-    for line in text.splitlines():
-        s = line.strip()
-        # 跳过空行 / 太短的纯符号行（如 "----" / "***"）
-        if not s or len(s) <= 1:
-            continue
-        if s in ("---", "***", "===", "___", "----", "****", "####"):
-            continue
-        # 跳过 markdown heading
-        s = _re.sub(r"^#{1,6}\s+", "", s)
-        # 跳过「第N章 标题」这种自身带章节号的
-        s = _re.sub(r"^第\d+[章卷]\s*", "", s)
-        # 跳过 scene label 【xxx】
-        if s.startswith("【") and s.endswith("】") and len(s) <= 30:
-            continue
-        # 截断到第一个句号/问号/感叹号
-        s = _re.split(r"[。！？!?]", s)[0].strip()
-        if not s:
-            continue
-        return s[:30]
-    return "未命名章节"
+    """从正文首行提取一个简洁标题（去掉 markdown heading / scene label / 第N章 前缀）。
+
+    2026-07-23 simplify：实现已抽到 `utils._first_line_as_title`，
+    本函数保留为向后兼容的薄壳（import 旧调用点不破）。
+    """
+    from ..utils import _first_line_as_title as _flt
+    return _flt(text) or "未命名章节"
 
 
 def _goal_to_title(goal: str) -> str:

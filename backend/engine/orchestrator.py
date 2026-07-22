@@ -135,21 +135,20 @@ def _config() -> dict:
 
 def save_chapter(novel_id: str, ch_num: int, text: str, meta: dict) -> None:
     CHAPTERS_DIR.mkdir(parents=True, exist_ok=True)
-    # 2026-07-23 修复（问题 #8 根本原因 #2 → #3）：
-    # save_chapter 之前直接 f.write(text)，如果上游传入了含 JSON 包装
-    # 的 text（writer 解析失败时 _extract_title 第 4 级兜底把 JSON 包装
-    # 整段当 text 返回），磁盘上 ch_NNNN.txt 就带 {"title": "..."} 前缀，
-    # 后续 import 阶段必须再调 _clean_content_for_import 才能给前端纯 body。
-    # 现在 save_chapter 落盘前自己再调一次 _extract_title，把 {title, body}
-    # 包装剥成纯 body —— 让磁盘上的 ch_NNNN.txt 永远是纯正文。
-    # title 已经存到 meta.title 了，这里只需保 body 干净。
+    # 2026-07-23 修复（问题 #8）+ simplify：落盘前调 extract_llm_response_body
+    # 保证 ch_NNNN.txt 是纯 body（剥 LLM JSON 包装）。
+    # 之前 _extract_title 第 4 级兜底把 JSON 包装当 text 返回，磁盘上 ch_NNNN.txt
+    # 就带 {"title": "..."} 前缀，需下游 import 阶段再剥一次（重复工作）。
+    # 抽到 utils.extract_llm_response_body 后，4 处共享同一解析路径。
     try:
-        from .agents.writer import _extract_title as _writer_extract_title
-        _t, clean_body = _writer_extract_title(text, fallback_goal=meta.get("chapter_goal", ""))
+        from .utils import extract_llm_response_body
+        clean_body, _t = extract_llm_response_body(
+            text, fallback_goal=meta.get("chapter_goal", ""),
+        )
         if clean_body and clean_body.strip():
             text = clean_body
     except Exception:
-        pass  # _extract_title 失败时保留原 text，下游 import 阶段兜底
+        pass  # 解析失败时保留原 text，下游 import 阶段兜底
 
     with open(CHAPTERS_DIR / f"ch_{ch_num:04d}.txt", "w", encoding="utf-8") as f:
         f.write(text)

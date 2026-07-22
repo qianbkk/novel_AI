@@ -201,6 +201,132 @@ def parse_llm_json_response(resp: str, default):
 
 
 # ════════════════════════════════════════════════════════════════════
+# LLM 响应体抽取（body + title 提取）— 替代 4 处重复实现
+# ════════════════════════════════════════════════════════════════════
+def extract_llm_response_body(
+    raw: str,
+    fallback_goal: str = "",
+    fallback_title: str = "未命名章节",
+) -> tuple[str, str]:
+    """从 LLM 响应里抽 (body, title)，幂等且集中。
+
+    2026-07-23 simplify 重构：之前 4 处独立写 JSON 解析逻辑（writer._extract_title 第 0/1/2/3/4 级、
+    orchestrator.save_chapter 二次调用 _extract_title、chapter_import._clean_content_for_import 的
+    手抽 body、chapter_import._derive_title 对 meta.title 的解析），分散在 4 个文件里
+    重复维护。**4 处行为差异**：
+      - writer._extract_title 第 0 级用 regex 手抽 title + 手抽 body（处理真换行符）
+      - writer._extract_title 第 1 级用 json.loads (严格模式)
+      - chapter_import._clean_content_for_import 用手抽 body regex
+      - chapter_import._derive_title 第 1 级用 json.loads
+    抽到一处后，4 处都走同一路径。LLM JSON 输出有 4 种形态：
+      1) 严格 JSON（json.loads 成功）→ 直接取 body + title
+      2) markdown fence 包 JSON（"```json\\n{...}\\n```"）→ strip fence + parse
+      3) JSON 包装但 body 含真换行（违反 JSON 语法）→ 手抽 body 走 \"body\":\" 起点到结束
+      4) 纯文本 → fallback：title = 首句，body = 原文本
+
+    Returns:
+        (body, title) — body 永远是纯文本（剥 JSON 包装），title 是 4-50 字字符串
+
+    Fallback:
+        body 为空时 → ""；title 无法取时 → fallback_title (默认 "未命名章节"，
+        如果传了 fallback_goal，会派生出 "第N章" 风格)
+    """
+    if not raw or not raw.strip():
+        return "", fallback_title
+
+    text = raw.strip()
+
+    # 策略 1: parse_llm_json_response 严格 + 平衡 + 宽容解析
+    parsed = parse_llm_json_response(text, default=None)
+    if isinstance(parsed, dict):
+        title = str(parsed.get("title") or "").strip()[:50]
+        body = str(parsed.get("body") or "").strip()
+        if body:
+            return body, (title or _first_line_as_title(body) or fallback_title)
+
+    # 策略 2: 走 regex 手抽 title + body（处理 JSON 包装 + 真换行符）
+    body = _manual_extract_body_from_json_wrapper(text)
+    if body:
+        title = _manual_extract_title_from_json_wrapper(text) or _first_line_as_title(body)
+        return body, (title or fallback_title)
+
+    # 策略 3: 纯文本 — title 用首句，body 用原文本
+    return text, _first_line_as_title(text) or fallback_title
+
+
+def _manual_extract_body_from_json_wrapper(text: str) -> str:
+    """regex 找 \"body\":\" 起点，扫描到下一个非转义 \" 或 } 停止。处理真换行符。"""
+    import re
+    m = re.search(r'"body"\s*:\s*"', text)
+    if not m:
+        return ""
+    i = m.end()
+    out = []
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and i + 1 < len(text):
+            nxt = text[i + 1]
+            if nxt == "n":
+                out.append("\n")
+            elif nxt == "r":
+                out.append("\r")
+            elif nxt == "t":
+                out.append("\t")
+            elif nxt == '"':
+                out.append('"')
+            elif nxt == "\\":
+                out.append("\\")
+            else:
+                out.append(nxt)
+            i += 2
+            continue
+        if ch == '"' or ch == '}':
+            break
+        out.append(ch)
+        i += 1
+    return "".join(out).strip()
+
+
+def _manual_extract_title_from_json_wrapper(text: str) -> str:
+    """regex 找 \"title\":\" 起点，扫到下一个 \" 停止。"""
+    import re
+    m = re.search(r'"title"\s*:\s*"((?:[^"\\]|\\.)*)"', text)
+    if not m:
+        return ""
+    raw = m.group(1)
+    try:
+        import json as _json
+        return _json.loads(f'"{raw}"').strip()[:50]
+    except Exception:
+        return raw.strip()[:50]
+
+
+def _first_line_as_title(text: str) -> str:
+    """从 text 第一个非空行提取 ≤30 字标题。
+
+    2026-07-23 simplify：抽到 utils.py 供多处复用。
+    跳过 markdown heading / scene label / 第N章 前缀；
+    截到第一个句号/问号/感叹号。
+    """
+    import re
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or len(s) <= 1:
+            continue
+        if s in ("---", "***", "===", "___", "----", "****", "####"):
+            continue
+        s = re.sub(r"^#{1,6}\s+", "", s)
+        s = re.sub(r"^第\d+[章卷]\s*", "", s)
+        if s.startswith("【") and s.endswith("】") and len(s) <= 30:
+            continue
+        s = re.split(r"[。！？!?]", s)[0].strip()
+        if not s:
+            continue
+        return s[:30]
+    return ""
+
+
+# ════════════════════════════════════════════════════════════════════
 # Atomic JSON write — 防止写一半被杀导致文件损坏
 # ════════════════════════════════════════════════════════════════════
 def atomic_write_json(path: str, data: Any) -> None:
