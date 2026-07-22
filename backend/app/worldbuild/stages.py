@@ -169,7 +169,9 @@ async def stage_plot_skeleton(ctx: dict, db: Session):
         role="structured_logic",
         system_prompt=(
             "基于已确立的世界观和故事核心，给出卷级（不是章节级）的情节骨架，"
-            "返回 volumes 列表（3-5 卷）。"
+            "3-5 卷。返回 JSON 字典，键名固定为 volumes（一个列表），"
+            "列表项形如 {\"title\": \"第N卷 ...\", \"summary\": \"...\"}。"
+            "不要直接返回列表，必须包在 volumes 键下。"
         ),
         user_prompt=(
             f"世界观摘要：{ctx.get('world_view','')[:500]}\n"
@@ -185,9 +187,15 @@ async def stage_plot_skeleton(ctx: dict, db: Session):
             ]
         },
     )
+    # 真实 LLM 接入 (2026-07-20)：MiniMax-M3 等推理模型偶尔仍会裸返回列表
+    # 而不是包在 volumes 键下，做一次容错（取第一个 list 值）。
+    if isinstance(payload, list):
+        volumes = payload
+    else:
+        volumes = payload.get("volumes", []) if isinstance(payload, dict) else []
     ws = db.get(WorldSetting, ctx["world_setting_id"])
-    ws.plot_skeleton_json = payload.get("volumes", [])
-    ctx["plot_skeleton"] = payload.get("volumes", [])
+    ws.plot_skeleton_json = volumes
+    ctx["plot_skeleton"] = volumes
 
 
 # ════════════════════════════════════════════════════════════════════════════
@@ -214,7 +222,13 @@ async def stage_characters(ctx: dict, db: Session):
         ),
         mock_payload={"characters": _CHARACTERS_MOCK},
     )
-    characters = payload.get("characters") or []
+    # 真实 LLM (2026-07-20) 容错：兼容裸 list / {characters:[]} / {_items:[]}
+    if isinstance(payload, list):
+        characters = payload
+    elif isinstance(payload, dict):
+        characters = payload.get("characters") or payload.get("_items") or []
+    else:
+        characters = []
     if not characters:
         raise RuntimeError("stage_characters LLM 返回空 characters 数组")
 
