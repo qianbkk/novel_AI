@@ -11,6 +11,7 @@ This directory documents the current system. Historical implementation plans, co
 - [Frontend](wiki/04-Frontend.md): React application structure and data flow.
 - [Data model](wiki/05-Data-Model.md): persistence and entity relationships.
 - [Development](wiki/06-Dev-Setup.md): local setup, scripts, tests, and deployment.
+- [Real LLM testing](wiki/07-Real-LLM-Testing.md): 30-chapter end-to-end run experience, root causes, and runbook.
 - [Architecture quick reference](wiki/ARCHITECTURE.md): concise operational view and invariants.
 
 ## Maintenance policy

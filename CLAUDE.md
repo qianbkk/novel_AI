@@ -43,6 +43,16 @@ git status --short
 
 可以先运行目标测试，但交付时必须报告实际运行的命令、结果、未验证项和剩余风险。不得声称未实际运行的检查已经通过。
 
+## 真实 LLM 测试经验（2026-07-22 30 章实战）
+
+跑真实端到端（30+ 章真 LLM 生成）前必看 `docs/wiki/07-Real-LLM-Testing.md`——本节是核心要点速览。
+
+- **不要"健壮地"把脏数据透传下游**。章节标题问题 #8 教训：5 处独立处理 title 都没解析 JSON 包装，降级路径不带"脏数据"信号。**本质修复 = 在最早环节（writer 阶段）就解析干净**。
+- **MiniMax-M3 30 章实战**：单章 3-5 min、HTTP 529 高频、Token Plan 速率限制 (status_code 2062) 30 章后大概率撞。**6 attempts + 2-60s backoff + before_sleep print** 必备。
+- **master_key 漂移**：每次重启 uvicorn 用同一 `backend/data/.dev_master_key` 文件 + 同 env 启动；跨进程**必须**先删旧 Provider 重建（不同进程 master key 不一致）。
+- **bridge subprocess env**：`engine/workers/run_bridge_subprocess.py` 顶部已加载 .env 兜底，**父进程（uvicorn）也必须用 .env env 启动**，否则 env 透传失败。
+- **真实 LLM 跑全 audit 30 章超预算**：默认 $0.5 不够，实际 $0.6-0.8。要么升 Token Plan 要么 `audit_mode=lite`。
+
 ## Git
 
 - 禁止 `git reset --hard`、`git checkout --`、强制推送和破坏性清理。
