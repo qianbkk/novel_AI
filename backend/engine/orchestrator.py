@@ -829,14 +829,25 @@ def node_human_escalation(state: OrchestratorState) -> OrchestratorState:
         "priority": "must",
     }]
     text = task.get("_draft_text", "")
-    save_chapter(state.get("novel_id", "default"), task["chapter_number"],
-                 f"[待修订]\n{text}", {
-        "chapter_number": task["chapter_number"],
-        "status":         "human_required",
-        "score":          cr.get("score", 0),
-        "word_count":     len(text),
-        "memory_gap":     True,   # 审计 P1：标缺口便于 observability
-    })
+    # 2026-07-23 修复（问题 #11）：text 为 0 字节（LLM 完全失败 / 限流返空）
+    # 时不落盘 ch_NNNN.txt，避免污染磁盘 + DB 出现 0 字 placeholder 章。
+    # 之前即使 text="" 也会写 11 字节 "[待修订]\n" 假章节，
+    # 让 30 章测试出现 24 章 0 字 / 0 分污染。
+    # 修法：只在 text 实际有内容时落盘；0 字节时只 metadata 标缺口。
+    if text and text.strip():
+        save_chapter(state.get("novel_id", "default"), task["chapter_number"],
+                     f"[待修订]\n{text}", {
+            "chapter_number": task["chapter_number"],
+            "status":         "human_required",
+            "score":          cr.get("score", 0),
+            "word_count":     len(text),
+            "memory_gap":     True,   # 审计 P1：标缺口便于 observability
+        })
+    else:
+        # 0 字节 placeholder：只标 metadata 不落盘文件
+        log(f"  ⚠️  ch{task['chapter_number']} text 为 0 字节，跳过落盘 ch_NNNN.txt（避免占位污染）", state)
+        state["error_log"] = (state.get("error_log", []) +
+                              [f"ch{task['chapter_number']} writer 完全失败 (0 字节)，escalate 给人"])
 
     # 审计 P1：即使 escalate，也喂一份 draft_text 给 run_tracker
     # 让 L2 记忆反映这一章「原本要发生什么」（人物状态 / 剧情线 / 伏笔）。
