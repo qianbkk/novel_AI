@@ -253,6 +253,15 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
         project = db.get(Project, project_id)
         project_audit_mode = (project.audit_mode if project and project.audit_mode else "full")
         env = os.environ.copy()
+        # 2026-07-23 修复（问题 #10）：显式 unbuffered 防止子进程 stdout
+        # 在 Windows + text=True + PIPE 模式下死锁。
+        # 之前 bufsize=1 + text=True + start_new_session 在 Windows 上
+        # 子进程 print() 输出被 line-buffered 缓冲，主进程 readline 立即
+        # 返回空 → 状态显示 0 字节 stdout → exit_code=3221225794 (ACCESS_VIOLATION)
+        # 实际是子进程 hang 在 print buffer flush，spawn 后几秒被 watchdog 杀。
+        # 修法：设 PYTHONUNBUFFERED=1 + PYTHONIOENCODING=utf-8 + 用 -u flag。
+        env["PYTHONUNBUFFERED"] = "1"
+        env["PYTHONIOENCODING"] = "utf-8"
         env["NOVEL_OUTLINE_MODE"] = outline_mode
         # 草稿模式开关：POST /bridge/set-audit-mode 写入 Project.audit_mode，
         # subprocess 必须继承，否则 engine 的 outline 仍走完整 audit_mode='full' 链路。
@@ -285,21 +294,24 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
             f"该脚本是 run 进程的必需依赖，缺失会导致 run 完全不可用。"
         )
 
-    cmd = [sys.executable, str(worker_script), run_id, project_id, command,
+    # 2026-07-23 修复（问题 #10）：加 -u flag 显式 unbuffered（与 env 配合双保险）。
+    cmd = [sys.executable, "-u", str(worker_script), run_id, project_id, command,
            *[str(a) for a in args], outline_mode]
 
     log.info("spawning engine subprocess: %s", " ".join(cmd[:3]))
     try:
         # security-2026-07-13 #2: start_new_session 让 subprocess 独立进程组，
         # 后续 killpg 能干净终止整个子进程树（避免孙进程泄漏）。
+        # Windows 上 start_new_session 在 Python 3.10+ 等价于 CREATE_NEW_PROCESS_GROUP，
+        # subprocess 缓冲行为仍可能问题；改用 bytes 模式（不用 text=True）+ 自己 decode。
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             env=env,
             cwd=str(BACKEND_ROOT),
-            text=True,
-            bufsize=1,  # line buffered
+            text=False,  # 2026-07-23 改：bytes 模式避免 Windows text 模式缓冲死锁
+            bufsize=0,  # 2026-07-23 改：unbuffered
             start_new_session=True,
         )
         # 在独立线程读 stdout → put to queue
@@ -362,7 +374,16 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                 queue.put({"event": "start", "run_id": run_id, "command": command,
                            "outline_mode": outline_mode})
                 try:
-                    for line in iter(proc.stdout.readline, ""):
+                    # 2026-07-23 修复（问题 #10）：text=False 后 line 是 bytes，
+                    # 手动 decode 成 str。ignore 让 decode 错误不阻塞 stdout 读取。
+                    for raw_line in iter(proc.stdout.readline, b""):
+                        if isinstance(raw_line, bytes):
+                            try:
+                                line = raw_line.decode("utf-8", errors="replace")
+                            except Exception:
+                                line = repr(raw_line)
+                        else:
+                            line = raw_line
                         stdout_chunks.append(line)
                         # security-2026-07-13 #3: 每次 readline 视为子进程活跃
                         _activity["last_stdout_ts"] = _time.time()
