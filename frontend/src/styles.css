@@ -1079,6 +1079,20 @@ label {
   50%      { opacity: 0.65; }
 }
 
+/* 2026-07-24 修复（运行态可见性）：Dashboard "正在跑" badge 呼吸动画。
+   区别于 .budgetPulse（淡入淡出），这里用 box-shadow 扩散给"活物"感。 */
+.running-pulse {
+  animation: runningPulse 1.8s ease-in-out infinite;
+}
+@keyframes runningPulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(107, 138, 253, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(107, 138, 253, 0);
+  }
+}
+
 .budget-records__scroll {
   max-height: 320px;
   overflow-y: auto;

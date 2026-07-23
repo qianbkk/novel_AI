@@ -104,9 +104,15 @@ def list_projects(
     已登录 user：仅看 owner_id == self.id 或 owner_id IS NULL；
     未登录 + dev 模式：看全部；
     未登录 + production 模式：401（authrouter 会拦截）。
+
+    ─── 2026-07-24 运行态可见性 ───
+    返回每条 ProjectOut 带 active_run_command/status 字段：当前
+    pending/running 的最新一条 BridgeRun。Dashboard 用它显示
+    "运行中" badge，否则用户看不到正在跑的小说（status 字段不会变）。
     """
     from ..auth import get_current_user_optional
     from ..auth_scope import is_production_mode
+    from ..models import BridgeRun
     current_user = get_current_user_optional(request)
 
     if current_user is None and is_production_mode():
@@ -127,4 +133,34 @@ def list_projects(
             Project.title.like(like),
             Project.id.in_(select(protagonist_ids.c.project_id)),
         ))
-    return query.order_by(Project.created_at.desc()).all()
+    projects = query.order_by(Project.created_at.desc()).all()
+
+    # 取所有相关项目的 active BridgeRun（一次性查避免 N+1）
+    project_ids = [p.id for p in projects]
+    active_by_pid: dict[str, BridgeRun] = {}
+    if project_ids:
+        for run in db.query(BridgeRun).filter(
+            BridgeRun.project_id.in_(project_ids),
+            BridgeRun.status.in_(["pending", "running"]),
+        ).all():
+            existing = active_by_pid.get(run.project_id)
+            # 同 project 多条 → 取最新 started_at
+            if existing is None or (run.started_at and run.started_at > existing.started_at):
+                active_by_pid[run.project_id] = run
+
+    out = []
+    for p in projects:
+        ar = active_by_pid.get(p.id)
+        # Project model 当前没有 updated_at 列（schema 已预留），用 getattr 容错
+        updated_at = getattr(p, "updated_at", None)
+        out.append(ProjectOut(
+            id=p.id, title=p.title, genre=p.genre, audience=p.audience,
+            status=p.status, budget_limit_usd=p.budget_limit_usd,
+            novel_ai_status=p.novel_ai_status,
+            created_at=p.created_at, updated_at=updated_at,
+            active_run_command=ar.command if ar else None,
+            active_run_status=ar.status if ar else None,
+            active_run_id=ar.id if ar else None,
+            active_run_started_at=ar.started_at if ar else None,
+        ))
+    return out

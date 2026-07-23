@@ -1,8 +1,9 @@
 # 07 · 真实 LLM 端到端测试 — 经验沉淀
 
-> 本页沉淀 30 章真实 MiniMax-M3 端到端测试（2026-07-22）发现的所有问题、根因、本质修复与教训。
+> 本页沉淀 30 章真实 MiniMax-M3 端到端测试（2026-07-22 + 2026-07-24）发现的所有问题、根因、本质修复与教训。
 > 每次跑真实 LLM 测试前先看本节 — 历史上踩过的坑不要再踩。
 > 完整原始数据见 [`docs/runs/30ch-real-2026-07-22/REPORT.md`](../runs/30ch-real-2026-07-22/REPORT.md)（276 行报告）。
+> 最新一次实战（2026-07-24，含 31 章真跑 + Dashboard 修复）见 [`docs/runs/30ch-real-2026-07-24/`](../runs/30ch-real-2026-07-24/)。
 > 更早的 30 章跑（2026-07-20）已归档到 [`docs/runs/_archive/30ch-real-2026-07-20/`](../runs/_archive/30ch-real-2026-07-20/)。
 
 ## 1. 跑真实 LLM 测试的最小流程
@@ -122,10 +123,69 @@ LLM 返 {title, body} 包装
 - [ ] 已有 MiniMax Provider + 15 role assignments 绑定（同进程防 master_key 漂移）
 - [ ] budget_limit_usd ≥ $1（避免 BUDGET_HARD 硬停）
 
-## 8. 后续改进（待办）
+## 8. 续跑卡住的 draft 项目（2026-07-24 实战）
+
+`preset_worldbuild.py` 跑挂在 stage 2（MiniMax 突发 429 限流）后，
+项目 `real30ch-16862056` 留在 `draft` 状态、绑定目录还没建。
+本想整段重跑但 preset 总是**新建 project**，丢了"续跑"语义。
+
+`backend/scripts/continue_worldbuild.py` 是这条修复路径：
+
+- 接受现有 `project_id`，**不重建**
+- 跑前先 `cleanup_partial` 把上一轮失败的 WorldSetting/Character 等中间产物清掉
+- 跑 10 stages，每 stage 失败重试 6 次（429 / 5xx / JSON parse 全捕获）
+- 跑完直接标 `project.status=ready` + 写 GenerationJob=done
+
+该脚本只跑 ~14 分钟（10 stages × 60-90s），比 preset_worldbuild 短很多，
+因为没有 mock fallback overhead，纯 LLM 链路。
+
+## 9. 30 章 Bridge pipeline 真实跑通（2026-07-24 实战）
+
+`backend/scripts/drive_30ch_bridge.py` 跑通完整前端按钮等价流程：
+
+```
+binding → push-concept → planner → pull-setting → bootstrap → init_arc → run 30 → import-chapters
+```
+
+实测 31 章（3 章来自 bootstrap + 28 章来自 run 30）、$0.74 总成本、~40 分钟。
+
+### 9.1 实测数据
+
+| 阶段 | 耗时 | LLM 调用 | 备注 |
+|------|------|---------|------|
+| binding | <1s | 0 | 仅 PUT，N/A |
+| push-concept | ~30s | 0 | 推 DB → engine/config/novel_config.json |
+| planner | ~30s | 1 | planner agent 用 worldbuild_snapshot 降级为补全者 |
+| pull-setting | <1s | 0 | engine output → DB WorldSetting/Character/... |
+| bootstrap | ~7min | 9 | 3 章 × 3 candidates (A/B/C) |
+| init_arc | <1s | 0 | setting.arc_outline → orchestrator.arc_plans |
+| run 30 | ~30min | ~120 | 28 章真跑 + bootstrap 已写 3 章 = 31 章 |
+| import-chapters | <2s | 0 | engine ch_NNNN.txt → DB Chapter |
+| **合计** | **~40min** | ~130 | $0.74 |
+
+### 9.2 实测发现的新问题
+
+**问题 #13 — pull-setting 重复人物（本次发现）**
+- planner 同时把 `protagonist.name` 放进 `key_characters[]`
+- pull-setting 先 add protagonist 再 add key_characters → 同一 name 写 2 行
+- 表现：本次跑出 7 个 character 含 2 个 `林渊`
+- 修复（setting_sync.py）：`_add_character` 加 `seen_names` 守门，
+  protagonist 先 add（更权威），key_characters 已见名字 skip
+- 老数据用 SQL 一次性清理（31 个 chapter_characters 都指向被删的 duplicate → NULL 后重新指向 surviving 林渊）
+
+**问题 #14 — Dashboard 看不到"正在跑"（本次发现）**
+- `Project.status` 只有 draft/worldbuilding/ready 三态
+- bridge.run 期间 status 不变 → 用户看不到"运行中"提示
+- 修复：`/projects` endpoint 现在附带 `active_run_command/status/id/started_at`
+  （每个项目最新一条 pending/running 的 BridgeRun）
+- Dashboard 加 `runningBadge`：非空就显示⟳+命令名+呼吸动画，点了直接跳 BridgeConsole
+
+## 10. 后续改进（待办）
 
 - **DB 层加 `UNIQUE(project_id, name)` 唯一约束** 兜底 characters 重复
 - **加 `GET /projects/<pid>/debug/state-snapshot` 聚合调试端点** 把 L2 + 角色 + 势力 + 伏笔 一次返回（用户提过需求，未做）
 - **map_nodes 表写入 schema 修复**（当前 mock 阶段把弧名当节点）
 - **foreshadowings 表写 desc 字段修复**（当前写盘时丢字段，worldbuild/result 有 desc 但表里是空）
 - **chapter_import 整链路再加单元测试**（目前只测了 _extract_title，没测 _derive_title 的 fallback 链）
+- **pull-setting 保留 stage_characters 的 card_*_json**：当前 stage_characters 写 8 段角色卡，
+  pull-setting 删旧行后只写 detail_json，card 数据丢失（前端 /characters 列表 personality_summary 变空）

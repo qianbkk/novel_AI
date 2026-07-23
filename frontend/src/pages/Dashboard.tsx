@@ -24,6 +24,39 @@ function statusBadge(status: Project["status"]) {
   return <span className="badge-draft">草稿</span>;
 }
 
+// 2026-07-24 修复（运行态可见性）：Project.status 是 draft/worldbuilding/ready
+// 三态之一，但 bridge.run 跑时 status 不变 — 用户看不到"正在跑"。
+// 后端 /projects 现在带 active_run_command/status 字段：非空就显示"运行中" badge。
+// 点击直接跳到 BridgeConsole 看实时 SSE 日志。
+function runningBadge(p: Project) {
+  if (!p.active_run_command || !p.active_run_status) return null;
+  const cmdLabels: Record<string, string> = {
+    planner: "生成设定包",
+    bootstrap: "黄金三章",
+    init_arc: "初始化弧",
+    run: "写章节",
+    run_draft: "写章节(草稿)",
+    dashboard: "质量看板",
+    scan: "一致性扫描",
+    fingerprint: "文风指纹",
+    push: "推送",
+    pull: "拉取",
+    export: "导出",
+  };
+  const label = cmdLabels[p.active_run_command] || p.active_run_command;
+  const status = p.active_run_status === "running" ? "运行中" : "排队中";
+  return (
+    <span
+      className="badge-stamp running-pulse"
+      title={`${p.active_run_command} · ${status} · 开始于 ${p.active_run_started_at || "?"}`}
+      aria-label={`正在 ${label}`}
+      style={{ background: "var(--accent)", color: "white", borderColor: "var(--accent-strong)" }}
+    >
+      ⟳ {label}
+    </span>
+  );
+}
+
 function memoryDepth(p: Project, chapters: ChapterListItem[]) {
   const l1 = p.status === "ready" ? 5 : 1;
   const l2 = Math.min(12, chapters.length);
@@ -392,7 +425,9 @@ export default function Dashboard() {
                 className={`project-card reveal reveal--delay-${Math.min(5, i + 1)}`}
                 onClick={() =>
                   navigate(
-                    p.status === "ready"
+                    p.active_run_command
+                      ? `/projects/${p.id}/bridge`  // 2026-07-24：跑中跳 BridgeConsole 看 SSE
+                      : p.status === "ready"
                       ? `/projects/${p.id}/bridge`
                       : `/projects/${p.id}/worldbuild`,
                   )
@@ -524,7 +559,7 @@ export default function Dashboard() {
                 )}
 
                 <div className="project-card__foot" style={{ marginTop: 14 }}>
-                  {statusBadge(p.status)}
+                  {runningBadge(p) || statusBadge(p.status)}
                   <span className="text-faint text-mono">{p.id.slice(0, 8)}</span>
                   {recent.length > 0 && (
                     <button

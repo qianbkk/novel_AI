@@ -272,10 +272,18 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
     db.query(Character).filter_by(project_id=project_id).delete()
 
     # 3. 人物：从 key_characters + protagonist
+    # 2026-07-24 修复（pull-setting 重复人物根因）：之前先 add protagonist 再 add key_characters，
+    # 当 planner 同时把 protagonist.name 放进 key_characters 时 → 同一 name 写 2 行
+    # （2026-07-24 real30ch-16862056 跑出来 7 个 character 含 2 个林渊）。
+    # 修法：用 seen_names set 守门，已见名字直接 skip。
     imported_characters = 0
     char_id_by_name: dict[str, str] = {}
+    seen_names: set[str] = set()
 
-    def _add_character(name: str, role: str | None, detail: dict) -> str:
+    def _add_character(name: str, role: str | None, detail: dict) -> str | None:
+        if not name or name in seen_names:
+            return None
+        seen_names.add(name)
         c = Character(
             project_id=project_id,
             name=name or "未命名",
@@ -286,18 +294,19 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
         db.flush()
         return c.id
 
+    # protagonist 先 add（更权威）
     if proto.get("name"):
         cid = _add_character(proto["name"], "主角", proto)
-        char_id_by_name[proto["name"]] = cid
-        imported_characters += 1
+        if cid:
+            char_id_by_name[proto["name"]] = cid
+            imported_characters += 1
     for key in KNOWN_CHARACTER_KEYS:
         if key in raw:
             for item in raw[key] or []:
-                if not item.get("name"):
-                    continue
-                cid = _add_character(item["name"], item.get("role"), item)
-                char_id_by_name[item["name"]] = cid
-                imported_characters += 1
+                cid = _add_character(item.get("name", ""), item.get("role"), item)
+                if cid:
+                    char_id_by_name[item["name"]] = cid
+                    imported_characters += 1
             break
 
     # 4. 力量体系

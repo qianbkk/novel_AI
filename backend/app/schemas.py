@@ -22,6 +22,14 @@ class ProjectOut(BaseModel):
     # Project model 已有 created_at / updated_at，但 ProjectOut schema 没暴露。
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
+    # 2026-07-24 修复（运行态可见性）：Dashboard 之前只能看 Project.status，
+    # 但 BridgeRun 在跑时状态仍是 draft/ready — 用户看不到"正在跑"。
+    # 加 active_run 字段：当前 pending/running 的最新一条 BridgeRun 摘要
+    # （None = 没在跑）。Dashboard 据此显"运行中"badge。
+    active_run_command: Optional[str] = None
+    active_run_status: Optional[str] = None  # pending | running
+    active_run_id: Optional[str] = None
+    active_run_started_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 

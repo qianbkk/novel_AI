@@ -10,6 +10,12 @@ export interface Project {
   // 旧数据可能为 null（force_reimport 覆盖时未写时间），前端用 string | null 容错。
   created_at?: string | null;
   updated_at?: string | null;
+  // 2026-07-24 修复（运行态可见性）：Dashboard 显示"运行中" badge 用。
+  // 后端 /projects 现在附带当前 active BridgeRun 摘要；为 null 表示没在跑。
+  active_run_command?: string | null;
+  active_run_status?: "pending" | "running" | null;
+  active_run_id?: string | null;
+  active_run_started_at?: string | null;
 }
 
 export interface JobStatus {
