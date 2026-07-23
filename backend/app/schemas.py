@@ -196,6 +196,9 @@ class CharacterSummaryOut(BaseModel):
     identity: Optional[str] = None        # basic.identity
     age: Optional[Union[str, int]] = None  # LLM 实际生成 int（如 32）；mock 也是 int。允许 str 兼容老数据。
     gender: Optional[str] = None          # basic.gender
+    # 2026-07-23 修复（前端一致性）：personality.summary 字段
+    # 前端 Characters 列表 / 角色卡显示需要这个字段；之前 API 没暴露。
+    personality_summary: Optional[str] = None
 
 
 class CharacterCardOut(BaseModel):

@@ -92,6 +92,7 @@ def list_characters(
     out = []
     for c in rows:
         basic = c.card_basic_json if isinstance(c.card_basic_json, dict) else {}
+        personality = c.card_personality_json if isinstance(c.card_personality_json, dict) else {}
         out.append(CharacterSummaryOut(
             id=c.id,
             name=c.name,
@@ -99,6 +100,10 @@ def list_characters(
             identity=basic.get("identity") if isinstance(basic, dict) else None,
             age=basic.get("age") if isinstance(basic, dict) else None,
             gender=basic.get("gender") if isinstance(basic, dict) else None,
+            # 2026-07-23 修复（前端一致性问题）：让 /characters 列表也返 personality.summary
+            # 字段，CharacterCard.tsx 显示"无内容"时实际是 summary 在 card_personality_json
+            # 但 list 端点没读。前端角色列表 / 角色卡都要这个字段。
+            personality_summary=personality.get("summary") if isinstance(personality, dict) else None,
         ))
     return out
 

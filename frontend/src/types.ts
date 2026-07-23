@@ -451,6 +451,9 @@ export interface CharacterSummary {
   identity?: string | null;
   age?: string | number | null;
   gender?: string | null;
+  // 2026-07-23 修复（前端一致性）：personality.summary 字段
+  // 之前 schema 缺，前端 Characters 列表显示"无内容"
+  personality_summary?: string | null;
 }
 
 // 关系图谱节点 / 边 / 全图

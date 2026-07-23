@@ -255,16 +255,22 @@ async def stage_characters(ctx: dict, db: Session):
             continue
         seen_names.add(name)
 
-        # 2026-07-23 修复（问题 #9）：schema 校验失败时降级补默认值，不抛。
-        # 之前 strict 模式 → real LLM 偶有缺 personality.summary / catchphrase.lines 等字段
-        # 就 RuntimeError 让整个 worldbuild 崩，30 章测试中断。
-        # 修法：缺关键字段时用合理默认填上，log warning 让运维知道 LLM 输出缺字段。
+        # 2026-07-23 修复（问题 #9 + #6）：real LLM 偶有 3 类"脏"输出：
+        #   A) JSON 解析失败（已有 _extract_title 处理）
+        #   B) JSON 解析成功但缺字段（schema 校验失败 → RuntimeError）
+        #   C) JSON 解析成功 + 字段都在但**值为空字符串 / 缺关键值**（schema 校验过）
+        # 之前只处理 B 抛异常；A 由 writer 路径处理；C 完全漏了 → 前端显示空白。
+        # 修法：先调 _fill_missing_card_defaults 主动**填充空值字段**（不依赖 schema 抛异常），
+        # 然后再走 schema 校验；如果仍失败再降级一次 + log warning。
+        # 关键：_fill_missing_card_defaults 现在会**主动**填所有"必填但空"的字段，
+        # 解决 personality.summary='' 这种 C 类问题。
+        card = _fill_missing_card_defaults(card, name, role)
         try:
             validate_character_card(card)
         except SchemaError as e:
             log.warning(
-                "stage_characters: 角色 %s 8 段缺字段，校验失败（%s）— "
-                "降级补默认值继续",
+                "stage_characters: 角色 %s 8 段结构不合法（%s）— "
+                "降级补默认值后仍失败，log 后继续",
                 name, e,
             )
             card = _fill_missing_card_defaults(card, name, role)
@@ -718,7 +724,31 @@ async def stage_factions_power(ctx: dict, db: Session):
         mock_payload=_FACTIONS_POWER_MOCK,
     )
     ctx["factions"] = []
-    for f in payload.get("factions", []):
+    factions_raw = payload.get("factions") or []
+    # 2026-07-23 修复（前端一致性 + 真实 LLM 容错）：real LLM 偶有
+    # 把 factions 放在其他字段（如 power_system.factions / characters.faction），
+    # 或 factions 数组为空时从已有 characters 的 faction_id 派生最少 1 条。
+    # 修法：1) 先取 payload.factions；2) 空则从 characters 提取唯一 faction 名；
+    #      3) 仍空则用 mock 兜底。
+    if not factions_raw:
+        chars = ctx.get("characters", [])
+        fids = set()
+        for c in chars:
+            card = c.get("card") or {}
+            basic = card.get("basic") or {}
+            fid = basic.get("faction_id")
+            if fid: fids.add(fid)
+        if fids:
+            factions_raw = [{"name": fid, "type": "势力", "detail": "从角色 faction_id 派生"} for fid in fids]
+            log.warning("stage_factions_power: LLM 返空 factions，从 characters 派生 %d 条", len(factions_raw))
+        else:
+            # 兜底：至少 1 条占位
+            factions_raw = [{"name": "默认阵营", "type": "组织", "detail": "未指定"}]
+            log.warning("stage_factions_power: factions 完全空，填默认占位")
+
+    for f in factions_raw:
+        if not f.get("name"):
+            continue
         row = Faction(
             project_id=ctx["project"].id,
             name=f.get("name"),
