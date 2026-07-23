@@ -502,12 +502,17 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
         clean_text, fmt_issues, cost = raw_text, [], 0.0
     _add_cost(state, cost)
 
-    # 修订 2026-07-16：normalizer 之后再次提取 title，避免 normalizer 把 JSON
-    # 包装剥掉后 title 跟 body 揉在一起。_extract_title 是幂等的，重复调无副作用。
+    # 2026-07-23 simplify：normalizer 后再次抽 title/剥 JSON 包装。
+    # 之前调 writer._extract_title（4 级降级 + 5 个 regex 模式），已抽到
+    # utils.extract_llm_response_body 统一处理。这里直接调公共函数。
     if not draft_title or draft_title == "未命名章节":
         try:
-            from .agents.writer import _extract_title
-            _t, clean_text = _extract_title(clean_text, fallback_goal=task.get("chapter_goal", ""))
+            from .utils import extract_llm_response_body
+            _body, _t = extract_llm_response_body(
+                clean_text, fallback_goal=task.get("chapter_goal", ""),
+            )
+            if _body and _body.strip():
+                clean_text = _body
             if _t and _t != "未命名章节":
                 draft_title = _t
         except Exception:

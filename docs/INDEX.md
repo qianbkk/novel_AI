@@ -12,6 +12,7 @@ This directory documents the current system. Historical implementation plans, co
 - [Data model](wiki/05-Data-Model.md): persistence and entity relationships.
 - [Development](wiki/06-Dev-Setup.md): local setup, scripts, tests, and deployment.
 - [Real LLM testing](wiki/07-Real-LLM-Testing.md): 30-chapter end-to-end run experience, root causes, and runbook.
+- [Frontend runbook](wiki/08-Frontend-Runbook.md): user-facing operation flow + troubleshooting (no manual backend).
 - [Architecture quick reference](wiki/ARCHITECTURE.md): concise operational view and invariants.
 
 ## Maintenance policy
