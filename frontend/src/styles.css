@@ -1280,7 +1280,11 @@ label {
  * 独立页面取代 Dialog 弹窗，提供阅读体验（侧栏 TOC + 上下章 + 阅读设置）
  * ════════════════════════════════════════════════════════════════ */
 .reader-page {
-  min-height: 100vh;
+  /* 2026-07-25 修复（TOC 与正文独立滚动）：
+     锁死 viewport 高度 + overflow:hidden，让内部 .reader-toc 和 .reader-main
+     各自有独立 overflow-y 滚动条。原文 min-height: 100vh + 无 overflow 限制
+     导致 body 跟着长内容滚，TOC 视觉位置漂移。 */
+  height: 100vh; overflow: hidden;
   display: flex; flex-direction: column;
 }
 .reader-theme-dark  { --reader-bg: var(--color-bg-0); --reader-fg: var(--color-fg-1); --reader-fg-2: var(--color-fg-2); --reader-border: var(--color-border-1); --reader-accent: var(--color-accent); }
@@ -1310,13 +1314,27 @@ label {
 }
 .reader-icon-btn:hover { background: rgba(107, 138, 253, 0.10); }
 
-.reader-layout { display: flex; flex: 1; min-height: 0; }
+.reader-layout {
+  display: flex; flex: 1; min-height: 0;
+  /* 2026-07-25 修复（TOC 与正文独立滚动）：
+     之前 .reader-toc 是 position:fixed 跟 .reader-layout padding-left 280px 配合，
+     但 .reader-page 用 min-height: 100vh + flex column，body 自身会跟着长内容滚，
+     fixed TOC 在视觉上"飘"在视口上但没有自己的滚动条 — 用户拉正文时 TOC 不动，
+     拉到底部时 TOC 总是"上半段"被遮挡。
+     修法：让 .reader-page 锁死 viewport 高度 + overflow:hidden，
+     .reader-layout flex 1 + min-height 0（关键，让 flex 子元素可独立滚动），
+     .reader-toc 独立 overflow-y:auto，.reader-main 也独立 overflow-y:auto。
+     结果：TOC 和正文各自有独立滚动条，互不影响。 */
+  overflow: hidden;
+}
 .reader-layout.with-toc { padding-left: 280px; }
 .reader-toc {
   position: fixed; top: 53px; left: 0; bottom: 0; width: 280px;
   overflow-y: auto; padding: 16px 12px;
   background: var(--reader-bg); border-right: 1px solid var(--reader-border);
   font-size: 12.5px;
+  /* 独立滚动：自己一个滚动条，自身高度固定 */
+  -webkit-overflow-scrolling: touch;
 }
 .reader-toc__head {
   font-size: 11px; font-weight: 600; letter-spacing: 0.05em;
@@ -1345,10 +1363,17 @@ label {
 }
 
 .reader-main {
-  flex: 1; min-width: 0;
+  flex: 1; min-width: 0; min-height: 0;
   max-width: 760px; margin: 0 auto;
   padding: 40px 32px 120px;
   font-family: var(--font-body);
+  /* 2026-07-25 修复（TOC 与正文独立滚动）：
+     正文区域独立 overflow-y:auto + height 100%，自己一个滚动条。
+     之前没有 overflow-y 限制，让 .reader-page 跟着内容长高 → body 滚动，
+     TOC 视觉位置就漂了。 */
+  height: 100%;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .reader-article { }
 .reader-header {

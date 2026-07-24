@@ -276,19 +276,109 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
     # 当 planner 同时把 protagonist.name 放进 key_characters 时 → 同一 name 写 2 行
     # （2026-07-24 real30ch-16862056 跑出来 7 个 character 含 2 个林渊）。
     # 修法：用 seen_names set 守门，已见名字直接 skip。
+    #
+    # 2026-07-25 修复（角色卡 8 段丢失根因）：之前 _add_character 只写 detail_json，
+    # 重建时 stage_characters 写好的 card_*_json 8 段全丢，前端 CharacterCard.tsx 看不到
+    # 「基础信息/外貌/性格/背景/能力/口癖/道具/成长弧」8 个分段，只能看到 detail_json 的旧
+    # 拼接文本。修法：detail 里有完整 8 段（card=...）时把 8 段拆开分别写 card_*_json 列。
+    # planner 输出的 key_characters[] 项通常没有 card 结构（只有 name/role/background），
+    # 此时仍只写 detail_json — 这是正常的；但 pull-setting 完整路径里 worldbuild_snapshot
+    # 已经把 8 段带过来，detail 里有 card 段时优先写 8 段列。
     imported_characters = 0
     char_id_by_name: dict[str, str] = {}
     seen_names: set[str] = set()
+
+    def _split_card_fields(detail: dict) -> dict:
+        """把 detail 里的 card 段拆成 8 段独立字段，stage_characters 写过的 8 段才能回填。
+        2026-07-25 增强：如果 detail 里没有 card 段（key_characters 只有 name/role/background），
+        从 detail 现有字段推演一个最简 card 8 段，避免前端 CharacterCard 看到空白。
+        """
+        if not isinstance(detail, dict):
+            return {}
+        card = detail.get("card")
+        if not isinstance(card, dict):
+            card = _build_minimal_card(detail)
+        return {
+            "card_basic_json":       card.get("basic"),
+            "card_appearance_json":  card.get("appearance"),
+            "card_personality_json": card.get("personality"),
+            "card_background_json":  card.get("background"),
+            "card_abilities_json":   card.get("abilities"),
+            "card_catchphrase_json": card.get("catchphrase"),
+            "card_props_json":       card.get("props"),
+            "card_arc_json":         card.get("arc"),
+        }
+
+    def _build_minimal_card(detail: dict) -> dict:
+        """从 key_characters 的扁平字段构造 8 段 card 兜底版本。
+
+        key_characters 通常只有 name/role/background/speech_quirks，
+        把它们映射到 8 段让 CharacterCard.tsx 至少有内容展示，
+        缺哪段都填合理默认（让前端显示"待补全"而不是空白）。
+        """
+        name = detail.get("name") or "未命名"
+        role = detail.get("role") or "配角"
+        background = detail.get("background") or ""
+        personality_text = detail.get("personality") or ""
+        speech_quirks = detail.get("speech_quirks") or []
+        # 处理 speech_quirks 是 list 或 str
+        if isinstance(speech_quirks, str):
+            speech_quirks = [speech_quirks]
+        speech_lines = [s for s in speech_quirks if isinstance(s, str) and s.strip()]
+        if not speech_lines:
+            speech_lines = ["（待补全）"]
+        return {
+            "basic": {
+                "gender": "未知",
+                "age": detail.get("age") if isinstance(detail.get("age"), (int, float)) else 0,
+                "identity": role,
+                "faction_id": None,
+            },
+            "appearance": {
+                "height": "",
+                "hair": "",
+                "outfit": "",
+                "distinguishing_feature": "",
+            },
+            "personality": {
+                "tags": [role] if role else ["配角"],
+                "summary": personality_text[:200] if personality_text else f"{role}，性格待补全",
+            },
+            "background": {
+                "origin": background,
+                "motivation": "",
+                "secret": "",
+            },
+            "abilities": {
+                "power_name": detail.get("initial_power_level", "") or "",
+                "current_tier": "",
+                "growth_potential": "",
+            },
+            "catchphrase": {
+                "lines": speech_lines[:3],
+            },
+            "props": {
+                "signature_item": "",
+                "companion": "无",
+            },
+            "arc": {
+                "start_state": f"登场：{role}",
+                "catalyst": "（待补全）",
+                "end_state": "（待补全）",
+            },
+        }
 
     def _add_character(name: str, role: str | None, detail: dict) -> str | None:
         if not name or name in seen_names:
             return None
         seen_names.add(name)
+        card_fields = _split_card_fields(detail or {})
         c = Character(
             project_id=project_id,
             name=name or "未命名",
             role=role,
             detail_json=detail,
+            **card_fields,
         )
         db.add(c)
         db.flush()
@@ -328,34 +418,220 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
             break
 
     # 5. 货币（来自 power_system.currency + unique_elements 推断）
-    imported_currency = False
+    # 2026-07-25 修复（货币简陋根因）：之前只从 power_system.currency 抓**单个**货币名字符串，
+    # 跑完 real30ch 后 currencies 表只有 1 行「（来自快照）」，detail_json 是 placeholder。
+    # 现代商战/修真题材常有"灵石+灵币+信用点"等多货币，或者"凡币+商券"双层币。
+    # 修法：1) 接受 currency 是 dict 或 string；2) 接受 currencies: [...] 多货币列表；
+    #       3) 从 unique_elements 文本里再扫"灵石/法币/灵币/灵石币/信用点/商券"等关键词。
+    imported_currency = 0
     ps = raw.get("power_system", {}) or {}
+    ps_name = ps.get("name") or "（无）"
+    added_currency_names: set[str] = set()
+
+    def _add_currency(name: str, detail: dict) -> None:
+        if not name or name in added_currency_names:
+            return
+        added_currency_names.add(name)
+        db.add(Currency(
+            project_id=project_id,
+            name=name,
+            detail_json=detail,
+        ))
+        # locals 计数在闭包内累加
+        nonlocal imported_currency
+        imported_currency += 1
+
+    # 5.1 优先取结构化 currency_detail 字段
+    cur_detail_obj = ps.get("currency_detail")
+    if isinstance(cur_detail_obj, dict) and cur_detail_obj.get("name"):
+        _add_currency(cur_detail_obj["name"], {
+            "detail": cur_detail_obj.get("description", ""),
+            "exchange_rate": cur_detail_obj.get("exchange_rate"),
+            "issuers": cur_detail_obj.get("issuers", []),
+            "scope": cur_detail_obj.get("scope"),
+            "source": "power_system.currency_detail",
+            "power_system_name": ps_name,
+        })
+
+    # 5.2 currencies: [...] 多货币列表
+    if isinstance(ps.get("currencies"), list):
+        for c in ps["currencies"]:
+            if isinstance(c, dict):
+                _add_currency(c.get("name", ""), {
+                    "detail": c.get("description", ""),
+                    "exchange_rate": c.get("exchange_rate"),
+                    "issuers": c.get("issuers", []),
+                    "scope": c.get("scope"),
+                    "source": "power_system.currencies[]",
+                    "power_system_name": ps_name,
+                })
+            elif isinstance(c, str) and c:
+                _add_currency(c, {
+                    "detail": f"货币：{c}，所属力量体系：{ps_name}",
+                    "exchange_rate": ps.get("currency_exchange_rate"),
+                    "issuers": ps.get("currency_issuers") if isinstance(ps.get("currency_issuers"), list) else [],
+                    "scope": ps.get("currency_scope"),
+                    "source": "power_system.currencies[].name",
+                    "power_system_name": ps_name,
+                })
+
+    # 5.3 currency 字符串（旧 shape）
     cur = ps.get("currency")
-    if cur:
-        # 优先使用 LLM 直出的结构化 currency_detail，否则回退到旧 shape
-        # 但旧 shape 也补充 detail 字符串字段，保证前端始终有 desc 渲染。
-        cur_detail = ps.get("currency_detail") if isinstance(ps.get("currency_detail"), dict) else None
-        detail_json = cur_detail or {
-            "detail": f"货币：{cur}，所属力量体系：{ps.get('name', '')}",
+    if isinstance(cur, str) and cur and cur not in added_currency_names:
+        _add_currency(cur, {
+            "detail": f"货币：{cur}，所属力量体系：{ps_name}",
             "exchange_rate": ps.get("currency_exchange_rate"),
             "issuers": ps.get("currency_issuers") if isinstance(ps.get("currency_issuers"), list) else [],
             "scope": ps.get("currency_scope"),
             "source": "power_system.currency",
-            "power_system_name": ps.get("name"),
-        }
-        db.add(Currency(
-            project_id=project_id,
-            name=cur,
-            detail_json=detail_json,
-        ))
-        imported_currency = True
+            "power_system_name": ps_name,
+        })
+    elif isinstance(cur, dict) and cur.get("name") and cur["name"] not in added_currency_names:
+        _add_currency(cur["name"], {
+            "detail": cur.get("description", ""),
+            "exchange_rate": cur.get("exchange_rate"),
+            "issuers": cur.get("issuers", []),
+            "scope": cur.get("scope"),
+            "source": "power_system.currency{name:...}",
+            "power_system_name": ps_name,
+        })
+
+    # 5.4 从 unique_elements 文本里再扫"灵石/法币/灵币/信用点/商券/金票/银票/铜币"等
+    currency_keywords = [
+        "灵石", "灵币", "法币", "信用点", "商券", "金票", "银票", "铜币",
+        "金币", "银币", "铜板", "法器币", "元宝", "银两", "铜钱",
+        "法印", "印记", "命币", "信物", "债点",
+    ]
+    for el in ws.get("unique_elements", []) or []:
+        if not isinstance(el, str):
+            continue
+        for kw in currency_keywords:
+            if kw in el and kw not in added_currency_names:
+                _add_currency(kw, {
+                    "detail": f"从 unique_elements 文本识别的货币：「{kw}」",
+                    "exchange_rate": None,
+                    "issuers": [],
+                    "scope": None,
+                    "source": "world_setting.unique_elements",
+                    "power_system_name": ps_name,
+                    "raw": el[:120],
+                })
+                break  # 一段文本只取一个
 
     # 6. 势力：每弧的"new_characters_introduced"+ world unique_elements 视为线索；
     #    真正的势力名要从 unique_elements 提（人/妖/魔/灵/神/鬼族等）
+    # 2026-07-25 修复（factions=0 行根因）：之前只识别"人/妖/魔/灵/神/鬼族"6 个种族关键词，
+    # 对云州商道这类现代都市题材（势力是"周氏/陈家/苏氏/林家/商会"家族）一个都匹配不到，
+    # 导致 31 章 real30ch 跑完后 factions 表 0 行，前端"人物阵营"tab 显示空。
+    # 修法：扩展关键词覆盖「家族/门派/商会/宗门/世家」共 4 类关键词；用正则把"X氏/X家/X宗/X门/
+    # X殿/X盟/X派"提取出来当 faction 名。同时把 character role 文本里的"X家长子"等也收集。
     imported_factions = 0
-    faction_set = set()
+    faction_set: set[str] = set()
+    import re
+
+    # 6.1 从 unique_elements 文本中识别势力名
+    # 现代都市/商战题材：「X氏」「X家」「X集团」「X商会」「X商号」「X堂」
+    # 玄幻/修真题材：「X宗」「X门」「X殿」「X教」「X派」「X宫」「X域」「X盟」
+    #
+    # 2026-07-25 修：纯正则总是出问题（贪婪吃整段 / 非贪婪匹配到 0 字）。
+    # 改用手动扫描：定位后缀位置（X氏/X家/X宗/...），从后缀向前找 1-2 字
+    # （但不超过"地名/州/市"边界）。这样"云州林家"识别为"林家"（不是"云州林家"），
+    # "云州书香门第苏家"识别为"苏家"，"云州大学任教"完全不匹配。
+    faction_suffixes = (
+        "氏", "家", "堂", "商号", "集团", "商会", "商行", "总号",
+        "宗", "门", "教", "派", "宫", "殿", "盟", "山", "谷",
+        "岛", "国", "朝", "帮", "会",
+    )
+    # 候选过滤：包含这些词的不是势力名
+    faction_blacklist = (
+        "大学", "学院", "中学", "小学", "医院", "学校", "学堂",
+        "任教", "就任", "任职", "出任", "出生", "出身",
+        "本书", "本作", "本卷", "本章", "本剧", "本篇",
+        "家少", "家长", "家主", "家人", "家族", "家父", "家母",
+        "少主", "少女", "少爷", "少妇", "少年", "少壮",
+        "全家", "你家", "我家", "他家", "她家",
+        "本门", "本宗", "本派", "本教", "本会",
+        "掌门", "帮主", "教主", "门主", "宗主", "派主",
+        "反派", "正派", "反派", "好派",
+        "第十二", "第十", "第N", "N代", "代家", "代堂", "代宗", "代门",
+        "前任", "现任", "初代", "末代",
+        "我会", "你会", "他会", "她会", "它会", "人会",
+        "你知", "我知", "他知", "她知", "它知",
+        "商会总", "商会副", "集团军",
+        # 误识别率高
+        "香门", "书香", "掌家", "接家", "候学", "委以", "代家", "接手", "学会",
+        "手家", "足家", "脚家", "嘴家", "脑家", "眼家", "耳家",
+        "以集团", "以堂", "以号", "以会", "以宗", "以门", "以派",
+        # 文本切分碎片
+        "/", "·", "—", "-", "。", ",", "、", " ", "\t", "\n",
+    )
+
+    def _scan_faction_names(text: str) -> set[str]:
+        """扫一段文字里的势力名。后缀定位 + 前缀长度 1-2 字。"""
+        out: set[str] = set()
+        i = 0
+        while i < len(text):
+            # 找最近的 suffix
+            best = None
+            for suf in faction_suffixes:
+                if text.startswith(suf, i):
+                    if best is None or len(suf) > len(best[1]):
+                        best = (i, suf)
+            if best is None:
+                i += 1
+                continue
+            suf_start, suf = best
+            # 向前找 1-2 个汉字（但排除"长/次/主/家/族"等强势力特征词，
+            # 它们是 X 后的修饰词，不是 X 本身）
+            prefix_start = suf_start
+            for k in range(2, 0, -1):  # 优先 2 字前缀
+                cand_start = suf_start - k
+                if cand_start < 0:
+                    continue
+                cand = text[cand_start:suf_start]
+                # 前 1 字符（如果不是字符串开头）必须是"X州/X市"等地名前缀，
+                # 或者 cand 前一字符是空格/标点/数字（边界）
+                if cand_start > 0:
+                    prev_char = text[cand_start - 1]
+                    if prev_char in " \t\n，。、；：！？（）《》「」『』【】":
+                        prefix_start = cand_start
+                        break
+                    # 如果 cand 是单字（k=1），且 prev 是汉字且 prev 也是势力名的一部分
+                    # → 取 k=1（避免跨词吃整段"云州林家"）
+                    if k == 1:
+                        prefix_start = cand_start
+                        break
+                else:
+                    # 字符串开头
+                    prefix_start = cand_start
+                    break
+            else:
+                # 2 字和 1 字都没匹配，2 字优先
+                cand_start = suf_start - 2
+                if cand_start < 0:
+                    cand_start = max(0, suf_start - 1)
+                prefix_start = cand_start
+            name = text[prefix_start:suf_start + len(suf)]
+            if any(bad in name for bad in faction_blacklist):
+                i = suf_start + len(suf)
+                continue
+            if len(name) >= 2:
+                out.add(name)
+            i = suf_start + len(suf)
+        return out
     for el in ws.get("unique_elements", []) or []:
-        # 抓出现的人/妖/魔/灵/神/鬼族/古族/宗门等关键词
+        if not isinstance(el, str):
+            continue
+        for name in _scan_faction_names(el):
+            if name not in faction_set:
+                faction_set.add(name)
+                db.add(Faction(
+                    project_id=project_id,
+                    name=name,
+                    detail_json={"source": "world_setting.unique_elements", "raw": el[:120]},
+                ))
+                imported_factions += 1
+        # 兼容旧 6 个种族关键词
         for kw in ("人族", "妖族", "魔族", "灵族", "神族", "鬼族", "古族"):
             if kw in el and kw not in faction_set:
                 faction_set.add(kw)
@@ -365,7 +641,28 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
                     detail_json={"source": "world_setting.unique_elements", "raw": el},
                 ))
                 imported_factions += 1
-    # 弧标题里出现"宗"/"族"/"门"/"殿"/"盟"/"城"等也补一刀
+
+    # 6.2 从 character role 推断势力（如「周氏少主」「林家长子」→ 周氏/林家）
+    for char_item in (raw.get("key_characters") or []) + ([proto] if proto.get("name") else []):
+        if not isinstance(char_item, dict):
+            continue
+        text = " ".join([
+            str(char_item.get("role") or ""),
+            str(char_item.get("identity") or ""),
+            str(char_item.get("background") or ""),
+            str(char_item.get("speech_quirks") or "") if isinstance(char_item.get("speech_quirks"), str) else " ".join(char_item.get("speech_quirks") or []),
+        ])
+        for name in _scan_faction_names(text):
+            if name not in faction_set:
+                faction_set.add(name)
+                db.add(Faction(
+                    project_id=project_id,
+                    name=name,
+                    detail_json={"source": "character_role_inferred", "raw": text[:120]},
+                ))
+                imported_factions += 1
+
+    # 6.3 弧标题里出现"宗"/"族"/"门"/"殿"/"盟"/"城"等也补一刀
     for a in arcs:
         aname = a.get("arc_name", "") or ""
         for suffix in ("宗", "族", "门", "殿", "盟", "城", "域"):
@@ -431,6 +728,83 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
         ))
         imported_fs += 1
 
+    # 8.5 关系重建：2026-07-25 修复（entity_relations=0 行根因）：
+    # 之前 pull-setting 在 step 2 删了 EntityRelation 表但 step 3-7 都没重建，
+    # 导致 real30ch-16862056 跑完后 EntityRelation 表 0 行，
+    # 前端 RelationGraph 显示空、CharacterCard 关系栏空。
+    # 修法：从 character role / identity 文本推演"X 是 Y 的 Z"关系，写入 EntityRelation。
+    imported_relations = 0
+    relation_keywords = [
+        ("父亲", "父子"), ("母亲", "母子"),
+        ("弟弟", "兄弟"), ("哥哥", "兄弟"),
+        ("妹妹", "姐妹"), ("姐姐", "姐妹"),
+        ("前妻", "前夫妻"), ("妻子", "夫妻"),
+        ("伯父", "伯侄"), ("叔父", "叔侄"),
+        ("长子", "嫡孙"),
+        ("盟友", "盟友"), ("宿敌", "宿敌"), ("对手", "对手"),
+    ]
+    proto_name = proto.get("name", "")
+    if proto_name:
+        proto_id = char_id_by_name.get(proto_name, "")
+        for item in (raw.get("key_characters") or []):
+            if not isinstance(item, dict) or item.get("name") == proto_name:
+                continue
+            other_id = char_id_by_name.get(item.get("name", ""))
+            if not other_id or not proto_id or other_id == proto_id:
+                continue
+            item_text = " ".join([
+                str(item.get("role") or ""),
+                str(item.get("identity") or ""),
+            ])
+            for kw, rel_label in relation_keywords:
+                if kw in item_text:
+                    # 幂等：同 from_id+to_id 已存在就不加
+                    already = db.query(EntityRelation).filter(
+                        EntityRelation.project_id == project_id,
+                        EntityRelation.from_id == proto_id,
+                        EntityRelation.to_id == other_id,
+                    ).first()
+                    if not already:
+                        db.add(EntityRelation(
+                            project_id=project_id,
+                            from_type="character", from_id=proto_id,
+                            to_type="character", to_id=other_id,
+                            relation=rel_label,
+                            description=f"由 role='{item_text}' 推演",
+                            mutual=rel_label in ("夫妻", "前夫妻", "兄弟", "姐妹", "盟友", "兄弟"),
+                            intensity=7,
+                        ))
+                        imported_relations += 1
+                    break
+
+    # 8.6 把 characters 与 factions 关联：character role 里有"X氏少主"时建 to_type=faction 边
+    faction_id_by_name: dict[str, str] = {
+        f.name: f.id for f in db.query(Faction).filter_by(project_id=project_id).all()
+    }
+    char_rows = db.query(Character).filter(Character.project_id == project_id).all()
+    for c in char_rows:
+        text = " ".join([c.role or "", c.name or ""])
+        for fname, fid in faction_id_by_name.items():
+            if len(fname) >= 2 and fname in text and c.name != fname:
+                already = db.query(EntityRelation).filter(
+                    EntityRelation.project_id == project_id,
+                    EntityRelation.from_id == c.id,
+                    EntityRelation.to_id == fid,
+                    EntityRelation.to_type == "faction",
+                ).first()
+                if not already:
+                    db.add(EntityRelation(
+                        project_id=project_id,
+                        from_type="character", from_id=c.id,
+                        to_type="faction", to_id=fid,
+                        relation="归属",
+                        description=f"由 role='{c.role}' 含 '{fname}' 推演",
+                        mutual=False,
+                        intensity=5,
+                    ))
+                    imported_relations += 1
+                break  # 每个角色只归属第一个匹配势力
+
     # 9. 规则中心（默认 webnovel 风格 + 套路 taboos）
     rule = db.query(RuleConfig).filter_by(project_id=project_id).first()
     if rule is None:
@@ -453,14 +827,15 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
     db.commit()
 
     log.info(
-        "pull-setting OK: characters=%d factions=%d maps=%d power=%s currency=%s foreshadowing=%d",
-        imported_characters, imported_factions, imported_maps,
+        "pull-setting OK: characters=%d factions=%d relations=%d maps=%d power=%s currency=%d foreshadowing=%d",
+        imported_characters, imported_factions, imported_relations, imported_maps,
         imported_power, imported_currency, imported_fs,
     )
     return {
         "arcs_imported": len(arcs),
         "characters_imported": imported_characters,
         "factions_imported": imported_factions,
+        "relations_imported": imported_relations,
         "map_nodes_imported": imported_maps,
         "power_system_imported": imported_power,
         "currency_imported": imported_currency,

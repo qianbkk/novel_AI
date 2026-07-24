@@ -561,10 +561,54 @@ export default function Dashboard() {
                 <div className="project-card__foot" style={{ marginTop: 14 }}>
                   {runningBadge(p) || statusBadge(p.status)}
                   <span className="text-faint text-mono">{p.id.slice(0, 8)}</span>
+                  {/* 2026-07-25 修复（前端入口缺失）：
+                      之前 ready 项目只有一个"打开 N 章"按钮，worldbuild / outline /
+                      character card 都没直跳入口，用户反馈"前端里没用大纲没有角色卡"。
+                      现在加 3 个并列按钮：世界观/大纲/角色，点哪个跳哪个页。 */}
+                  {p.status === "ready" && (
+                    <>
+                      <button
+                        className="btn btn-ghost"
+                        style={{ marginLeft: 4, fontSize: 11.5, padding: "2px 8px" }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/projects/${p.id}/worldbuild`);
+                        }}
+                        aria-label={`查看 ${p.title} 世界观`}
+                        title="7 段世界观 + 卷级骨架 + 历史时间线"
+                      >
+                        🌍 世界观
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        style={{ marginLeft: 4, fontSize: 11.5, padding: "2px 8px" }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/projects/${p.id}/outline`);
+                        }}
+                        aria-label={`查看 ${p.title} 大纲`}
+                        title="弧级大纲（点开可生成）"
+                      >
+                        📜 大纲
+                      </button>
+                      <button
+                        className="btn btn-ghost"
+                        style={{ marginLeft: 4, fontSize: 11.5, padding: "2px 8px" }}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigate(`/projects/${p.id}/worldbuild`);
+                        }}
+                        aria-label={`查看 ${p.title} 角色卡`}
+                        title="角色卡 8 段 + 关系图谱 + 势力阵营"
+                      >
+                        👤 角色
+                      </button>
+                    </>
+                  )}
                   {recent.length > 0 && (
                     <button
                       className="btn btn-ghost"
-                      style={{ marginLeft: 8, fontSize: 12, padding: "2px 10px" }}
+                      style={{ marginLeft: 4, fontSize: 12, padding: "2px 10px" }}
                       onClick={(e) => {
                         e.stopPropagation();  // 不触发 project card onClick
                         navigate(`/projects/${p.id}/chapters`);
