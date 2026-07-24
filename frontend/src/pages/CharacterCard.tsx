@@ -223,7 +223,7 @@ function CharacterCardSections({
                 fontSize: 14,
               }}
             >
-              "{line}"
+              &ldquo;{line}&rdquo;
             </blockquote>
           ))}
         </SectionCard>

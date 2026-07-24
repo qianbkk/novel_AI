@@ -1,0 +1,32 @@
+# Ruff 配置 — 2026-07-25 新增（修 P0 质量门）
+# 后端基础 lint + formatter：替代 flake8 + isort + black 三个工具。
+# 配置符合 PEP 518 / PEP 621 标准。
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+extend-exclude = ["data", "engine/output", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+# E/W = pycodestyle / pycodestyle warnings
+# F = pyflakes
+# I = isort
+# B = flake8-bugbear
+# UP = pyupgrade
+# N = pep8-naming
+select = ["E", "W", "F", "I", "B", "UP", "N"]
+ignore = [
+  "E501",  # line too long — 长字符串字面量（log message）允许
+  "B008",  # function call in default argument — FastAPI Depends() 是惯例
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试文件放宽
+"backend/tests/**" = ["B011", "N802", "N803"]
+# 引擎子目录历史代码多
+"backend/engine/**" = ["B", "N", "UP"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"

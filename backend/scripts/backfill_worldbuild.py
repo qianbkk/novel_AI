@@ -31,10 +31,7 @@ backfill_worldbuild.py — 幂等回灌 worldbuild 数据到已有项目。
 """
 import argparse
 import asyncio
-import json
-import os
 import sys
-import sqlite3
 from pathlib import Path
 
 # 允许从仓库根目录 / backend 目录运行
@@ -42,9 +39,9 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.database import SessionLocal  # noqa: E402
-from app.models import Project, NovelAIBinding  # noqa: E402
 from app.bridge.setting_sync import pull_setting_package  # noqa: E402
+from app.database import SessionLocal  # noqa: E402
+from app.models import NovelAIBinding, Project  # noqa: E402
 
 
 def _check_prereq(db, project_id: str) -> tuple[Path | None, bool]:
@@ -90,8 +87,14 @@ def _print_diff(before: dict, after: dict) -> None:
 def _snapshot_state(db, project_id: str) -> dict:
     """快照当前 DB 状态用于对比"""
     from app.models import (
-        Character, Faction, EntityRelation, PowerSystem, Currency,
-        Foreshadowing, MapNode, WorldSetting,
+        Character,
+        Currency,
+        EntityRelation,
+        Faction,
+        Foreshadowing,
+        MapNode,
+        PowerSystem,
+        WorldSetting,
     )
     return {
         "characters":  db.query(Character).filter_by(project_id=project_id).count(),
@@ -132,7 +135,7 @@ def main() -> int:
 
         # 调 pull_setting_package 触发幂等回填
         print("\n⏳ 调用 pull_setting_package（幂等）...")
-        result = asyncio.run(pull_setting_package(
+        asyncio.run(pull_setting_package(
             project_id=args.project_id,
             novel_ai_dir=str(novel_ai_dir),
             db=db,

@@ -1,0 +1,71 @@
+# GitHub Actions CI — 2026-07-25 新增（修 P0 质量门）
+# 之前仓库无 CI，9 个 error + 19 个 warning 全靠人眼发现。
+# 现在 PR/push 自动跑：backend pytest 双进程 + frontend lint/typecheck/build。
+# 任何一步失败直接红 X，main 分支不允许合入。
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  backend-tests:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Behavior tests
+        run: pytest backend/tests --ignore=backend/tests/invariants -q
+      - name: Invariant tests
+        run: pytest backend/tests/invariants -q
+      - name: Compile check
+        run: python -m compileall -q app engine scripts tests
+      - name: Ruff (changed files only)
+        # 历史代码已有 1000+ style 警告，不在 CI 拦；只对本次 PR 改动文件跑 ruff
+        # 保证新代码风格不漂移，老代码未来按 PR 逐步收敛
+        run: |
+          pip install ruff==0.6.9
+          CHANGED=$(git diff --name-only origin/${GITHUB_BASE_REF:-main}...HEAD 2>/dev/null | grep '^backend/.*\.py$' || true)
+          if [ -n "$CHANGED" ]; then
+            echo "Linting changed files:"
+            echo "$CHANGED"
+            echo "$CHANGED" | xargs ruff check --config backend/pyproject.toml
+          else
+            echo "No backend .py files changed in this PR."
+          fi
+
+  frontend-checks:
+    name: Frontend (lint + typecheck + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - name: Install dependencies
+        run: npm ci || npm install
+      - name: Lint (max-warnings 50)
+        run: npm run lint
+      - name: TypeScript typecheck
+        run: npm run typecheck
+      - name: Production build
+        run: npm run build

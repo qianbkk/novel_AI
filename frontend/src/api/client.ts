@@ -528,7 +528,7 @@ export function withConcurrency<T>(
     new Array(tasks.length);
   let cursor = 0;
   const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
-    while (true) {
+    for (;;) {
       const i = cursor++;
       if (i >= tasks.length) return;
       try {

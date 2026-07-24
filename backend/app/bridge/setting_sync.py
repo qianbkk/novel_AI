@@ -13,20 +13,29 @@ MapNode / Foreshadowing / RuleConfig 等表，novel_ai_raw_setting_json 仍然
 """
 import json
 from pathlib import Path
-from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..models import (
-    Project, WorldSetting, Character, Faction, PowerSystem,
-    Currency, MapNode, Foreshadowing, RuleConfig, EntityRelation,
-    Chapter, ChapterCharacter,
-)
-from ..logging_setup import get_logger
 # 迭代 #43: novel_config.json 之前直接 .write_text(json.dumps(...)) —
 # 半写损坏 → 下次 push concept 失败 / 整个 worldbuild 流卡住。
 # 改用 engine.utils.atomic_write_json 统一 atomic write 模式。
 from engine.utils import atomic_write_json
+
+from ..logging_setup import get_logger
+from ..models import (
+    Chapter,
+    ChapterCharacter,
+    Character,
+    Currency,
+    EntityRelation,
+    Faction,
+    Foreshadowing,
+    MapNode,
+    PowerSystem,
+    Project,
+    RuleConfig,
+    WorldSetting,
+)
 
 log = get_logger("novel_ai.setting_sync")
 
@@ -129,7 +138,7 @@ async def push_setting_concept(project_id: str, novel_ai_dir: str, db: Session) 
             f"篇幅：{length_range}",
             f"叙事套路：{'、'.join(tropes) if tropes else '系统流'}",
             f"主要冲突/方向：{main_conflict or '主角在力量体系下崛起，经历多弧冲突，最终抵达力量巅峰。'}",
-            f"风格调性：番茄爽文，节奏紧凑、爽点密集、对话口语化",
+            "风格调性：番茄爽文，节奏紧凑、爽点密集、对话口语化",
         ])
     else:
         concept = "\n".join([
@@ -186,7 +195,7 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
     # 否则「LLM 漏字段」会让 DB 静默缺失（之前 world_view=0 字 / 伏笔=0
     # 的根因之一）。planner 端已经校验过一次，这里再守一道防止手工改文件。
     try:
-        from ..schema_validator import validate_setting_package, SchemaError
+        from ..schema_validator import SchemaError, validate_setting_package
         validate_setting_package(raw)
     except SchemaError as e:
         log.error("pull-setting: %s", e)
@@ -316,7 +325,7 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
         把它们映射到 8 段让 CharacterCard.tsx 至少有内容展示，
         缺哪段都填合理默认（让前端显示"待补全"而不是空白）。
         """
-        name = detail.get("name") or "未命名"
+        _name = detail.get("name") or "未命名"  # 暂时未使用，前端 basic.identity 用 role
         role = detail.get("role") or "配角"
         background = detail.get("background") or ""
         personality_text = detail.get("personality") or ""
@@ -527,7 +536,6 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
     # X殿/X盟/X派"提取出来当 faction 名。同时把 character role 文本里的"X家长子"等也收集。
     imported_factions = 0
     faction_set: set[str] = set()
-    import re
 
     # 6.1 从 unique_elements 文本中识别势力名
     # 现代都市/商战题材：「X氏」「X家」「X集团」「X商会」「X商号」「X堂」
@@ -588,7 +596,7 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
                 cand_start = suf_start - k
                 if cand_start < 0:
                     continue
-                cand = text[cand_start:suf_start]
+                _cand = text[cand_start:suf_start]  # noqa: F841 — 占位声明给 prefix 锚定逻辑
                 # 前 1 字符（如果不是字符串开头）必须是"X州/X市"等地名前缀，
                 # 或者 cand 前一字符是空格/标点/数字（边界）
                 if cand_start > 0:
@@ -685,7 +693,8 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
     if surface:
         m = MapNode(project_id=project_id, name=surface, level="world",
                     description=ws.get("hidden_world_history", "")[:200])
-        db.add(m); db.flush()
+        db.add(m)
+        db.flush()
         root_id = m.id
         imported_maps += 1
     if hidden:

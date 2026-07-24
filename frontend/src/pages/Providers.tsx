@@ -41,7 +41,7 @@ const MASTER_KEY_DEV_WARNING = (
     重启都会读回同一个 key，<strong>已配置 Key 不会失效</strong>。
     <br />
     但如果你清掉 <code>backend/data/</code> 目录或换了台电脑，
-    <strong>所有 Provider Key 会永久失效</strong>（"解密失败"）。
+    <strong>所有 Provider Key 会永久失效</strong>（&ldquo;解密失败&rdquo;）。
     想要真正固定：<code>export MASTER_KEY=&lt;base64&gt;</code>{" "}
     <span style={{ color: "#666" }}>
       （生成：<code>python -m scripts.generate_master_key --print</code>）

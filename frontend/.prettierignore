@@ -1,0 +1,8 @@
+dist
+node_modules
+*.config.js
+*.config.cjs
+*.d.ts
+package-lock.json
+tsconfig.tsbuildinfo
+tsconfig.node.tsbuildinfo

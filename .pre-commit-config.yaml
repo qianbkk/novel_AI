@@ -1,0 +1,29 @@
+# Pre-commit hooks — 2026-07-25 新增（修 P0 质量门）
+# 之前 push 前无任何检查；现在本地 git commit 时自动跑：
+#   - 前端：prettier format + eslint
+#   - 后端：ruff format + ruff check + 文件大小 + yaml 语法
+# 安装：pip install pre-commit && pre-commit install
+#
+# 注释：本仓库默认 dev 工作流是 npm run dev + 后端 uvicorn --reload；
+# pre-commit 是给"准备 push 前"用，不阻塞日常开发。
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        # 只对 staged 的 backend/ 文件跑（避免被历史 1000+ 警告淹死）
+        args: ["--fix", "--exit-non-zero-on-fix"]
+        files: ^backend/.*\.py$
+      - id: ruff-format
+        files: ^backend/.*\.py$

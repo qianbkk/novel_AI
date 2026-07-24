@@ -366,8 +366,8 @@ export default function Dashboard() {
           <div className="empty-state">
             <div className="empty-state__title">没找到匹配的项目</div>
             <div className="empty-state__hint">
-              {q && <>搜索 "{q}" </>}
-              {genre && <>· 类型 "{genre}" </>}
+              {q && <>搜索 &quot;{q}&quot; </>}
+              {genre && <>· 类型 &quot;{genre}&quot; </>}
               没有结果
             </div>
             <div className="empty-state__action">
