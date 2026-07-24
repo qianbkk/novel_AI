@@ -18,7 +18,7 @@
  *     api.listProjects({}, { signal }).then(p => { if (isMounted()) setProjects(p); });
  *   }, []);
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export interface SafeAsyncController {
   /** 返回组件是否还挂载着（effect cleanup 后变 false）。 */
@@ -29,21 +29,23 @@ export interface SafeAsyncController {
 
 export function useSafeAsync(): SafeAsyncController {
   const mountedRef = useRef(true);
-  const controllerRef = useRef<AbortController | null>(null);
+  // 2026-07-25（修 /code-review）：用 useState 惰性初始化 controllerRef，
+  // 保证 ref 在首次 render 之前就 ready + 后续 render 始终返回**同一个** signal
+  // （之前 line 47 的 `controllerRef.current?.signal ?? new AbortController().signal`
+  // fallback 在每次 render 都 new 一个独立 controller，cleanup 时 abort 不到
+  // 它——这正是 hook 想避免的"卸载后请求仍跑"bug）。
+  const [controller] = useState(() => new AbortController());
 
   useEffect(() => {
     mountedRef.current = true;
-    // 重新挂载时 abort 旧 controller（理论上 useRef 在 unmount 后再 mount 会复用旧值）
-    controllerRef.current = new AbortController();
     return () => {
       mountedRef.current = false;
-      controllerRef.current?.abort(new DOMException("Component unmounted", "AbortError"));
-      controllerRef.current = null;
+      controller.abort(new DOMException("Component unmounted", "AbortError"));
     };
-  }, []);
+  }, [controller]);
 
   return {
     isMounted: () => mountedRef.current,
-    signal: controllerRef.current?.signal ?? new AbortController().signal,
+    signal: controller.signal,
   };
 }

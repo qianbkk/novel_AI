@@ -231,11 +231,20 @@ def _apply_one_index_migration(conn, table: str, index_name: str,
 # active 行，其他都标 failed + finished_at。partial index WHERE 子句
 # (status IN 'pending','running') 保证不误伤 done/failed 历史记录。
 _PRE_INDEX_MIGRATION_CLEANUPS: list[tuple[str, str, str]] = [
+    # 2026-07-25（修 /code-review Angle B #2）：加 COALESCE + id 兜底，
+    # 防止 NULL started_at 导致 ROW_NUMBER 顺序不确定。
+    # 原 SQL "ORDER BY started_at DESC" 在 SQLite 下：
+    #   - NULL 排第 1（DESC 默认 NULLS FIRST），两条 NULL 行保谁**任意**
+    #   - 保留的未必是"最新一次"实际跑的 BridgeRun
+    # 修法：COALESCE 把 NULL 视为 '1970-01-01'（最久）→ NULL 自动排最后（DESC 下）
+    # + 用 id 当 secondary key 兜底（id 是 hex 字符串，ORDER BY 时确定性）。
     ("bridge_runs", "cleanup_orphan_active",
      "UPDATE bridge_runs SET status='failed', finished_at=CURRENT_TIMESTAMP "
      "WHERE status IN ('pending','running') AND id NOT IN ("
      "  SELECT id FROM (SELECT id, ROW_NUMBER() OVER ("
-     "    PARTITION BY project_id ORDER BY started_at DESC) AS rn "
+     "    PARTITION BY project_id "
+     "    ORDER BY COALESCE(started_at, '1970-01-01 00:00:00') DESC, id DESC"
+     ") AS rn "
      "    FROM bridge_runs WHERE status IN ('pending','running')) "
      "  WHERE rn = 1)"),
 ]
