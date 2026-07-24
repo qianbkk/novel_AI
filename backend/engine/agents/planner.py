@@ -7,6 +7,7 @@ v3：写入前 validate against backend/schema/setting_package.schema.json
     （防止字段名漂移再次让 5 张表全空）
 """
 from __future__ import annotations
+
 import json
 import sys
 from pathlib import Path
@@ -16,11 +17,15 @@ _BACKEND_ROOT = Path(__file__).resolve().parents[2]
 if str(_BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(_BACKEND_ROOT))
 
-from ..llm.router import LLMRouter
-from ..llm_router import get_active_router
-from ..config.paths import SETTING_PATH_STR, novel_config_path
-from ..utils import parse_llm_json_response, atomic_write_json
-from app.schema_validator import validate_setting_package, SchemaError
+from shared.setting_schema import (  # noqa: E402  sys.path 在 line 18 注入后再 import shared
+    SchemaError,
+    validate_setting_package,
+)
+
+from ..config.paths import novel_config_path  # noqa: E402
+from ..llm.router import LLMRouter  # noqa: E402
+from ..llm_router import get_active_router  # noqa: E402
+from ..utils import atomic_write_json, parse_llm_json_response  # noqa: E402
 
 
 def _find_novel_config() -> Path:
@@ -465,7 +470,7 @@ def run_planner(args, output_dir: str) -> dict:
     cfg = _load_novel_config()
     if not cfg:
         raise FileNotFoundError(
-            f"novel_config.json 不存在。请先在前端点『推送设定』写入。"
+            "novel_config.json 不存在。请先在前端点『推送设定』写入。"
         )
 
     novel_id = cfg.get("novel_id", "default")

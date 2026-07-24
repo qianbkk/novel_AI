@@ -5,9 +5,9 @@ Migrated from novel_AI/utils.py. Provides:
   - atomic_write_json: 原子写 JSON（先 .tmp + os.replace）
 """
 from __future__ import annotations
+
 import json
 import logging
-import os
 import re
 import time
 from typing import Any
@@ -349,36 +349,9 @@ def _first_line_as_title(text: str) -> str:
 # ════════════════════════════════════════════════════════════════════
 # Atomic JSON write — 防止写一半被杀导致文件损坏
 # ════════════════════════════════════════════════════════════════════
-def atomic_write_json(path: str, data: Any) -> None:
-    """原子写 JSON：先写 .tmp 再 os.replace，避免半写文件被下次读到。
-
-    模式来自 engine.state.save_state，被 save_l2 / save_l5 复用，
-    现在推广到所有需要写 JSON 到磁盘的地方（setting_package.json 等）。
-
-    - 写 .tmp + flush + best-effort fsync
-    - os.replace 重试 3 次（Windows 上并发 rename 可能 WinError 32）
-    - 全部失败才抛
-
-    进程被杀 / 写一半断电 → 老的完整 .json 保留，.tmp 可能是损坏的。
-    """
-    tmp_path = path + ".tmp"
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-        f.flush()
-        try:
-            os.fsync(f.fileno())
-        except OSError:
-            # Windows 上 fsync 不一定支持，best-effort
-            pass
-    last_exc: OSError | None = None
-    for attempt in range(3):
-        try:
-            os.replace(tmp_path, path)
-            return
-        except OSError as e:
-            last_exc = e
-            time.sleep(0.05 * (attempt + 1))
-    raise last_exc  # type: ignore[misc]
+# 2026-07-25：原实现迁到 backend/shared/atomic_io.py（修 P0 双向 import），
+# 这里 re-export 保持向后兼容。所有新代码请直接 `from shared.atomic_io import atomic_write_json`。
+from shared.atomic_io import atomic_write_json  # noqa: E402, F401  兼容老代码
 
 
 # ════════════════════════════════════════════════════════════════════

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
@@ -25,7 +26,7 @@ from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from engine.utils import atomic_write_json
+from shared.atomic_io import atomic_write_json  # 2026-07-25 抽离（修 P0 双向 import）
 
 from .logging_setup import get_logger
 from .models import Chapter, NovelAIBinding
@@ -234,7 +235,7 @@ async def rewrite_chapter(
             setting=setting,
         )
 
-        from .llm_client import call_llm_json, LLMError
+        from .llm_client import call_llm_json
         # writer 不是 JSON，但 call_llm_json 在 mock 模式下走 mock_payload 路径
         # —— 真实 LLM 路径会强制 JSON。这里直接走 engine router 更自然，但
         # engine router 在 app 侧没暴露；最简方案：用 app 自己的 mock 分支

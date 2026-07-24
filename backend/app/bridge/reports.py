@@ -6,7 +6,7 @@ from typing import Any
 
 # 迭代 #43: orchestrator_state.json（apply_review 等写入）之前直接 write_text
 # 半写损坏 → 下次 pull_review / apply_review 失败。改用 atomic_write_json。
-from engine.utils import atomic_write_json
+from shared.atomic_io import atomic_write_json  # 2026-07-25 抽离（修 P0 双向 import）
 
 VALID_REVIEW_ACTIONS = {"accept", "reject", "edit"}
 

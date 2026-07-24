@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 # 迭代 #43: novel_config.json 之前直接 .write_text(json.dumps(...)) —
 # 半写损坏 → 下次 push concept 失败 / 整个 worldbuild 流卡住。
 # 改用 engine.utils.atomic_write_json 统一 atomic write 模式。
-from engine.utils import atomic_write_json
+from shared.atomic_io import atomic_write_json  # 2026-07-25 抽离（修 P0 双向 import）
 
 from ..logging_setup import get_logger
 from ..models import (
