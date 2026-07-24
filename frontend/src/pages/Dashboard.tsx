@@ -4,20 +4,9 @@ import { api } from "../api/client";
 import type { ChapterListItem, Project } from "../types";
 import { useReveal } from "../hooks/useReveal";
 
-function chipStyle(active: boolean): React.CSSProperties {
-  return {
-    padding: "5px 12px",
-    borderRadius: 999,
-    border: "1px solid " + (active ? "var(--color-accent-strong)" : "var(--color-border-2)"),
-    background: active ? "var(--color-accent-soft)" : "var(--color-bg-1)",
-    color: active ? "var(--color-accent-strong)" : "var(--color-fg-3)",
-    cursor: "pointer",
-    fontSize: 13,
-    fontWeight: active ? 600 : 400,
-    transition: "all 0.15s",
-  };
-}
-
+// 2026-07-25 抽离（修 P1-2 短板 inline style 收编）：
+// chipStyle(active) JS 函数生成 CSSProperties 模式改用 CSS class ——
+// .genre-chip + .genre-chip--active 已在 styles.css 定义。
 function statusBadge(status: Project["status"]) {
   if (status === "ready") return <span className="badge-stamp">已就绪</span>;
   if (status === "worldbuilding") return <span className="badge-soft">构建中</span>;
@@ -50,7 +39,6 @@ function runningBadge(p: Project) {
       className="badge-stamp running-pulse"
       title={`${p.active_run_command} · ${status} · 开始于 ${p.active_run_started_at || "?"}`}
       aria-label={`正在 ${label}`}
-      style={{ background: "var(--accent)", color: "white", borderColor: "var(--accent-strong)" }}
     >
       ⟳ {label}
     </span>
@@ -304,7 +292,7 @@ export default function Dashboard() {
           <button
             type="button"
             className="btn"
-            style={{ marginTop: 10 }}
+            style={{ marginTop: 10 }}  /* 2026-07-25：单一 inline style（margin-top 没法 className 化） */
             onClick={loadAll}
             aria-label="重试加载项目"
           >
@@ -321,27 +309,19 @@ export default function Dashboard() {
           value={q}
           onChange={(e) => setQ(e.target.value)}
           className="dashboard-search-input"
-          style={{
-            flex: 1, padding: "8px 14px", borderRadius: 8,
-            border: "1px solid var(--color-border-2)",
-            background: "var(--color-bg-1)", color: "var(--color-fg-1)",
-            fontSize: 14,
-          }}
         />
-        <div className="dashboard-genre-chips" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div className="dashboard-genre-chips">
           <button
-            className={`genre-chip ${!genre ? "active" : ""}`}
+            className={`genre-chip ${!genre ? "genre-chip--active" : ""}`}
             onClick={() => setGenre("")}
-            style={chipStyle(!genre)}
           >
             全部
           </button>
           {Array.from(new Set((projects || []).map((p) => p.genre).filter(Boolean))).map((g) => (
             <button
               key={g}
-              className={`genre-chip ${genre === g ? "active" : ""}`}
+              className={`genre-chip ${genre === g ? "genre-chip--active" : ""}`}
               onClick={() => setGenre(g)}
-              style={chipStyle(genre === g)}
             >
               {g}
             </button>
