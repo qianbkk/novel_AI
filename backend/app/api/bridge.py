@@ -3,35 +3,33 @@ import json
 import os
 import subprocess
 import sys
-import threading
-import time
-import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Queue
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
-from ..bridge.chapter_import import import_chapters_from_novel_ai
 # ponytail: runtime provider config via LLMRouter, no .env file needed
-from engine.graph import run_graph_task
+from ..auth import get_current_user_optional
+from ..auth_scope import is_production_mode, require_owned_project
+from ..bridge.chapter_import import import_chapters_from_novel_ai
 from ..bridge.reports import apply_review, read_budget_log, read_pending, read_status
 from ..bridge.setting_sync import pull_setting_package, push_setting_concept
 from ..database import SessionLocal, get_db
 from ..logging_setup import get_logger
-from ..models import BridgeRun, GenerationJob, NovelAIBinding, Project, Provider, RoleAssignment
+from ..models import BridgeRun, GenerationJob, NovelAIBinding, Project
 from ..schemas import BridgeRunOut, BridgeRunRequest, NovelAIBindingOut, NovelAIBindingUpsert, ReviewRequest
-from ..auth import get_current_user_optional
-from ..auth_scope import is_production_mode, require_owned_project
 
 
 def _current_user_or_401(request: Request):
     """生产模式下未登录直接 401；dev 模式返回 None。"""
     user = get_current_user_optional(request)
     if user is None and is_production_mode():
-        from fastapi import HTTPException, status as _s
+        from fastapi import HTTPException
+        from fastapi import status as _s
         raise HTTPException(_s.HTTP_401_UNAUTHORIZED, "authentication required")
     return user
 
@@ -157,28 +155,16 @@ async def run_bridge(
     if command in WRITE_COMMANDS and not _worldbuild_done(project_id, project, db):
         raise HTTPException(400, "worldbuild must be completed before running write commands")
     # 并发保护是双重的：
-    #   1) DB 层：下面的 BridgeRun status in ('pending','running') 检查 — 同
-    #      project 不能有两个 active 行
+    #   1) DB 层：partial unique index `uq_bridge_runs_active_per_project`
+    #      WHERE status IN ('pending','running')（见 app/migrations.py）—— 数据库
+    #      层面硬保证"一个 project 至多一条 active run"，第二次 INSERT 抛 IntegrityError
+    #      被下面 except 接住并翻译成 409。
     #   2) lifespan 启动时 _recover_orphan_bridge_runs — 进程崩溃遗留的 running 行
-    #      启动时被标 failed，避免永久卡住
-    # 之前 _get_project_lock(project_id).locked() 是 dead code：
-    #   asyncio.Lock 永不被 acquire（grep 证实无 `async with _get_project_lock`），
-    #   检查永远 False，给 false sense of security。已删。
-    # 迭代 #74: 之前只查 status='running' 有 TOCTOU 窗口 —— 新行插入后 status='pending'，
-    # 翻 'running' 在 background thread 里才开始。两个并发请求都查 'running' 都查不到，
-    # 都放行 + 都创建 pending → 同一 project_id 跑两个 engine 子进程写同一份 checkpoint。
-    # 修法：active 检查包含 pending + running —— 一旦第一个 insert pending 成功并 commit，
-    # 第二个请求的同检查能看到，不放行。
-    running = db.query(BridgeRun).filter(
-        BridgeRun.project_id == project_id,
-        BridgeRun.status.in_(["pending", "running"]),
-    ).first()
-    if running:
-        raise HTTPException(
-            409,
-            f"bridge run already active for this project (status={running.status})"
-        )
-
+    #      启动时被标 failed，避免永久卡住。
+    # 之前 2 个并发 "先查 active→再 insert" 有 TOCTOU 窗口（_74 + 旧 _running only check），
+    # 都查不到对方（都还在 pending 状态）→ 都 insert 成功 → 同一 project 跑 2 个 engine
+    # 子进程写同一份 checkpoint。partial unique index 在 INSERT 时由 SQLite 强制检查，
+    # 不再依赖 Python 层"先查后插"模式。
     bridge_run = BridgeRun(
         project_id=project_id,
         command=command,
@@ -186,7 +172,19 @@ async def run_bridge(
         status="pending",
     )
     db.add(bridge_run)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        # 唯一约束违反说明已有 active run。rollback 后查那条行的 status 给用户清晰提示。
+        db.rollback()
+        existing = db.query(BridgeRun).filter(
+            BridgeRun.project_id == project_id,
+            BridgeRun.status.in_(["pending", "running"]),
+        ).first()
+        raise HTTPException(
+            409,
+            f"bridge run already active for this project (status={existing.status if existing else 'unknown'})",
+        ) from exc
     db.refresh(bridge_run)
 
     # spawn subprocess 跑 engine（不再是 in-process via BackgroundTasks）
@@ -316,12 +314,14 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
         )
         # 在独立线程读 stdout → put to queue
         import threading
+
         # security-2026-07-13 #3: stdout 空闲看门狗。
         # 子进程 LLM 卡死 / 网络重试死循环会卡在 stdout 不动；
         # 没有看门狗 → BridgeRun 永久 running，SSE consumer 线程泄漏。
         # 共享 last_stdout_ts dict：_drain_stdout 每次 readline 更新 ts，
         # watchdog 线程每 30s 轮询检查 ts 超时则 killpg 终止整个进程组。
         import time as _time
+
         from app.config import settings as _settings
         # /simplify-2026-07-13: 把 timeout 一次性 bind 到局部变量，避免 watchdog
         # 闭包长期 pin Settings 单例（Pydantic 对象 + validators + alias map）。

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
@@ -137,6 +138,17 @@ _UNIQUE_INDEX_MIGRATIONS: list[tuple[str, str, str]] = [
     # 修 chapter_no 唯一约束缺失——并发 POST /chapters 同号时两条都成功，
     # 破坏排序 + RAG 去重逻辑 (chapter_import.py 按 chapter_no 幂等去重的兜底)。
     ("chapters", "uq_chapters_project_chapter_no", "(project_id, chapter_no)"),
+    # ─── 2026-07-25: BridgeRun per-project 原子并发约束（修 P0 短板 TOCTOU）──
+    # 之前 bridge.py "先查 active→再 insert" 有 TOCTOU 窗口：两个并发 POST /bridge/run
+    # 都查不到对方（都还在 pending 状态）→ 都 insert 成功 → 同一 project 跑 2 个 engine
+    # 子进程写同一份 checkpoint + 同一份 novel_ai_dir，数据损坏。
+    # 修法：partial unique index (WHERE status IN ('pending','running'))。
+    # 数据库层面硬保证"一个 project 至多一条 active run"——第二个 INSERT 抛 IntegrityError，
+    # 上层 catch 后返 409。done/failed 状态不限数量（保留历史记录）。
+    # 注意：SQLite partial index 在 IF NOT EXISTS 创建前若数据已有冲突会抛；
+    # 启动前用 SQL 清理历史 orphan active 行（见 _bridge_runs_cleanup_pre_migration）。
+    ("bridge_runs", "uq_bridge_runs_active_per_project",
+     "(project_id) WHERE status IN ('pending','running')"),
 ]
 
 
@@ -212,6 +224,38 @@ def _apply_one_index_migration(conn, table: str, index_name: str,
     return True
 
 
+# 2026-07-25: 在加 partial unique index 之前先清理孤儿数据。
+# BridgeRun 表可能从历史运行残留多行 status='pending' 或 'running'
+# （uvicorn 崩溃未清理、real30ch 实战历史），直接 CREATE UNIQUE INDEX 会
+# 抛 IntegrityError。预清理：每个 (project_id) 只保留 started_at 最新一条
+# active 行，其他都标 failed + finished_at。partial index WHERE 子句
+# (status IN 'pending','running') 保证不误伤 done/failed 历史记录。
+_PRE_INDEX_MIGRATION_CLEANUPS: list[tuple[str, str, str]] = [
+    ("bridge_runs", "cleanup_orphan_active",
+     "UPDATE bridge_runs SET status='failed', finished_at=CURRENT_TIMESTAMP "
+     "WHERE status IN ('pending','running') AND id NOT IN ("
+     "  SELECT id FROM (SELECT id, ROW_NUMBER() OVER ("
+     "    PARTITION BY project_id ORDER BY started_at DESC) AS rn "
+     "    FROM bridge_runs WHERE status IN ('pending','running')) "
+     "  WHERE rn = 1)"),
+]
+
+
+def _run_pre_index_cleanups(conn) -> int:
+    """执行 partial unique index 前的预清理（孤儿数据归档）。返回清理条数。"""
+    cleaned = 0
+    for table, name, ddl in _PRE_INDEX_MIGRATION_CLEANUPS:
+        if not _table_exists(conn, table):
+            log.debug("pre-cleanup skipped (table missing): %s", table)
+            continue
+        result = conn.execute(text(ddl))
+        rc = getattr(result, "rowcount", 0) or 0
+        if rc:
+            log.info("pre-cleanup: %s archived %d orphan active rows", name, rc)
+            cleaned += rc
+    return cleaned
+
+
 def run_migrations(target_engine: Engine | None = None) -> int:
     """启动时跑所有增量迁移。返回成功执行的条数。
 
@@ -243,6 +287,9 @@ def run_migrations(target_engine: Engine | None = None) -> int:
         for table, column, ddl_type in _MIGRATIONS:
             if _apply_one_migration(conn, table, column, ddl_type):
                 applied += 1
+        # 2026-07-25：partial unique index 前先清理孤儿数据。
+        # 在同一事务里，pre-cleanup + index creation 一起 commit/rollback。
+        _run_pre_index_cleanups(conn)
         # 唯一索引迁移：与 _MIGRATIONS 分开，因为 CREATE UNIQUE INDEX 走
         # IF NOT EXISTS 而不是 PRAGMA + ALTER 两步。IF NOT EXISTS 本身不会
         # 抛 duplicate error，所以这条循环不需要 benign 判断。
