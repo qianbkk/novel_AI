@@ -76,7 +76,70 @@ export function dispatchAuthRequired(): void {
   }
 }
 
-async function request<T>(path: string, options?: RequestInit): Promise<T> {
+// ─── 2026-07-25 修复（API client 缺 abort/timeout/retry）───
+// 之前 request() 直接 await fetch(..., options)，没有 AbortSignal / 超时 / 重试。
+// 三个真实风险：
+//   1) 用户切走 30 秒后请求还在跑 — 内存 + 钱 + token 都在浪费
+//   2) fetch 默认 0 永等 — 网络断开页面永远 loading
+//   3) HTTP 529 (MiniMax 服务器过载) / 网抖 — 应该自动退避重试 1-2 次
+// 修法：加 RequestOptions { signal?, timeoutMs?, retries? }；默认 timeout 30s + retries 1。
+//   AbortSignal 透传给 fetch；超时 + 重试都用内部 AbortController 实现。
+export interface RequestOptions extends Omit<RequestInit, "signal"> {
+  /** 外部 AbortSignal — 用于 useEffect cleanup 取消。timeout 内部会创建自己的 controller。 */
+  signal?: AbortSignal;
+  /** 默认 30_000ms。设为 0 表示禁用超时（用于 SSE 长连接 / 文件上传）。 */
+  timeoutMs?: number;
+  /** 默认 1。意味着 GET 请求 5xx / 网络错误会重试 1 次（间隔 800ms）。POST 默认 0（写操作不重试）。 */
+  retries?: number;
+  /** GET 默认可重试；POST 写操作不重试。调用方显式覆盖（设 retries: 0）。 */
+  retryOnPost?: boolean;
+}
+
+const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_RETRIES = 1;
+const RETRY_BACKOFF_MS = 800;
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof DOMException && err.name === "AbortError";
+}
+
+function isRetryable(err: unknown): boolean {
+  // AbortError 是用户主动取消，不重试
+  if (isAbortError(err)) return false;
+  if (!(err instanceof Error)) return false;
+  // 网络/超时/5xx 都重试
+  if (err.message.startsWith("服务器错误 5")) return true;
+  if (err.message.includes("Failed to fetch") ||
+      err.message.includes("NetworkError") ||
+      err.message.includes("Timeout") ||
+      err.message.includes("timeout")) return true;
+  return false;
+}
+
+function withTimeout(parentSignal: AbortSignal | undefined, ms: number): {
+  signal: AbortSignal;
+  cancel: () => void;
+} {
+  const ctrl = new AbortController();
+  const onParentAbort = () => ctrl.abort(parentSignal?.reason);
+  if (parentSignal) {
+    if (parentSignal.aborted) ctrl.abort(parentSignal.reason);
+    else parentSignal.addEventListener("abort", onParentAbort, { once: true });
+  }
+  const timer = setTimeout(() => ctrl.abort(new DOMException("Request timeout", "TimeoutError")), ms);
+  const cancel = (): void => {
+    clearTimeout(timer);
+    if (parentSignal) parentSignal.removeEventListener("abort", onParentAbort);
+  };
+  return { signal: ctrl.signal, cancel };
+}
+
+async function request<T>(path: string, options?: RequestOptions): Promise<T> {
+  const method = (options?.method || "GET").toUpperCase();
+  const isWrite = method !== "GET" && method !== "HEAD";
+  const timeoutMs = options?.timeoutMs ?? (isWrite ? 60_000 : DEFAULT_TIMEOUT_MS);
+  const maxRetries = options?.retries ?? (isWrite && !options?.retryOnPost ? 0 : DEFAULT_RETRIES);
+
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
     ...((options?.headers as Record<string, string>) || {}),
@@ -87,11 +150,36 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     headers["Authorization"] = `Bearer ${token}`;
   }
 
-  const resp = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-  });
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const { signal, cancel } = timeoutMs > 0
+      ? withTimeout(options?.signal, timeoutMs)
+      : { signal: options?.signal as AbortSignal | undefined, cancel: () => {} };
+    try {
+      if (!signal) {
+        // 没有 timeout + 没有外部 signal — 直接 fetch
+        const resp = await fetch(`${API_BASE}${path}`, { ...options, headers });
+        return await handleResponse<T>(resp, path);
+      }
+      const resp = await fetch(`${API_BASE}${path}`, { ...options, headers, signal });
+      cancel();
+      return await handleResponse<T>(resp, path);
+    } catch (err) {
+      cancel();
+      // 用户主动取消（含外部 signal 触发）— 不重试，直接抛
+      if (isAbortError(err)) throw err;
+      lastError = err;
+      // 不可重试 / 已用完次数
+      if (!isRetryable(err) || attempt >= maxRetries) throw err;
+      // 退避后重试
+      await new Promise((r) => setTimeout(r, RETRY_BACKOFF_MS * (attempt + 1)));
+    }
+  }
+  // 不可达：循环已经 throw；这里只是让 TS 满足返回类型
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
 
+async function handleResponse<T>(resp: Response, path: string): Promise<T> {
   if (resp.status === 401) {
     // 生产模式下后端会拒绝无 token 请求；dev 模式实际不会触发。
     // 仅清 token（不立即抛）→ 让上层路由用 catch 处理。
@@ -419,3 +507,37 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 };
+
+/**
+ * withConcurrency — 限制 N 个 promise 并发跑。
+ * 2026-07-25 修（Dashboard 4 并发模板化）：之前 Dashboard.tsx 自己手写
+ * for + chunk + Promise.all；现在抽到 api 层共用，调用方只传并发上限。
+ * 失败的任务不会中断其他任务，调用方可在 result 元组里看到 err。
+ *
+ * 用法：
+ *   const [ok1, err1, ok2, err2] = await api.withConcurrency(2,
+ *     () => fetchData(1),
+ *     () => fetchData(2),
+ *   );
+ */
+export function withConcurrency<T>(
+  limit: number,
+  ...tasks: Array<() => Promise<T>>
+): Promise<Array<{ ok: true; value: T } | { ok: false; error: unknown }>> {
+  const results: Array<{ ok: true; value: T } | { ok: false; error: unknown }> =
+    new Array(tasks.length);
+  let cursor = 0;
+  const workers = Array.from({ length: Math.min(limit, tasks.length) }, async () => {
+    while (true) {
+      const i = cursor++;
+      if (i >= tasks.length) return;
+      try {
+        const value = await tasks[i]();
+        results[i] = { ok: true, value };
+      } catch (error) {
+        results[i] = { ok: false, error };
+      }
+    }
+  });
+  return Promise.all(workers).then(() => results);
+}
