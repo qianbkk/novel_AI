@@ -47,9 +47,11 @@ class Project(Base):
     budget_limit_usd = Column(Float, nullable=True)
     novel_ai_status = Column(String, default="not_started")
     # not_started | concept_pushed | planner_done | bootstrap_done | writing | done
-    # ─── Phase 3: owner_id 占位（nullable，目前不读写）──
-    # 单租户原型阶段不启用多用户隔离，但预留该列避免将来真要多用户时做高风险数据回填迁移。
-    owner_id = Column(String, nullable=True)             # 预留：未来关联 User.id
+    # ─── Phase 5: owner_id FK → users.id（nullable，dev 模式不启用多用户）──
+    # 2026-07-25：之前是裸 String（无 FK 约束），DB 不能阻止"指向不存在
+    # user_id"的写入。Phase 3 时是"预留列"，现在 5 个月后升级为真 FK。
+    # alembic 0003 migration 配套加 FK（SQLite batch_alter_table 重建表）。
+    owner_id = Column(String, ForeignKey("users.id"), nullable=True)  # dev 模式不写
     # ─── Phase 3: per-project audit_mode（去全局化）──
     # 草稿模式 = 'draft'：node_load_arc_tasks 覆盖任务 audit_mode，writer 跳过 compliance+checker。
     # 完整模式 = 'full'（默认）：全质检链路。
@@ -73,7 +75,7 @@ class WorldSetting(Base):
     __tablename__ = "world_settings"
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"), unique=True)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), unique=True)
     world_view = Column(Text, nullable=True)            # 世界观设定（legacy 字段，保留向后兼容）
     story_core = Column(Text, nullable=True)            # 故事核心/主要冲突（legacy 字段）
     plot_skeleton_json = Column(JSON, nullable=True)    # 卷级情节脉络（粗粒度，章节级留给大纲阶段）
@@ -91,7 +93,7 @@ class Character(Base):
     __tablename__ = "characters"
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"))
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"))
     name = Column(String, nullable=False)
     role = Column(String, nullable=True)        # 主角/重要配角/反派...
     detail_json = Column(JSON, nullable=True)   # 身世/能力/动机等结构化细节
@@ -112,7 +114,7 @@ class Faction(Base):
     __tablename__ = "factions"
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"))
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"))
     name = Column(String, nullable=False)
     detail_json = Column(JSON, nullable=True)
 
@@ -123,7 +125,7 @@ class PowerSystem(Base):
     __tablename__ = "power_systems"
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"))
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"))
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
     tiers_json = Column(JSON, nullable=True)   # 境界体系，对应截图里的1~6阶
@@ -136,8 +138,8 @@ class MapNode(Base):
     __tablename__ = "map_nodes"
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"))
-    parent_id = Column(String, ForeignKey("map_nodes.id"), nullable=True)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"))
+    parent_id = Column(String, ForeignKey("map_nodes.id", ondelete="CASCADE"), nullable=True)
     name = Column(String, nullable=False)
     level = Column(String, nullable=False)     # world/continent/province/city/district/street/place
     description = Column(Text, nullable=True)
@@ -150,9 +152,9 @@ class Foreshadowing(Base):
     __tablename__ = "foreshadowings"
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"))
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"))
     content = Column(Text, nullable=False)
-    linked_character_id = Column(String, ForeignKey("characters.id"), nullable=True)
+    linked_character_id = Column(String, ForeignKey("characters.id", ondelete="SET NULL"), nullable=True)
     importance = Column(String, default="中")   # 高/中/低，对应截图里的"伏笔等级"
     status = Column(String, default="未铺垫")     # 未铺垫/已铺垫/已回收
     planted_chapter_hint = Column(String, nullable=True)   # 预计铺垫章节区间，后续大纲阶段细化
@@ -165,7 +167,7 @@ class Currency(Base):
     __tablename__ = "currencies"
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"))
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"))
     name = Column(String, nullable=False)
     detail_json = Column(JSON, nullable=True)
 
@@ -182,7 +184,7 @@ class EntityRelation(Base):
     __tablename__ = "entity_relations"
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"))
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"))
     from_type = Column(String, nullable=False)   # character | faction
     from_id = Column(String, nullable=False)
     to_type = Column(String, nullable=False)
@@ -213,7 +215,7 @@ class Chapter(Base):
     )
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"))
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"))
     chapter_no = Column(Integer, nullable=False)
     title = Column(String, nullable=True)
     content = Column(Text, nullable=False)
@@ -243,7 +245,7 @@ class EmbeddingChunk(Base):
     __tablename__ = "embedding_chunks"
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"))
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"))
     source_type = Column(String, nullable=False)   # chapter | character | foreshadowing
     source_id = Column(String, nullable=False)
     text_snippet = Column(Text, nullable=False)     # 存一份原文片段方便调试/展示，不止存向量
@@ -295,7 +297,7 @@ class BridgeRun(Base):
     __tablename__ = "bridge_runs"
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"))
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"))
     command = Column(String, nullable=False)
     args_json = Column(JSON, nullable=True)
     status = Column(String, default="pending")
@@ -317,7 +319,7 @@ class NovelAIBinding(Base):
     __tablename__ = "novel_ai_bindings"
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"), unique=True)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), unique=True)
     novel_ai_dir = Column(String, nullable=False)
     novel_id = Column(String, nullable=False)
 
@@ -327,7 +329,7 @@ class GenerationJob(Base):
     __tablename__ = "generation_jobs"
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"))
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"))
     job_type = Column(String, default="worldbuild")
     status = Column(String, default="pending")   # pending/running/done/failed
     current_stage = Column(String, nullable=True)
@@ -345,7 +347,7 @@ class RuleConfig(Base):
     __tablename__ = "rule_configs"
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"), unique=True)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), unique=True)
     style = Column(String, default="webnovel")           # webnovel | literary | wuxia
     taboos_json = Column(JSON, nullable=True)           # list[str]
     template = Column(String, default="run.章节撰写")     # 当前激活的 prompt 模板名
@@ -365,7 +367,7 @@ class Outline(Base):
     __tablename__ = "outlines"
 
     id = Column(String, primary_key=True, default=gen_id)
-    project_id = Column(String, ForeignKey("projects.id"), index=True)
+    project_id = Column(String, ForeignKey("projects.id", ondelete="CASCADE"), index=True)
     arc_id = Column(Integer, nullable=False)                     # 第几条 arc
     arc_name = Column(String, nullable=False)
     arc_goal = Column(Text, nullable=True)
