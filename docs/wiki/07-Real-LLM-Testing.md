@@ -2,9 +2,8 @@
 
 > 本页沉淀 30 章真实 MiniMax-M3 端到端测试（2026-07-22 + 2026-07-24）发现的所有问题、根因、本质修复与教训。
 > 每次跑真实 LLM 测试前先看本节 — 历史上踩过的坑不要再踩。
-> 完整原始数据见 [`docs/runs/30ch-real-2026-07-22/REPORT.md`](../runs/30ch-real-2026-07-22/REPORT.md)（276 行报告）。
-> 最新一次实战（2026-07-24，含 31 章真跑 + Dashboard 修复）见 [`docs/runs/30ch-real-2026-07-24/`](../runs/30ch-real-2026-07-24/)。
-> 更早的 30 章跑（2026-07-20）已归档到 [`docs/runs/_archive/30ch-real-2026-07-20/`](../runs/_archive/30ch-real-2026-07-20/)。
+> 历史报告已归档至 [`docs/runs/_archive/`](../runs/_archive/)（REPORT_30ch-2026-07-22.md / REPORT_v3_30ch-2026-07-23.md / audit-driven-fixes-design_2026-07-20.md）。
+> 最新一次实战（2026-07-24，含 31 章真跑 + Dashboard 修复）的 stdout/SSE 原始日志见 `docs/runs/30ch-real-2026-07-24/`（`.gitignore`，本地保留）。
 
 ## 1. 跑真实 LLM 测试的最小流程
 

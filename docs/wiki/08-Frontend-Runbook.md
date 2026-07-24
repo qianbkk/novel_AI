@@ -94,6 +94,12 @@ npm run dev   # 启动在 http://localhost:5293
   UPDATE bridge_runs SET status='failed', exit_code=-1 WHERE status='running';
   ```
 
+### 3.7 Dashboard 看不到"正在跑"的项目（2026-07-24 修复）
+- **修后行为**：项目卡片右下角显示 **⟳ + 命令名 + 呼吸动画**（`⟳ 生成设定包` / `⟳ 写10章` 等），点击直接跳 BridgeConsole 看 SSE 实时日志
+- **实现**：后端 `/projects` endpoint 现在附带 `active_run_command/status/id/started_at` 字段（每项目最新一条 pending/running 的 BridgeRun）
+- **触发时机**：`POST /bridge/run` 创建 `BridgeRun(status="pending"|"running")` 即生效；`done` / `failed` 后 badge 自动消失
+- **修前症状**：旧版本 Dashboard 只看 `Project.status`，bridge.run 跑时 status 不变，用户看不到 ⟳ 提示
+
 ## 4. 看日志
 
 ### 4.1 实时后端日志

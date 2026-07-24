@@ -1,13 +1,12 @@
-# 架构现状速览
+# 架构速览
 
-> 这是一份「现在长什么样 + 为什么」的速览入口，与 [CHANGELOG.md](../../CHANGELOG.md) 时序累积分开。
-> 任何改动涉及核心路径时，先查这里；改完有结构性影响时，回来更新这里。
->
-> **本文件只讲现状**——架构的来龙去脉、子模块细节、API 端点列表、数据模型 schema，请看：
+> 这是「5 分钟看清架构」的速览入口；详细请看：
 > - [01-Architecture.md](01-Architecture.md) — 三层拓扑 + 进程边界 + 失败模式
 > - [02-Backend-API.md](02-Backend-API.md) — FastAPI 路由清单
 > - [03-Writing-Engine.md](03-Writing-Engine.md) — 9-Agent orchestrator
 > - [05-Data-Model.md](05-Data-Model.md) — SQLAlchemy ORM + 4 套存储
+>
+> 本页只讲现状。改本文件的触发条件见 [00-Home.md](00-Home.md)。
 
 ---
 
@@ -20,24 +19,24 @@
 ## 2. 三层结构
 
 ```
-┌────────────────────────── 浏览器 (React, Vite) ─────────────────────────┐
-│ Pages: Dashboard · NewProject · Providers · RoleAssignments ·          │
-│   WorldBuild · BridgeConsole · Chapters · RuleCenter · CharacterCard │
-│ api/client.ts: fetch 封装（含 JSON 解析失败脱敏）                         │
-│ types.ts ↔ backend Pydantic schema 严格 1:1                              │
-└────────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────── 浏览器 (React, Vite :5293) ───────────────────────┐
+│ Pages: Dashboard · NewProject · Providers · RoleAssignments ·             │
+│   WorldBuild · BridgeConsole · Chapters · RuleCenter · CharacterCard     │
+│ api/client.ts: fetch 封装（含 JSON 解析失败脱敏）                            │
+│ types.ts ↔ backend Pydantic schema 严格 1:1                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
    ↑ VITE_API_BASE (default http://localhost:8132)
    │ SSE (EventSource) + fetch
    ↓
-┌───────────────────── FastAPI 后端 (uvicorn :8132) ─────────────────────────┐
+┌───────────────────── FastAPI 后端 (uvicorn :8132) ────────────────────────┐
 │                                                                            │
 │  lifespan (main.py):                                                      │
 │   - NOVEL_PRODUCTION=1 时强制 MASTER_KEY / JWT_SECRET / ALLOWED_ORIGINS  │
-│     等已妥善配置 (fail-fast)                                             │
-│   - run_migrations (idempotent ALTER TABLE ADD COLUMN)                  │
-│   - seed_role_assignments (15 个写作角色种子)                            │
+│     等已妥善配置 (fail-fast)                                              │
+│   - run_migrations (idempotent ALTER TABLE ADD COLUMN)                   │
+│   - seed_role_assignments (15 个写作角色种子)                             │
 │   - _recover_orphan_bridge_runs (上一轮崩溃的 running 行标 failed)        │
-│   - take_all_snapshots (sqlite online backup, 保留 10 份)               │
+│   - take_all_snapshots (sqlite online backup, 保留 10 份)                 │
 │                                                                            │
 │  middleware:                                                               │
 │   - CORSMiddleware (env ALLOWED_ORIGINS, 默认 localhost:5293)            │
@@ -71,7 +70,7 @@
 │  engine/llm/router.py: 6 provider + mock, length budget 控字数             │
 │  engine/memory/manager.py: L2 热冷分层 + 风格样本切换 + 约束过期          │
 │  engine/config/*: paths + prompt_templates + power_levels                  │
-│  engine/tools/*: bootstrap / budget / scan / fingerprint / exporter...   │
+│  engine/tools/*: bootstrap / budget / scan / fingerprint / exporter...    │
 │  engine/utils.py: atomic_write_json + parse_llm_json_response (3 策略)    │
 │                                                                            │
 │  audit_mode: 'full' (默认全链路) | 'draft' (writer + normalizer + tracker │
@@ -92,9 +91,13 @@
 
 ---
 
-## 3. 数据契约（"加字段五步流程")
+## 3. 关键不变量（auto-locked by tests）
 
-任何 schema 字段都要走完以下 5 步：
+- `backend/tests/invariants/test_<domain>.py` 锁定结构与跨存储契约
+- `scripts/audit_project.py` 端到端审计
+- 流程：编辑 → 更新对应测试 → 按 [`backend/tests/README.md`](../../backend/tests/README.md) 分层运行 → commit
+
+**加 schema 字段的 5 步流程**（防 Planner 输出与消费端字段漂移）：
 
 1. 改 `backend/schema/<schema>.schema.json`
 2. 改生成端 prompt（planner.py / stages.py / rewriter.py 等）
@@ -118,40 +121,14 @@
 
 ## 已实现 vs 仍冻结的护栏
 
-Phase 4（2026-07-11）起，多用户认证（JWT + bcrypt + HttpOnly Cookie + owner 校验 + 登录限流）已实现，dev 模式默认关闭（单租户），`NOVEL_PRODUCTION=1` 时强制开启。参见 README "部署" 段落。
+Phase 4（2026-07-11）起，多用户认证（JWT + bcrypt + HttpOnly Cookie + owner 校验 + 登录限流）已实现，dev 模式默认关闭（单租户），`NOVEL_PRODUCTION=1` 时强制开启。参见 [README.md](../../README.md) "部署" 段落。
 
-仍冻结到“决定要开放”再启用的项：多 worker 部署下的 MASTER_KEY 一致性、分布式任务队列（现为子进程 + DB 状态检查）、密钥管理服务（Vault/KMS）、WAF/DDoS 防护。
-
----
-
-## 5. 关键不变量（auto-locked by tests）
-
-`backend/tests/invariants/test_<domain>.py` + `scripts/audit_project.py` 端到端审计：
-
-- 所有改动核心模块后必须 PASS。
-- 流程：编辑 → 更新对应测试 → 按 `backend/tests/README.md` 分层运行 → commit。
-
-新增 "audit 类"测试 vs "功能测试"：
-- audit 类（防再犯）如不需要平时跑透，可加 `@pytest.mark.audit` marker；
-- 功能测试必须 commit 前跑通。
+仍冻结到"决定要开放"再启用的项：多 worker 部署下的 MASTER_KEY 一致性、分布式任务队列（现为子进程 + DB 状态检查）、密钥管理服务（Vault/KMS）、WAF/DDoS 防护。
 
 ---
 
-## 6. 启动 / 开发 / 部署指南
+## 5. 启动 / 开发 / 部署指南
 
-详见 `README.md` / `dev.bat` / 各子目录的 CLAUDE.md-style 注释。
+详见 [README.md](../../README.md) / [dev.bat](../../dev.bat) / [06-Dev-Setup.md](06-Dev-Setup.md)。
 
-环境变量单一真相源见 [backend/app/config.py](../backend/app/config.py) 的 Settings 类 (`python -c "from app.config import list_env_keys; print(list_env_keys())"` 列出全部)。
-
----
-
-## 7. 修订指南
-
-改本文件：
-- 当架构图发生变化（如新增 9 个 agent 中的第 10 个、新增路由族）时。
-- 当数据契约路径变化时。
-- 当新的"加字段流程"出现时。
-
-不修改本文件：
-- 修复 bug、调整样式、改 prompt 的细节 — 属 CHANGELOG。
-- 实现细节（具体函数、具体 prompt） — 改对应 docstring / 函数头注释。
+环境变量单一真相源见 [`backend/app/config.py`](../../backend/app/config.py) 的 Settings 类（`python -c "from app.config import list_env_keys; print(list_env_keys())"` 列出全部）。

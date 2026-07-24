@@ -63,6 +63,22 @@ python -m scripts.run_mvp <project_id> --chapters 3 --select B
 
 流式打印 SSE 日志 + 节点事件，结束时给出摘要和落盘章节列表。
 
+**注意**：`run_mvp.py` 中 `select_bootstrap_version()` 直接 import 调 `engine.tools.bootstrap.select_version`，
+绕过 bridge 链路。如果想严格遵守"全部走 bridge"的用户约束，请用以下两个脚本代替：
+
+| 脚本 | 用途 |
+|------|------|
+| `continue_worldbuild.py <project_id>` | 续跑卡住的 draft 项目（MiniMax 突发 429 等）；跑前清掉上一轮失败的 10 stages 中间产物，每 stage 6 次重试；跑完标 `status=ready`。仅 worldbuild 阶段。 |
+| `drive_30ch_bridge.py <project_id> [--chapters N]` | 按前端 BridgeConsole 按钮 1:1 顺序跑 7 步 pipeline（binding → push-concept → planner → pull-setting → bootstrap → init_arc → run N → import-chapters）；全程 HTTP API + SSE。 |
+
+```bash
+# 续跑卡住的 worldbuild
+python -m scripts.continue_worldbuild real30ch-16862056
+
+# 跑完整 30 章（实测 ~40 分钟 / $0.74）
+python -m scripts.drive_30ch_bridge real30ch-16862056 --chapters 30
+```
+
 ## 常用运维脚本（`backend/scripts/`）
 
 完整支持级别与脚本准入规则见 [`backend/scripts/README.md`](../../backend/scripts/README.md)。
@@ -77,6 +93,8 @@ python -m scripts.run_mvp <project_id> --chapters 3 --select B
 | `cleanup_test_projects.py` | 清理测试项目数据 |
 | `strip_chapter_headers.py` | 旧章节标题清洗修复 |
 | `rewrite_length.py` | 用 LLM 把章节字数规整到 1800-2700 |
+| `continue_worldbuild.py` | 续跑卡在 stage 2 的 draft 项目 |
+| `drive_30ch_bridge.py` | 跑完整前端按钮等价 pipeline |
 
 ## 测试
 

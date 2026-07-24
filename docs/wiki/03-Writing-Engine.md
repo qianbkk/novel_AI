@@ -1,6 +1,6 @@
 # 写作引擎（`backend/engine/`）
 
-LangGraph 状态机驱动的多 Agent 网文写作引擎，被后端以子进程方式调用（见 [01-Architecture.md](01-Architecture.md)）。是从独立版 `novel_AI/`（参见 [07-Standalone-Engine.md](07-Standalone-Engine.md)）移植并加固的版本。
+LangGraph 状态机驱动的多 Agent 网文写作引擎，被后端以子进程方式调用（见 [01-Architecture.md](01-Architecture.md)）。早期作为独立版 `novel_AI/` 仓库维护，2026-07 起并入 `backend/engine/`；迁移与加固历史见本文末尾「[移植自独立版 novel_AI/ 的关键加固](#移植自独立版-novel_ai的关键加固)」表格。
 
 ## LangGraph 状态机
 
