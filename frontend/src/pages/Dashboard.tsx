@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api } from "../api/client";
+import { api, withConcurrency } from "../api/client";
 import type { ChapterListItem, Project } from "../types";
 import { useReveal } from "../hooks/useReveal";
 
@@ -212,31 +212,32 @@ export default function Dashboard() {
       if (!mountedRef.current) return;
       setProjects(ps);
       // 审计 #2（2026-07-22）：串行 + 4 并发限制，避免全量并发导致
-      // 大量项目首屏加载变慢。不引入 p-limit 依赖，手写 chunk 即可。
-      const concurrency = 4;
-      const entries: Array<readonly [string, ChapterListItem[], boolean]> = [];
-      for (let i = 0; i < ps.length; i += concurrency) {
-        const slice = ps.slice(i, i + concurrency);
-        const sub = await Promise.all(
-          slice.map(async (p) => {
-            try {
-              const chs = await api.listChapters(p.id);
-              return [p.id, chs, false] as const;
-            } catch (e) {
-              // 审计 #1（2026-07-22）：不再静默吞单个项目章节加载失败，
-              // console.warn 让开发者看到，同时 hasError=true 让 UI 能区分
-              // 「真的没有章节」与「加载失败」（前端用 hasError 标灰）。
-              console.warn(`[Dashboard] listChapters failed for ${p.id}:`, e);
-              return [p.id, [] as ChapterListItem[], true] as const;
-            }
-          }),
+      // 2026-07-25 接入 client.withConcurrency 替换手写 chunk 循环（4 并发）。
+      // helper 是本 commit (ad9d8f2) 为收编这块而抽的；现在实际接入。
+      // withConcurrency 用 sliding window（不是固定 chunk），语义更优：
+      // worker 完成后立即取下一个任务，4 个 worker 始终满载。
+      const results = await withConcurrency(4,
+        ...ps.map((p) => () => api.listChapters(p.id).then(
+          (chs) => ({ id: p.id, chs, failed: false }),
+          (e: unknown) => {
+            // 审计 #1（2026-07-22）：不再静默吞单个项目章节加载失败，
+            // console.warn 让开发者看到，同时 hasError=true 让 UI 能区分
+            // 「真的没有章节」与「加载失败」（前端用 hasError 标灰）。
+            console.warn(`[Dashboard] listChapters failed for ${p.id}:`, e);
+            return { id: p.id, chs: [] as ChapterListItem[], failed: true };
+          }
+        ))
+      );
+      const entries: Array<{ id: string; chs: ChapterListItem[]; failed: boolean }> =
+        results.map((r) =>
+          r.ok ? r.value : { id: "", chs: [], failed: true }
         );
-        entries.push(...sub);
-      }
       if (!mountedRef.current) return;
       // chapterMap: id -> chapters；failures: id -> true（前端可标灰）
-      setChapterMap(Object.fromEntries(entries.map(([id, chs]) => [id, chs])));
-      setChapterLoadFailures(Object.fromEntries(entries.map(([id, _chs, err]) => [id, err])));
+      setChapterMap(Object.fromEntries(entries.map(({ id, chs }) => [id, chs])));
+      setChapterLoadFailures(Object.fromEntries(
+        entries.map(({ id, failed }) => [id, failed])
+      ));
     } catch (e) {
       if (!mountedRef.current) return;
       setError(String(e));

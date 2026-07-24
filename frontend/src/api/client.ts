@@ -87,12 +87,11 @@ export function dispatchAuthRequired(): void {
 export interface RequestOptions extends Omit<RequestInit, "signal"> {
   /** 外部 AbortSignal — 用于 useEffect cleanup 取消。timeout 内部会创建自己的 controller。 */
   signal?: AbortSignal;
-  /** 默认 30_000ms。设为 0 表示禁用超时（用于 SSE 长连接 / 文件上传）。 */
+  /** 默认 30_000ms（写操作 60_000ms）。设为 0 表示禁用超时（用于 SSE 长连接 / 文件上传）。 */
   timeoutMs?: number;
-  /** 默认 1。意味着 GET 请求 5xx / 网络错误会重试 1 次（间隔 800ms）。POST 默认 0（写操作不重试）。 */
+  /** 默认 1（GET） / 0（POST 写操作）。GET 请求 5xx / 网络错误会重试 1 次（间隔 800ms）。
+   *  POST 默认不重试（写操作幂等性不可假设）。调用方显式传 retries: N 覆盖。 */
   retries?: number;
-  /** GET 默认可重试；POST 写操作不重试。调用方显式覆盖（设 retries: 0）。 */
-  retryOnPost?: boolean;
 }
 
 const DEFAULT_TIMEOUT_MS = 30_000;
@@ -138,7 +137,9 @@ async function request<T>(path: string, options?: RequestOptions): Promise<T> {
   const method = (options?.method || "GET").toUpperCase();
   const isWrite = method !== "GET" && method !== "HEAD";
   const timeoutMs = options?.timeoutMs ?? (isWrite ? 60_000 : DEFAULT_TIMEOUT_MS);
-  const maxRetries = options?.retries ?? (isWrite && !options?.retryOnPost ? 0 : DEFAULT_RETRIES);
+  // 默认按 method 决定：GET 1 次重试（5xx / 网络错），POST/PUT/DELETE 0 次（写操作不重试）。
+  // 调用方可显式传 retries: N 覆盖。
+  const maxRetries = options?.retries ?? (isWrite ? 0 : DEFAULT_RETRIES);
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json",

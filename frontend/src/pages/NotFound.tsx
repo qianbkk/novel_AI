@@ -5,30 +5,11 @@
  * 现在显示一个友好页面，给"返回项目 / 返回首页 / 复制 URL 给开发者"三个动作。
  */
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { useToast } from "../components/Toast";
+import { CopyDebugButton } from "../components/CopyDebugButton";
 
 export default function NotFound() {
   const location = useLocation();
   const navigate = useNavigate();
-  const toast = useToast();
-
-  function copyDebugInfo() {
-    const info = {
-      pathname: location.pathname,
-      search: location.search,
-      hash: location.hash,
-      ts: new Date().toISOString(),
-      ua: navigator.userAgent.slice(0, 120),
-    };
-    const text = JSON.stringify(info, null, 2);
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text)
-        .then(() => toast.success("调试信息已复制", "可贴给开发者"))
-        .catch(() => toast.warn("复制失败", "请手动截屏"));
-    } else {
-      toast.warn("当前浏览器不支持剪贴板", "请手动截屏");
-    }
-  }
 
   return (
     <div>
@@ -69,15 +50,14 @@ export default function NotFound() {
             >
               ← 上一页
             </button>
-            <button
-              type="button"
-              className="btn btn-ghost"
-              onClick={copyDebugInfo}
-              aria-label="复制调试信息给开发者"
-              title="把 URL / 时间戳 / 浏览器版本复制到剪贴板，方便贴给开发者排查"
-            >
-              📋 复制调试信息
-            </button>
+            <CopyDebugButton
+              info={{
+                pathname: location.pathname,
+                search: location.search,
+                hash: location.hash,
+                ts: new Date().toISOString(),
+              }}
+            />
           </div>
         </div>
       </div>

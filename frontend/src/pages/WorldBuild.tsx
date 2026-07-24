@@ -6,7 +6,20 @@ import { RelationGraph } from "../components/RelationGraph";
 import { EmptyTab } from "../components/worldview/EmptyTab";
 import { FactionGraph } from "../components/worldview/FactionGraph";
 import { WorldviewTab } from "../components/worldview/WorldviewTab";
-import { groupMapByLevel } from "../components/worldview/groupMapByLevel";
+
+// 2026-07-25（修 P19 /simplify 极简）：groupMapByLevel 仅 1 处使用（地图 tab），
+// ponytail 极简原则 = 抽离需要 ≥ 2 个调用方。inline 在此。
+function groupMapByLevel(nodes: MapNode[]): { level: string; nodes: MapNode[] }[] {
+  const seen = new Map<string, MapNode[]>();
+  for (const n of nodes) {
+    const arr = seen.get(n.level) || [];
+    arr.push(n);
+    seen.set(n.level, arr);
+  }
+  return Array.from(seen.entries())
+    .map(([level, ns]) => ({ level, nodes: ns }))
+    .sort((a, b) => a.level.localeCompare(b.level));
+}
 
 // 阶段清单从后端 GET /worldbuild/stages 动态拉，避免前后端 STAGES 漂移。
 // 离线/后端不可达时 fallback 到这份内联默认（同时给首屏立即可渲染的骨架），

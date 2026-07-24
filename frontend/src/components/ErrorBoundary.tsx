@@ -11,7 +11,7 @@
  */
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { useToast } from "./Toast";
+import { CopyDebugButton } from "./CopyDebugButton";
 
 interface Props {
   children: ReactNode;
@@ -23,34 +23,6 @@ interface State {
   componentStack: string;
   path: string;
   ts: string;
-}
-
-function CopyDebugButton({ info }: { info: Omit<State, "hasError"> }) {
-  const toast = useToast();
-  function copy() {
-    const text = JSON.stringify(
-      { ...info, ua: navigator.userAgent.slice(0, 120) },
-      null,
-      2,
-    );
-    if (navigator.clipboard?.writeText) {
-      navigator.clipboard.writeText(text)
-        .then(() => toast.success("调试信息已复制", "可贴给开发者"))
-        .catch(() => toast.warn("复制失败", "请手动截屏"));
-    } else {
-      toast.warn("当前浏览器不支持剪贴板", "请手动截屏");
-    }
-  }
-  return (
-    <button
-      type="button"
-      className="btn btn-ghost"
-      onClick={copy}
-      aria-label="复制错误调试信息"
-    >
-      📋 复制调试信息
-    </button>
-  );
 }
 
 export class ErrorBoundary extends Component<Props, State> {
@@ -131,7 +103,7 @@ export class ErrorBoundary extends Component<Props, State> {
               >
                 ↻ 重试
               </button>
-              <CopyDebugButton info={{ error, path, ts, componentStack }} />
+              <CopyDebugButton info={{ error: error?.message ?? "", path, ts, componentStack }} />
             </div>
           </div>
         </div>
