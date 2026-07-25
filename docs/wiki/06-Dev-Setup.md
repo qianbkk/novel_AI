@@ -70,6 +70,7 @@ python -m scripts.run_mvp <project_id> --chapters 3 --select B
 |------|------|
 | `continue_worldbuild.py <project_id>` | 续跑卡住的 draft 项目（MiniMax 突发 429 等）；跑前清掉上一轮失败的 10 stages 中间产物，每 stage 6 次重试；跑完标 `status=ready`。仅 worldbuild 阶段。 |
 | `drive_30ch_bridge.py <project_id> [--chapters N]` | 按前端 BridgeConsole 按钮 1:1 顺序跑 7 步 pipeline（binding → push-concept → planner → pull-setting → bootstrap → init_arc → run N → import-chapters）；全程 HTTP API + SSE。 |
+| `backfill_worldbuild.py <project_id> [--dry-run]` | 幂等回灌已有项目（已 run 完 31 章后修复 5 大根因时使用）；重新调 `pull_setting_package` 触发 4 大根因修复（character card 8 段回填 / factions 4 类关键词 / entity_relations 重建 / currencies 多源）。打印回填前后数据 diff。 |
 
 ```bash
 # 续跑卡住的 worldbuild
@@ -77,6 +78,9 @@ python -m scripts.continue_worldbuild real30ch-16862056
 
 # 跑完整 30 章（实测 ~40 分钟 / $0.74）
 python -m scripts.drive_30ch_bridge real30ch-16862056 --chapters 30
+
+# 给已存在的项目回灌 5 大根因修复（5 分钟）
+python -m scripts.backfill_worldbuild real30ch-16862056
 ```
 
 ## 常用运维脚本（`backend/scripts/`）
@@ -95,6 +99,7 @@ python -m scripts.drive_30ch_bridge real30ch-16862056 --chapters 30
 | `rewrite_length.py` | 用 LLM 把章节字数规整到 1800-2700 |
 | `continue_worldbuild.py` | 续跑卡在 stage 2 的 draft 项目 |
 | `drive_30ch_bridge.py` | 跑完整前端按钮等价 pipeline |
+| `backfill_worldbuild.py` | 幂等回灌已有项目（5 大根因修复） |
 
 ## 测试
 

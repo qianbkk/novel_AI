@@ -4,6 +4,8 @@
 
 > 本 wiki 与仓库根目录的 `README.md`（使用指南）、`CHANGELOG.md`（发布级变化）互补，不重复其内容，侧重**架构级理解**。
 > 历史设计与审计报告归档于 `docs/runs/_archive/`，不再活跃引用。
+>
+> **工程化基线**：2026-07-25 完成 P0/P1 全部 9 项短板 + /simplify 4 项高 ROI 修复 + /code-review 2 项 critical bug 修复（13 commits）。当前基线 ~75/100，详见 `CHANGELOG.md` Unreleased 段。
 
 ## 阅读顺序
 
