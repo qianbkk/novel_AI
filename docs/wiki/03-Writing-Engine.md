@@ -118,3 +118,150 @@ LangGraph 状态机驱动的多 Agent 网文写作引擎，被后端以子进程
 `dashboard` 命令尚未移植（`graph.py:456` 显式标注为 P3 待办——Web BridgeConsole 已取代大部分功能）；`card`/`talk` 大纲模式和 `run_draft`/`set_audit_mode` 命令是 backend 独有的新增能力，独立版 `run.py` 中没有。
 
 > 历史溯源：迁移时每个文件头部注释都标注 "Migrated from novel_AI/..."。可 `git log --follow <file>` 追溯到迁移 commit（最早是 phaseD 的 `2e80fec`，后续 phase9 / phaseA / phaseB / phaseC 持续加固）。
+
+---
+
+## 已知方法论 gap 与补全计划（2026-07-25）
+
+> 本节为 **方法论密度补全 TODO**，与"已交付能力"分开。来源是真实 LLM 30 章测试后做的战略审视（P0 修正 + Gap 改写），仅记录**当前未实现但已识别**的能力点。每条都标注了**前置条件（不违反 CLAUDE.md 硬约束）**与**最小必要验证**。
+
+### 0. 工程现状速校（修订报告中的 5 项事实更正）
+
+| # | 原报告 | 工程现状 | 备注 |
+|---|--------|---------|------|
+| F-1 | "Claude Opus 正文 / Kimi 校验" | `router.py:39-49` 默认是 **Claude Sonnet 4.5 主笔 + DeepSeek 校验**；Opus/Kimi 在 router 中可用但未启用 | 来源 [engine/llm/router.py:37-50](../engine/llm/router.py) |
+| F-2 | "$200-300/百万字" | 实测 $0.74 / 64,545 字 = **$11.46/百万字** | 来源 [CHANGELOG.md](../../CHANGELOG.md) + [07-Real-LLM-Testing.md](07-Real-LLM-Testing.md) |
+| F-3 | "12 项自动验收" | `acceptance_tests.py` 实际只有 **AC-1~AC-5**；12 项是规划目标，不是现状 | 后续补全时按"追加 AC-6~AC-12"计算工作量 |
+| F-4 | "小爽点 1 章周期" | 自相矛盾（同一文档 3 个数字）| 统一为"小爽点 3 章 1 个 + 大爽点 10 章 1 个" |
+| F-5 | "五层记忆 L1/L2/L3/L4/L5" | 项目自称三层（L2 热/冷/约束 + L5 弧级归档），L1/L3/L4 不存在；L2 是 JSON 非向量 | 来源 [03-Writing-Engine.md §记忆系统](03-Writing-Engine.md) |
+
+### 1. 方法论密度 gap 清单（已识别但未落地）
+
+> 标注:**风险等级** + **是否违反 CLAUDE.md 硬约束** + **最小验证方式**
+
+#### Gap-M1 🟧 但是法则 / 筹码 / 两难结构化（obstacles+stakes+dilemma）
+
+- **现状**: `chapter_task.chapter_goal` 是自由文本，无结构化阻碍/筹码/两难字段
+- **风险**: 无（schema 扩展，不改表）
+- **CLAUDE.md 兼容性**: ✅ 兼容（不增加数据库表，不修改核心 Agent prompt——只在 `shared/setting_models.py` 加可选 Pydantic 字段，`extra='allow'` 已支持）
+- **最小验证**: outline agent 输出新字段 → writer prompt 读取并渲染 → 跑 3 章真 LLM，对比改前改后文本
+
+#### Gap-M2 🟧 信息差 / 三线并行 / 锚点归一字段
+
+- **现状**: 缺 `info_asymmetry` / `narrative_thread` / `anchor_to` 字段
+- **风险**: **LLM 可能瞎填**——需要 few-shot 演示，否则字段噪声大
+- **CLAUDE.md 兼容性**: ✅ 兼容（仅扩展 Pydantic schema，不改表）
+- **最小验证**: 人工写 3 个标准示例，让 outline agent 模仿；输出与人工示例的字段填充一致性 ≥ 70%
+
+#### Gap-M3 🟧 情绪锚点（emotion_core / emotion_intensity）
+
+- **现状**: 完全缺失。3 篇 .docx 长文（《告别单机》§8 / 《告别"自嗨"》§1 / 《叙事架构执行手册》§3）显式要求每章必填情绪核点
+- **风险**: 无
+- **CLAUDE.md 兼容性**: ✅ 兼容（字段扩展）
+- **最小验证**: 写 30 章回顾，对每章标情绪核点，与现有 `quality_history` 对照一致性 ≥ 60%
+
+#### Gap-M4 🟧 扮猪吃虎 / 打脸三阶段节拍校验
+
+- **现状**: 缺强制三阶段校验器
+- **风险**: 无（新增 `engine/tools/beat_checker.py`，纯离线 CLI）
+- **CLAUDE.md 兼容性**: ✅ 兼容（仅新增 engine 内部工具，不暴露公共 API）
+- **最小验证**: 跑 31 章真实产出，校验"最近 10 章必含 ≥1 次完整三阶段"
+
+#### Gap-M5 🟨 对话癌后处理阈值
+
+- **现状**: `normalizer.py` 主要剥 AI 腔，没处理对话提示词污染
+- **CLAUDE.md 兼容性**: ✅ 兼容
+- **原报告阈值**: "每章 ≥5 次触发" — **错误**
+- **正确阈值**: 每章"说/道/问道/回答" ≥ **25-30 次**触发预警，≥50 强制替换（同 200 字段内连续 ≥3 次同类提示词也触发）
+- **最小验证**: 抽样 3 章 + 跑 normalizer，输出 diff
+
+#### Gap-M6 🟨 视角锁定（POV 切换密度）
+
+- **现状**: writer prompt 无 POV 锁定约束
+- **CLAUDE.md 兼容性**: ✅ 兼容
+- **最小验证**: 加 prompt 约束后跑 3 章，统计 POV 切换次数应 ≤ 2/章
+
+### 2. **CLAUDE.md 硬约束红线 — 已在审视中识别为"看似合理但实际违规"的建议**
+
+> 这些改造方向**不能**按原报告执行，必须先取得维护者授权。
+
+| 原报告建议 | CLAUDE.md 红线 | 当前状态 |
+|----------|----------------|---------|
+| 新增 `EntityStateTimeline` 表 | "**未经任务明确授权，不增加数据库表**" | ❌ 不执行 |
+| 新增 `plot_engineer` 独立 LangGraph 节点 | "**不修改核心 Agent prompt 或 LangGraph 拓扑**" | ❌ 不执行 |
+| Neo4j Python embedded 嵌入 | "**不增加依赖**" | ❌ 不执行 |
+| 番茄签约 API 自动报送 | "**不增加公共 API**" | ❌ 不执行 |
+| 反洗稿自检服务化 | "**不增加公共 API**" | ❌ 不执行（可作为离线 CLI） |
+
+**改写后的合规替代方案**:
+- EntityStateTimeline → 复用现有 `EntityRelation` 表 + `EntityRelationRich` 模型（`shared/setting_models.py:163-169`）+ 扩展 `EmbeddingChunk.source_type` 加 `entity_state` 类别（已有 source_type 字段，无需迁移）
+- plot_engineer → 在 `rewriter.py` 的 prompt 中加反转套路分支（单 agent 多 prompt，不动拓扑）
+- Neo4j → 不引入；用现有 `L2 cold.world_events` JSON 列表模拟时间线
+- 番茄签约 → 生成"报送材料草稿"（让用户复制粘贴），不做 API
+- 反洗稿 → 仅作为离线 CLI 工具，参考作品由用户上传，不做服务化
+
+### 3. 风险与护栏（在 LLM 实施前必须就位）
+
+> 这些是 30+ 章真实 LLM 测试才会暴露的"工程层风险"，原报告完全没提。
+
+| # | 风险 | 护栏 |
+|---|------|------|
+| R-Prompt | writer prompt 加 4 招方法论后 token 涨 30-50% | `_call_with_budget` 已有长度控制；输入侧需加硬上限 ≤ 6000 token + 超额字段降级 |
+| R-MasterKey | 新 schema strict 校验拦掉老数据 | `ConfigDict(extra='allow')` 已配置；新字段必须 `default=None` + `dict.get` 兜底 |
+| R-Checkpoint | 子进程 SIGTERM 后 SqliteSaver 连接句柄泄漏 | `close_all_checkpointers()` 已在 `graph.py:118` 实现；需补"跨进程 resume 时 checkpoint 兼容性" e2e 测试 |
+| R-TokenPlan | 100 章跑通会撞 Token Plan 速率限制（CLAUDE.md §真实 LLM 经验） | 第三阶段验收必须配套 Token Plan 升级到能跑 100 章的档位 |
+| R-MultiUser | prod 模式新工具未带 `owner_id` 过滤 | 所有新工具强制 `require_owned_project` 校验 |
+
+### 4. Commit 0: writer prompt 方法论内化（最小必要改进）
+
+> 这是**0 架构变更** + **风险最低** + **回报最高**的最小必要改进。**不需要新表、不需要新 agent、不需要新 prompt 字段**——只深化已有 `prompt_templates.py` 的执行指令。
+
+#### 4.1 已有提示深化（不动 Schema）
+
+- **7 钩子** (`HOOK_TYPES`)：从"desc + pattern + example"扩为"**断章几何位置三原则**"（高潮前 0.5s / 答案前 1s / 信息差将闭时）
+- **7 爽点** (`SHUANG_TYPES`)：每类加"节拍位提示"（"本爽点适合章内 30%/60%/90% 哪个位置"）
+- **3 题材** (`GENRE_WRITING_INSTRUCTIONS`)：补充"信息差 / 但是法则 / 3 层期待感 / 模块化叙事" 4 招操作清单
+
+#### 4.2 4 招方法论模块（新增到 `prompt_templates.py`）
+
+```python
+# 4 招方法论：信息差 / 但是法则 / 3 层期待感 / 模块化叙事
+WRITER_METHODOLOGY = {
+    "info_asymmetry": "...",      # 信息差 3 模式（读者知/主角知/双方不知）
+    "but_law": "...",             # 但是法则：每章必有 ≥1 个但是转折
+    "three_layer_hook": "...",    # 微观/中观/宏观钩子
+    "modular_narrative": "...",   # 主线/支线/暗线模块化
+}
+```
+
+每个方法论给"5 行具体执行清单"（如 "但是法则 → 章首 200 字必有目标 → 章中 1/3 处必有阻碍 → 章中 2/3 处必有但是 → 章尾必有钩子"）。
+
+#### 4.3 测试矩阵（不依赖 LLM，纯字符串测试）
+
+- 7 钩子 × 3 题材 = 21 个 fixture 验证 `get_hook_guidance` 输出非空
+- 7 爽点 × 3 题材 = 21 个 fixture 验证 `get_shuang_guidance` 输出非空
+- 4 招方法论 × 3 题材 = 12 个 fixture 验证模块化输出
+
+#### 4.4 工作量与回报
+
+- 文件改动: 3 个（`prompt_templates.py` + `writer.py` + 新测试文件）
+- 代码量: ~150 行（4 模块各 30 行）+ 测试 200 行
+- 风险: 极低（不动 Schema，不动 Agent 拓扑，仅深化已有字段的 prompt）
+- 回报: writer 生成文本立即按方法论执行，无需依赖 outline agent 新字段填对
+
+### 5. 后续 commit 排序（仅作 backlog，不写独立报告）
+
+| 优先级 | Commit | 解决的 Gap |
+|--------|--------|----------|
+| ⭐⭐⭐⭐⭐ | **Commit 0**: 4 招方法论写入 prompt_templates.py | M1/M2/M3/M5/M6 的 prompt 层落地 |
+| ⭐⭐⭐⭐ | Commit 1: 但/但是法则 + stakes + dilemma 字段扩展 | M1 字段化 |
+| ⭐⭐⭐⭐ | Commit 2: info_asymmetry + narrative_thread + anchor_to 字段 | M2 字段化 |
+| ⭐⭐⭐⭐ | Commit 3: emotion_core + emotion_intensity 字段 | M3 字段化 |
+| ⭐⭐⭐ | Commit 4: beat_checker 离线工具（扮猪吃虎 / 打脸三阶段校验） | M4 |
+| ⭐⭐⭐ | Commit 5: 对话癌 normalizer 阈值修正 + 强制替换 | M5 |
+| ⭐⭐⭐ | Commit 6: POV 视角锁定 prompt 约束 | M6 |
+| ⭐⭐⭐ | Commit 7: 30 章自动验收脚本扩到 12 项 | R-Prompt + R-MasterKey 配套 |
+
+每个 commit 走标准流程：改代码 → 加测试 → 跑两个 pytest 进程 → 跑 `npm run build` → 单 commit。
+
+> **本节为 backlog**，不写独立 audit 报告（满足 CLAUDE.md 第 27 行）；实际执行时按上述顺序单个 commit 推进，每 commit 1 个聚焦改动。
