@@ -23,7 +23,8 @@ from ..llm_router import get_active_router
 from ..memory.manager import get_writer_context, maybe_update_style_samples
 from ..config.prompt_templates import (
     get_genre_instruction, get_hook_guidance,
-    get_character_voice_reminder, UNIVERSAL_WRITING_RULES,
+    get_character_voice_reminder, get_methodology_instruction,
+    UNIVERSAL_WRITING_RULES,
 )
 # 简化（#45）：writer.py 之前自己实现 _call_with_budget（约 30 行重试逻辑），
 # 跟 rewriter.py 几乎一样。统一抽到 engine.utils.call_with_budget_with_retry。
@@ -215,6 +216,21 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
         hook_guidance = _hook_guidance(task.get("ending_hook_type", "悬念钩"))
     voice_reminder = _character_voice_reminder(task.get("main_characters", []) or [], setting)
 
+    # 2026-07-25 修 bug：原代码在 f-string 内用 `{{}}`（意图是 literal {}）
+    # 但 Python 解析 `setting.get('world_setting') or {{}}` 时把 `{{}}` 当 set literal
+    # （含 dict 元素），触发 TypeError: unhashable type: 'dict'。
+    # 修法：在 f-string 外提前算好 _surface_world_name，用 {name} 占位
+    ws = setting.get("world_setting") or {}
+    _surface_world_name = ws.get("surface_world_name") or "云州"
+
+    # 4 招方法论（2026-07-25 战略审视 Commit 0）：但/但是 / 信息差 / 3 层期待感 / 模块化叙事
+    # 默认全开；如果 task 标记了 "disable_methodology"（如终章/草稿模式）可降级为子集
+    if task.get("is_final_chapter"):
+        # 终章：方法论约束可以放宽（不需要"但是"再制造冲突，需要收束）
+        methodology_block = get_methodology_instruction(["three_layer_hook"])
+    else:
+        methodology_block = get_methodology_instruction()
+
     style_samples = context.get("style_samples", []) or []
     style_block = ""
     if style_samples:
@@ -284,7 +300,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 【世界观设定一致性硬约束】
 - 本章必须严格使用上面【关键人物】列出的角色名（林渊 / 苏晚栀 / 孟浩 / 顾青锋 等），不得改名、合并、拆分
 - 不得新增未列出的新角色名
-- 表世界「{('云州' if not (setting.get('world_setting') or {{}}).get('surface_world_name') else (setting.get('world_setting') or {{}}).get('surface_world_name'))}」+ 里世界设定（如力量体系 / 势力名 / 地名）必须原样复用，不要重新发明同义词
+- 表世界「{_surface_world_name}」+ 里世界设定（如力量体系 / 势力名 / 地名）必须原样复用，不要重新发明同义词
 - 严禁「吞设定」：本章正面提及的关键人物 / 伏笔 / 地名，本章正文里至少要出现一次
 
 【本章禁止事项】
@@ -297,6 +313,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 {('【历史背景参考】\n' + cold_str) if cold_str else ''}
 {style_block}
 
+{methodology_block}
 现在开始写第{task.get('chapter_number', 0)}章。
 
 【输出格式】严格 JSON，不要任何 markdown fence 或额外文字：
