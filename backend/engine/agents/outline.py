@@ -51,7 +51,10 @@ OUTLINE_SYSTEM = f"""你是一位网文策划，将弧级大纲拆解为结构�
   "audit_mode": "full" | "lite" | "bootstrap",
   "is_arc_climax": false,
   "stakes": {{"if_lose": ["输了会失去什么（具体到人/物/机会）"], "if_win": ["赢了会获得什么（具体到人/物/机会）"]}} | null,
-  "dilemma": {{"option_a": "选项A（具体行动+代价）", "option_b": "选项B（具体行动+代价）", "both_cost": "两选项都失去的代价"}} | null
+  "dilemma": {{"option_a": "选项A（具体行动+代价）", "option_b": "选项B（具体行动+代价）", "both_cost": "两选项都失去的代价"}} | null,
+  "narrative_thread": "main" | "side" | "hidden",
+  "info_asymmetry": {{"reader_knows": ["本章读者知道但主角不知道的事"], "protagonist_knows": ["本章主角知道但读者还不知道的事"], "reveals_at_chapter": 揭示章号（默认null=本章不揭示）}} | null,
+  "anchor_to": 整数（本章锚定的主线 arc_id，多弧时用于跨弧主线延续）
 }}
 
 【筹码（stakes）与两难（dilemma）填写指引】（2026-07-25 战略审视 Commit 1）
@@ -60,6 +63,19 @@ OUTLINE_SYSTEM = f"""你是一位网文策划，将弧级大纲拆解为结构�
 - 爽点章：stakes 必填（与 if_win 强绑定），dilemma 可选
 - 弧高潮章：stakes 必填，dilemma 必填（高潮必是两难抉择）
 - 终章：stakes 可选，dilemma 通常为 null（终章收束不制造新抉择）
+- stakes 必须具体到「人/物/机会」，不要写"失败/成功"这种抽象词
+- dilemma 两个选项都必须有「具体代价」，不能写"无论如何都有损失"这种空话
+
+【三线（narrative_thread）+ 信息差（info_asymmetry）+ 锚点（anchor_to）填写指引】（2026-07-25 战略审视 Commit 2）
+- narrative_thread 三选一：
+  · "main"（主线推进）：主角最高目标的进度章节，≥ 60% 章节应填 main
+  · "side"（支线铺陈）：配角/世界观/情感戏章节，10-20% 章节
+  · "hidden"（暗线埋笔）：伏笔/反转/世界真相章节，5-10% 章节
+- info_asymmetry 三模式选填（铺垫/过渡章可 null）：
+  · reader_knows：列出本章读者已知但主角不知的关键信息
+  · protagonist_knows：列出本章主角已知但读者暂不知的关键信息
+  · reveals_at_chapter：如果本章要揭示某秘密，填揭示章号（默认 null）
+- anchor_to 默认 = 本章所在 arc_id。多弧项目里"主线跨弧延续"时可填更早的 arc_id（锚点归一）。
 - stakes 必须具体到「人/物/机会」，不要写"失败/成功"这种抽象词
 - dilemma 两个选项都必须有「具体代价」，不能写"无论如何都有损失"这种空话
 
@@ -155,6 +171,33 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
                 t["dilemma"] = None
         else:
             t["dilemma"] = None
+
+        # 2026-07-25 战略审视 Commit 2：narrative_thread + info_asymmetry + anchor_to
+        # narrative_thread 默认 "main"（每章都先默认主线占位），无效值 → "main"
+        # info_asymmetry 必须是 dict 或 None，否则置 None
+        # anchor_to 必须是 int 或 None，否则置 None（orchestrator 兜底默认 = current_arc）
+        thread_raw = t.get("narrative_thread")
+        if thread_raw in ("main", "side", "hidden"):
+            t["narrative_thread"] = thread_raw
+        else:
+            t["narrative_thread"] = "main"  # 默认主线占位
+
+        asym_raw = t.get("info_asymmetry")
+        if isinstance(asym_raw, dict) and asym_raw:
+            # 三个子字段都可空列表/None
+            t["info_asymmetry"] = {
+                "reader_knows": asym_raw.get("reader_knows") or [],
+                "protagonist_knows": asym_raw.get("protagonist_knows") or [],
+                "reveals_at_chapter": asym_raw.get("reveals_at_chapter"),
+            }
+        else:
+            t["info_asymmetry"] = None
+
+        anchor_raw = t.get("anchor_to")
+        if isinstance(anchor_raw, int) and anchor_raw >= 1:
+            t["anchor_to"] = anchor_raw
+        else:
+            t["anchor_to"] = None  # 由 orchestrator 用 current_arc 兜底
 
     # 二期：foreshadowing_ops 标准化 + 校验 + 注入伏笔种子到 memory
     from .foreshadow_helper import normalize_foreshadow_ops

@@ -52,6 +52,17 @@ class ChapterTask(TypedDict):
     stakes: NotRequired[Dict[str, Any]]    # {"if_lose": [...], "if_win": [...]}
     dilemma: NotRequired[Dict[str, Any]]   # {"option_a": str, "option_b": str, "both_cost": str}
 
+    # ─── 2026-07-25 战略审视 Commit 2: 信息差 + 三线 + 锚点归一 ───
+    # 来源：《写小说拒绝平铺直叙：手把手教你三线并行的叙事结构》§主线/支线/暗线
+    #       /《进阶内功》§信息差游戏 /《叙事架构执行手册》§锚点归一
+    # 设计：所有字段 NotRequired，老 task 无影响。默认值由 outline 兜底：
+    #   - narrative_thread: 默认 "main"（每章都先默认主线占位）
+    #   - info_asymmetry: 默认 None（铺垫/过渡章可空）
+    #   - anchor_to: 默认 None（= 当前 arc_id，由 orchestrator 兜底）
+    narrative_thread: NotRequired[str]   # "main" | "side" | "hidden"
+    info_asymmetry: NotRequired[Dict[str, Any]]  # {"reader_knows": [...], "protagonist_knows": [...], "reveals_at_chapter": int}
+    anchor_to: NotRequired[int]          # arc_id,所有线索指向的主线锚点
+
 
 class NarrativeUnit(TypedDict):
     unit_id: str

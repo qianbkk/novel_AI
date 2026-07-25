@@ -292,6 +292,36 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
     else:
         dilemma_block = ""
 
+    # 2026-07-25 战略审视 Commit 2：三线 + 信息差 + 锚点归一渲染
+    thread = task.get("narrative_thread") or "main"
+    thread_label = {"main": "主线推进", "side": "支线铺陈", "hidden": "暗线埋笔"}.get(thread, "主线推进")
+    thread_block = (
+        f"【本章叙事线 narrative_thread={thread}】{thread_label}\n"
+        + "⚠ 本章所有情节必须明确属于这条线 —— 主线/支线/暗线不能混着来。\n"
+    )
+
+    asym_raw = task.get("info_asymmetry")
+    if isinstance(asym_raw, dict) and asym_raw:
+        reader_knows = asym_raw.get("reader_knows") or []
+        protagonist_knows = asym_raw.get("protagonist_knows") or []
+        reveals = asym_raw.get("reveals_at_chapter")
+        info_block = "【本章信息差 info_asymmetry】\n"
+        if reader_knows:
+            info_block += "读者已知（但主角不知）：" + " / ".join(str(x) for x in reader_knows) + "\n"
+        if protagonist_knows:
+            info_block += "主角已知（但读者暂不知）：" + " / ".join(str(x) for x in protagonist_knows) + "\n"
+        if reveals:
+            info_block += f"本章要揭示的秘密：{reveals} 章后揭晓\n"
+        info_block += "⚠ 利用信息差制造张力 —— 读者知道的比主角多 = 焦虑，反之 = 期待。\n"
+    else:
+        info_block = ""
+
+    anchor = task.get("anchor_to")
+    anchor_block = (
+        f"【本章锚点 anchor_to=arc{anchor}】本章所有线索都服务于这条主线弧。\n"
+        if anchor else ""
+    )
+
     system_dynamic = genre_instr + world_one_liner
 
     user_prompt = f"""【当前写作任务】
@@ -301,7 +331,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 情感迁移：{emotion_shift}
 主线推进：{plot_progression}
 是否弧高潮：{'是（全力以赴）' if task.get('is_arc_climax') else '否'}
-{stakes_block}{dilemma_block}
+{stakes_block}{dilemma_block}{thread_block}{info_block}{anchor_block}
 
 {world_block}【主角状态】
 姓名：{mc_name} ｜ 等级：{context.get('protagonist_level','凡人')} ｜ 点数：{context.get('protagonist_points',0)}
