@@ -262,6 +262,36 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
     core_conflict = task.get("core_conflict") or "未指定"
     plot_progression = task.get("plot_progression") or "未指定"
 
+    # 2026-07-25 战略审视 Commit 1：stakes + dilemma 渲染
+    # 老 task 无此字段 → stakes_block = ''（writer prompt 长度不受影响）
+    stakes_raw = task.get("stakes")
+    if isinstance(stakes_raw, dict) and stakes_raw:
+        if_lose = stakes_raw.get("if_lose") or []
+        if_win = stakes_raw.get("if_win") or []
+        stakes_block = (
+            "【本章筹码 stakes】\n"
+            + ("失败将失去：" + " / ".join(str(x) for x in if_lose) + "\n" if if_lose else "")
+            + ("成功将获得：" + " / ".join(str(x) for x in if_win) + "\n" if if_win else "")
+            + "⚠ 主角的每一个关键决策必须显式呼应上述筹码（失去 = 焦虑，获得 = 期待）。\n"
+        )
+    else:
+        stakes_block = ""
+
+    dilemma_raw = task.get("dilemma")
+    if isinstance(dilemma_raw, dict) and dilemma_raw and "option_a" in dilemma_raw:
+        opt_a = dilemma_raw.get("option_a", "")
+        opt_b = dilemma_raw.get("option_b", "")
+        both_cost = dilemma_raw.get("both_cost", "")
+        dilemma_block = (
+            "【本章两难 dilemma】\n"
+            + f"选项A：{opt_a}\n"
+            + f"选项B：{opt_b}\n"
+            + (f"两者皆失：{both_cost}\n" if both_cost else "")
+            + "⚠ 本章不必揭晓最终选择，但必须让读者**明确感知**主角面临的取舍张力。\n"
+        )
+    else:
+        dilemma_block = ""
+
     system_dynamic = genre_instr + world_one_liner
 
     user_prompt = f"""【当前写作任务】
@@ -271,6 +301,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 情感迁移：{emotion_shift}
 主线推进：{plot_progression}
 是否弧高潮：{'是（全力以赴）' if task.get('is_arc_climax') else '否'}
+{stakes_block}{dilemma_block}
 
 {world_block}【主角状态】
 姓名：{mc_name} ｜ 等级：{context.get('protagonist_level','凡人')} ｜ 点数：{context.get('protagonist_points',0)}

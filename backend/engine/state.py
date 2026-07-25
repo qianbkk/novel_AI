@@ -5,7 +5,7 @@ TypedDict shapes and create_initial_state / save_state / load_state
 helpers. No import from novel_AI/ — completely standalone.
 """
 from __future__ import annotations
-from typing import TypedDict, List, Optional, Dict, Any
+from typing import TypedDict, List, Optional, Dict, Any, NotRequired
 import json
 # 迭代 #68: 用 timezone.utc 而非 naive datetime（跨时区/容器一致）
 from datetime import datetime, timezone
@@ -44,6 +44,13 @@ class ChapterTask(TypedDict):
     target_length: str          # 如 '2000-2200'
     audit_mode: str             # full|lite|bootstrap
     is_arc_climax: bool
+    # ─── 2026-07-25 战略审视 Commit 1: stakes + dilemma 结构化 ───
+    # 来源：《写小说平淡没看点怎么办》§但是法则 / 《所有爆款小说背后都有这4大共性》§冲突
+    # 设计：与 chapter_goal 互补 —— chapter_goal 是"主角想要什么",
+    # stakes 是"如果输了/赢了会发生什么",dilemma 是"主角被迫在两难中选"
+    # 可选字段（None 表示本章不需要筹码/两难,如铺垫章）
+    stakes: NotRequired[Dict[str, Any]]    # {"if_lose": [...], "if_win": [...]}
+    dilemma: NotRequired[Dict[str, Any]]   # {"option_a": str, "option_b": str, "both_cost": str}
 
 
 class NarrativeUnit(TypedDict):

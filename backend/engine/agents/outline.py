@@ -49,8 +49,19 @@ OUTLINE_SYSTEM = f"""你是一位网文策划，将弧级大纲拆解为结构�
   "forbidden_actions": ["本章禁止事项"],
   "target_length": "2000-2200" | "2200-2500" | "3000-3300",
   "audit_mode": "full" | "lite" | "bootstrap",
-  "is_arc_climax": false
+  "is_arc_climax": false,
+  "stakes": {{"if_lose": ["输了会失去什么（具体到人/物/机会）"], "if_win": ["赢了会获得什么（具体到人/物/机会）"]}} | null,
+  "dilemma": {{"option_a": "选项A（具体行动+代价）", "option_b": "选项B（具体行动+代价）", "both_cost": "两选项都失去的代价"}} | null
 }}
+
+【筹码（stakes）与两难（dilemma）填写指引】（2026-07-25 战略审视 Commit 1）
+- 铺垫章、过渡章：stakes 和 dilemma 都填 null（本章无冲突升级）
+- 发展章：stakes 必填（≥1 项 if_lose + ≥1 项 if_win），dilemma 可选
+- 爽点章：stakes 必填（与 if_win 强绑定），dilemma 可选
+- 弧高潮章：stakes 必填，dilemma 必填（高潮必是两难抉择）
+- 终章：stakes 可选，dilemma 通常为 null（终章收束不制造新抉择）
+- stakes 必须具体到「人/物/机会」，不要写"失败/成功"这种抽象词
+- dilemma 两个选项都必须有「具体代价」，不能写"无论如何都有损失"这种空话
 
 【伏笔操作 op 说明】
 - plant：埋设新伏笔（desc 是伏笔文本，target_chapter 是预计回收章）
@@ -119,6 +130,31 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
     for t in tasks:
         if t.get("ending_hook_type") not in valid_hooks:
             t["ending_hook_type"] = "悬念钩"  # 默认兜底
+
+    # 2026-07-25 战略审视 Commit 1：stakes + dilemma 字段标准化（向后兼容）
+    # 老 task 无 stakes/dilemma 字段 → 设为 None（TypedDict NotRequired 已支持缺省）
+    # stakes 必须是 dict（含 if_lose/if_win），否则置 None
+    # dilemma 必须是 dict（含 option_a/option_b/both_cost），否则置 None
+    for t in tasks:
+        stakes_raw = t.get("stakes")
+        if isinstance(stakes_raw, dict) and stakes_raw:
+            # 兼容：if_lose/if_win 是 list，both_cost 可选
+            if_lose = stakes_raw.get("if_lose") or []
+            if_win = stakes_raw.get("if_win") or []
+            t["stakes"] = {"if_lose": if_lose, "if_win": if_win}
+        else:
+            t["stakes"] = None
+
+        dilemma_raw = t.get("dilemma")
+        if isinstance(dilemma_raw, dict) and dilemma_raw:
+            if "option_a" in dilemma_raw and "option_b" in dilemma_raw:
+                # both_cost 可选
+                dilemma_raw.setdefault("both_cost", "")
+                t["dilemma"] = dilemma_raw
+            else:
+                t["dilemma"] = None
+        else:
+            t["dilemma"] = None
 
     # 二期：foreshadowing_ops 标准化 + 校验 + 注入伏笔种子到 memory
     from .foreshadow_helper import normalize_foreshadow_ops
