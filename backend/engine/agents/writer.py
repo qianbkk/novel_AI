@@ -24,6 +24,7 @@ from ..memory.manager import get_writer_context, maybe_update_style_samples
 from ..config.prompt_templates import (
     get_genre_instruction, get_hook_guidance,
     get_character_voice_reminder, get_methodology_instruction,
+    POV_LOCK_INSTRUCTION,
     UNIVERSAL_WRITING_RULES, EMOTION_CORES,
 )
 # 简化（#45）：writer.py 之前自己实现 _call_with_budget（约 30 行重试逻辑），
@@ -393,6 +394,8 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 {style_block}
 
 {methodology_block}
+
+{POV_LOCK_INSTRUCTION}
 现在开始写第{task.get('chapter_number', 0)}章。
 
 【输出格式】严格 JSON，不要任何 markdown fence 或额外文字：

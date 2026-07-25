@@ -91,6 +91,29 @@ def replace_dialogue_pollution(text: str, threshold: int = DIALOGUE_FORCE_THRESH
     return text
 
 
+# ═══════════════════════════════════════════════
+# POV 视角切换密度检测（2026-07-25 战略审视 Commit 6）
+# 来源：write/《写小说的10个大坑》§8 视角混乱
+# 阈值：每章 POV 切换次数 ≤ 2（多视角章节可放宽到 ≤ 3，需 task.pov_multi=true）
+# ═══════════════════════════════════════════════
+POV_SWITCH_MARKER = re.compile(r'【\s*POV\s*切换\s*[→\->]*\s*([^\]】]+)\s*】')
+POV_SWITCH_WARNING_THRESHOLD = 2  # 默认章节 ≤ 2 次切换
+POV_SWITCH_MULTI_THRESHOLD = 3    # 多视角章节（pov_multi=True）≤ 3 次
+
+
+def detect_pov_switching(text: str) -> tuple[int, list[str]]:
+    """检测文本中的 POV 视角切换标记。
+
+    切换必须用 `【POV 切换 → {角色名}】` 标注;每次切换计 1 次。
+    单章默认 ≤ 2 次(多视角章节 ≤ 3 次需 task.pov_multi=True)。
+
+    Returns:
+        (count, switches): 切换次数 + 切换目标角色列表
+    """
+    switches = [m.strip() for m in POV_SWITCH_MARKER.findall(text) if m.strip()]
+    return len(switches), switches
+
+
 def first_pass_replace(text: str) -> tuple[str, int]:
     count = 0
     for bad, goods in AI_WORDS.items():
@@ -174,6 +197,15 @@ def run_normalizer(raw_text: str, task: dict) -> tuple[str, list, float]:
         issues.append(
             f"对话癌预警(dialogue_pollution={dialogue_count}≥{DIALOGUE_WARNING_THRESHOLD}):"
             f"建议手动检查'某某说/道'使用频次"
+        )
+
+    # 2026-07-25 Commit 6：POV 视角切换密度检测
+    pov_count, pov_switches = detect_pov_switching(text)
+    pov_threshold = POV_SWITCH_MULTI_THRESHOLD if task.get("pov_multi") else POV_SWITCH_WARNING_THRESHOLD
+    if pov_count > pov_threshold:
+        issues.append(
+            f"POV 视角切换超限(pov_switches={pov_count}>{pov_threshold}):"
+            f"{pov_switches}。'穿越式跳视角'破坏代入感(战略审视 M6)。"
         )
 
     return text, issues, total_cost
