@@ -102,6 +102,95 @@ OUTLINE_SYSTEM = f"""你是一位网文策划，将弧级大纲拆解为结构�
 - 严格输出 JSON 数组，不输出任何 markdown fence 或额外文字"""
 
 
+def _standardize_tasks(tasks: list, start_chapter: int) -> None:
+    """对 LLM 返回的 tasks 列表做就地标准化(2026-07-25 战略审视 Commit 1/2/3 + 章号契约)。
+
+    标准化内容:
+    - ending_hook_type → 7 类钩子之一(无效 → "悬念钩")
+    - stakes → dict 含 if_lose/if_win(否则 None)
+    - dilemma → dict 含 option_a/option_b/both_cost(否则 None)
+    - narrative_thread → main/side/hidden(否则 "main")
+    - info_asymmetry → dict 含 3 子字段(否则 None)
+    - anchor_to → int >= 1(否则 None)
+    - emotion_core → 7 类之一(否则 "压抑")
+    - emotion_intensity → 1-5 整数(否则 3)
+    - foreshadowing_ops → normalize_foreshadow_ops
+    - chapter_number → 强制从 start_chapter 连续重编号(章号契约,避免无限循环)
+
+    2026-07-26 审计修 Medium#4:从 run_outline 抽出此函数,run_outline_card B/C 分支
+    也复用此标准化(避免选中 B/C 时下游拿到的 task 缺字段/章号不连续)。
+    """
+    valid_hooks = set(HOOK_TYPES.keys())
+    for t in tasks:
+        if t.get("ending_hook_type") not in valid_hooks:
+            t["ending_hook_type"] = "悬念钩"
+
+        stakes_raw = t.get("stakes")
+        if isinstance(stakes_raw, dict) and stakes_raw:
+            if_lose = stakes_raw.get("if_lose") or []
+            if_win = stakes_raw.get("if_win") or []
+            t["stakes"] = {"if_lose": if_lose, "if_win": if_win}
+        else:
+            t["stakes"] = None
+
+        dilemma_raw = t.get("dilemma")
+        if isinstance(dilemma_raw, dict) and dilemma_raw:
+            if "option_a" in dilemma_raw and "option_b" in dilemma_raw:
+                dilemma_raw.setdefault("both_cost", "")
+                t["dilemma"] = dilemma_raw
+            else:
+                t["dilemma"] = None
+        else:
+            t["dilemma"] = None
+
+        thread_raw = t.get("narrative_thread")
+        if thread_raw in ("main", "side", "hidden"):
+            t["narrative_thread"] = thread_raw
+        else:
+            t["narrative_thread"] = "main"
+
+        asym_raw = t.get("info_asymmetry")
+        if isinstance(asym_raw, dict) and asym_raw:
+            t["info_asymmetry"] = {
+                "reader_knows": asym_raw.get("reader_knows") or [],
+                "protagonist_knows": asym_raw.get("protagonist_knows") or [],
+                "reveals_at_chapter": asym_raw.get("reveals_at_chapter"),
+            }
+        else:
+            t["info_asymmetry"] = None
+
+        anchor_raw = t.get("anchor_to")
+        if isinstance(anchor_raw, int) and anchor_raw >= 1:
+            t["anchor_to"] = anchor_raw
+        else:
+            t["anchor_to"] = None
+
+        emotion_raw = t.get("emotion_core")
+        if isinstance(emotion_raw, str) and emotion_raw in EMOTION_CORES:
+            t["emotion_core"] = emotion_raw
+        else:
+            t["emotion_core"] = "压抑"
+
+        intensity_raw = t.get("emotion_intensity")
+        if isinstance(intensity_raw, int) and 1 <= intensity_raw <= 5:
+            t["emotion_intensity"] = intensity_raw
+        else:
+            t["emotion_intensity"] = 3
+
+    # foreshadowing_ops 标准化
+    from .foreshadow_helper import normalize_foreshadow_ops
+    for t in tasks:
+        t["foreshadowing_ops"] = normalize_foreshadow_ops(t.get("foreshadowing_ops"))
+
+    # 章号契约:从 start_chapter 连续重编号
+    expected = list(range(start_chapter, start_chapter + len(tasks)))
+    got = [t.get("chapter_number") for t in tasks]
+    if got != expected:
+        print(f"  ⚠ outline 返回章号 {got} 与期望 {expected} 不符,已重编号")
+        for i, t in enumerate(tasks):
+            t["chapter_number"] = start_chapter + i
+
+
 def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> tuple[list, float]:
     """拆解一弧为章节任务清单。
     memory 为 L2 hot layer dict（或完整 memory，自动取 hot）。
@@ -152,95 +241,9 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
 
     _mark_arc_climax(tasks, arc)
 
-    # 校验钩子类型合法性
-    valid_hooks = set(HOOK_TYPES.keys())
-    for t in tasks:
-        if t.get("ending_hook_type") not in valid_hooks:
-            t["ending_hook_type"] = "悬念钩"  # 默认兜底
-
-    # 2026-07-25 战略审视 Commit 1：stakes + dilemma 字段标准化（向后兼容）
-    # 老 task 无 stakes/dilemma 字段 → 设为 None（TypedDict NotRequired 已支持缺省）
-    # stakes 必须是 dict（含 if_lose/if_win），否则置 None
-    # dilemma 必须是 dict（含 option_a/option_b/both_cost），否则置 None
-    for t in tasks:
-        stakes_raw = t.get("stakes")
-        if isinstance(stakes_raw, dict) and stakes_raw:
-            # 兼容：if_lose/if_win 是 list，both_cost 可选
-            if_lose = stakes_raw.get("if_lose") or []
-            if_win = stakes_raw.get("if_win") or []
-            t["stakes"] = {"if_lose": if_lose, "if_win": if_win}
-        else:
-            t["stakes"] = None
-
-        dilemma_raw = t.get("dilemma")
-        if isinstance(dilemma_raw, dict) and dilemma_raw:
-            if "option_a" in dilemma_raw and "option_b" in dilemma_raw:
-                # both_cost 可选
-                dilemma_raw.setdefault("both_cost", "")
-                t["dilemma"] = dilemma_raw
-            else:
-                t["dilemma"] = None
-        else:
-            t["dilemma"] = None
-
-        # 2026-07-25 战略审视 Commit 2：narrative_thread + info_asymmetry + anchor_to
-        # narrative_thread 默认 "main"（每章都先默认主线占位），无效值 → "main"
-        # info_asymmetry 必须是 dict 或 None，否则置 None
-        # anchor_to 必须是 int 或 None，否则置 None（orchestrator 兜底默认 = current_arc）
-        thread_raw = t.get("narrative_thread")
-        if thread_raw in ("main", "side", "hidden"):
-            t["narrative_thread"] = thread_raw
-        else:
-            t["narrative_thread"] = "main"  # 默认主线占位
-
-        asym_raw = t.get("info_asymmetry")
-        if isinstance(asym_raw, dict) and asym_raw:
-            # 三个子字段都可空列表/None
-            t["info_asymmetry"] = {
-                "reader_knows": asym_raw.get("reader_knows") or [],
-                "protagonist_knows": asym_raw.get("protagonist_knows") or [],
-                "reveals_at_chapter": asym_raw.get("reveals_at_chapter"),
-            }
-        else:
-            t["info_asymmetry"] = None
-
-        anchor_raw = t.get("anchor_to")
-        if isinstance(anchor_raw, int) and anchor_raw >= 1:
-            t["anchor_to"] = anchor_raw
-        else:
-            t["anchor_to"] = None  # 由 orchestrator 用 current_arc 兜底
-
-        # 2026-07-25 战略审视 Commit 3：emotion_core + emotion_intensity
-        # emotion_core 必须是 EMOTION_CORES 7 类之一,否则置 "压抑"（默认兜底）
-        # emotion_intensity 必须是 1-5 整数,否则置 3（中等）
-        emotion_raw = t.get("emotion_core")
-        if isinstance(emotion_raw, str) and emotion_raw in EMOTION_CORES:
-            t["emotion_core"] = emotion_raw
-        else:
-            t["emotion_core"] = "压抑"  # 默认兜底,LLM 不写也能跑
-
-        intensity_raw = t.get("emotion_intensity")
-        if isinstance(intensity_raw, int) and 1 <= intensity_raw <= 5:
-            t["emotion_intensity"] = intensity_raw
-        else:
-            t["emotion_intensity"] = 3  # 默认中等强度
-
-    # 二期：foreshadowing_ops 标准化 + 校验 + 注入伏笔种子到 memory
-    from .foreshadow_helper import normalize_foreshadow_ops
-    for t in tasks:
-        t["foreshadowing_ops"] = normalize_foreshadow_ops(t.get("foreshadowing_ops"))
-
-    # 章号契约（修订 2026-07-19）：任务章号必须从 start_chapter 连续编号。
-    # LLM 偶尔返回绝对章号（如固定从 1 开始）→ get_next_task 把
-    # current_chapter 拉回旧值 → 队列耗尽后按 current_chapter+1 重拆出
-    # 同一批章节 → 无限循环烧预算。章号本就可由 start_chapter 推导，
-    # 与期望不符时确定性重编号（LLM 给的编号只是建议值）。
-    expected = list(range(start_chapter, start_chapter + len(tasks)))
-    got = [t.get("chapter_number") for t in tasks]
-    if got != expected:
-        print(f"  ⚠ outline 返回章号 {got} 与期望 {expected} 不符，已重编号")
-        for i, t in enumerate(tasks):
-            t["chapter_number"] = start_chapter + i
+    # 2026-07-26 审计修 Medium#4:抽出 _standardize_tasks helper,run_outline + run_outline_card
+    # B/C 分支共享同一套标准化(避免选中 B/C 时下游拿到的 task 缺字段/章号不连续)。
+    _standardize_tasks(tasks, start_chapter)
 
     print(f"  ✅ {len(tasks)}章任务，成本${cost:.4f}")
     return tasks, cost
@@ -322,6 +325,11 @@ def run_outline_card(arc: dict, start_chapter: int, setting: dict,
             )
             resp = _extract_json_array(resp)
             branch_tasks = json.loads(resp)
+            # 2026-07-26 审计修 Medium#4:B/C 分支也走 _standardize_tasks
+            # —— 老逻辑只 json.loads,跳过 stakes/emotion/章号契约等所有兜底,
+            # 选中 B/C 时下游拿到的 task 可能缺字段/章号不连续。
+            _mark_arc_climax(branch_tasks, arc)
+            _standardize_tasks(branch_tasks, start_chapter)
         except Exception:
             # 单个分支失败不应让整次抽卡崩掉 —— fallback 复用 A 任务，
             # log warning 让用户/审计能看到
@@ -449,10 +457,16 @@ def _extract_json_array(resp: str) -> str:
 
 
 def _mark_arc_climax(tasks: list, arc: dict) -> None:
-    """弧高潮标记：原 run_outline 内部逻辑，提到模块级方便 card 模式复用。"""
+    """弧高潮标记：原 run_outline 内部逻辑，提到模块级方便 card 模式复用。
+
+    2026-07-26 审计修 Medium#4:抽出后暴露 1 章短弧时的 IndexError 隐患
+    (climax_idx = min(-2, 0) = -2 → tasks[-2] 越界)。
+    修法:确保 climax_idx ∈ [0, len(tasks)-1]。
+    """
     if not tasks:
         return
-    climax_idx = min(arc.get("arc_climax_chapter_offset", len(tasks) - 3), len(tasks) - 1)
+    default_offset = max(0, len(tasks) - 3)  # 短弧(< 3 章)取第 0 章
+    climax_idx = min(arc.get("arc_climax_chapter_offset", default_offset), len(tasks) - 1)
     tasks[climax_idx]["is_arc_climax"]  = True
     tasks[climax_idx]["target_length"]  = "3000-3300"
     tasks[climax_idx]["audit_mode"]     = "full"

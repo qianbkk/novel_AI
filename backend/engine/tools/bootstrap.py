@@ -227,6 +227,16 @@ def run_bootstrap(novel_id: str = "renqingzhai_v1", num_candidates: int = 3) -> 
             "chapter_role": task["chapter_role"],
             "selected_version": best["version"],
             "score": best["score"],
+            # 2026-07-26 审计修 Critical#1: bootstrap 路径也补方法论字段,
+            # 否则 bootstrap 候选 + 选定版本的 meta.json 同样缺 beat_checker 依赖字段。
+            # bootstrap 是人工选版流程,任务单上下文仍在,直接透传 task 字段。
+            "shuang_type":        task.get("shuang_type", "") or "",
+            "ending_hook_type":   task.get("ending_hook_type", "") or "",
+            "is_arc_climax":      bool(task.get("is_arc_climax", False)),
+            "narrative_thread":   task.get("narrative_thread", "") or "",
+            "emotion_core":       task.get("emotion_core", "") or "",
+            "emotion_intensity":  task.get("emotion_intensity", 0) or 0,
+            "foreshadowing_ops":  task.get("foreshadowing_ops", []) or [],
             "word_count": best["word_count"],
             "bootstrap": True,
             "all_scores": {c["version"]: c["score"] for c in cands},

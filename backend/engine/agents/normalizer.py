@@ -181,16 +181,21 @@ def run_normalizer(raw_text: str, task: dict) -> tuple[str, list, float]:
         )
         # 触发 LLM 替换(已 second_pass 跑过则不再二次;若 first_pass_count<=3 走这里)
         if not needs_llm:
+            # 2026-07-26 审计修 Medium#1: 原本 .format(cnt=) 叠加在含 {污染样本} 的
+            # f-string 上,污染样本若含裸 { 或 }(JSON 字面量 / 代码片段 / 引号包内容)
+            # 会让 str.format 抛 KeyError/ValueError,使整章 normalizer 崩溃。
+            # 修法:全部用 f-string 插值,杜绝在不可信文本上调 .format()。
             dialogue_replace_prompt = (
                 NORMALIZER_SYSTEM
-                + "\n\n【对话癌专项】本章存在满篇对话提示词污染(count={cnt}),必须用以下 4 种方法之一替换:\n"
+                + f"\n\n【对话癌专项】本章存在满篇对话提示词污染(count={dialogue_count}),"
+                + "必须用以下 4 种方法之一替换:\n"
                 + f"1. 动作卡位:{DIALOGUE_REPLACE_HINTS['动作卡位']}\n"
                 + f"2. 神态神韵:{DIALOGUE_REPLACE_HINTS['神态神韵']}\n"
                 + f"3. 情境穿插:{DIALOGUE_REPLACE_HINTS['情境穿插']}\n"
                 + f"4. 语感辨识:{DIALOGUE_REPLACE_HINTS['语感辨识']}\n\n"
                 + f"污染样本:{dialogue_samples[:5]}\n\n"
-                "直接输出改写后正文,不加任何说明。"
-            ).format(cnt=dialogue_count)
+                + "直接输出改写后正文,不加任何说明。"
+            )
             text, cost = router_call_for_dialogue(text, dialogue_replace_prompt)
             total_cost += cost
     elif dialogue_count >= DIALOGUE_WARNING_THRESHOLD:

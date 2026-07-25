@@ -756,6 +756,16 @@ def node_save_and_track(state: OrchestratorState) -> OrchestratorState:
         "dimensions":     cr.get("dimensions", {}),
         "rewrite_count":  state.get("rewrite_count_current", 0),
         "word_count":     len(text),
+        # 2026-07-26 审计修 Critical#1: 把 outline→writer prompt 的方法论字段
+        # 也写进 meta.json,否则 beat_checker/AC-10/AC-11 真实链路恒为 YELLOW。
+        # 字段均用 .get(..., "") 兜底(老 task 没这些字段也能写,不影响向后兼容)。
+        "shuang_type":        task.get("shuang_type", "") or "",
+        "ending_hook_type":   task.get("ending_hook_type", "") or "",
+        "is_arc_climax":      bool(task.get("is_arc_climax", False)),
+        "narrative_thread":   task.get("narrative_thread", "") or "",
+        "emotion_core":       task.get("emotion_core", "") or "",
+        "emotion_intensity":  task.get("emotion_intensity", 0) or 0,
+        "foreshadowing_ops":  task.get("foreshadowing_ops", []) or [],
     }
     save_chapter(state.get("novel_id", "default"), task["chapter_number"], text, meta)
     log(f"  💾 已保存（{len(text)}字，{cr.get('score',0):.1f}分）", state)
