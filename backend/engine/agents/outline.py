@@ -10,11 +10,12 @@ import re
 
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
-from ..config.prompt_templates import HOOK_TYPES, SHUANG_TYPES
+from ..config.prompt_templates import HOOK_TYPES, SHUANG_TYPES, EMOTION_CORES
 
 
-HOOK_LIST   = " | ".join(HOOK_TYPES.keys())
-SHUANG_LIST = " | ".join(SHUANG_TYPES.keys())
+HOOK_LIST       = " | ".join(HOOK_TYPES.keys())
+SHUANG_LIST     = " | ".join(SHUANG_TYPES.keys())
+EMOTION_CORE_LIST = " | ".join(EMOTION_CORES.keys())
 
 
 OUTLINE_SYSTEM = f"""你是一位网文策划，将弧级大纲拆解为结构化「字段化章节蓝图」（细纲）。
@@ -54,7 +55,9 @@ OUTLINE_SYSTEM = f"""你是一位网文策划，将弧级大纲拆解为结构�
   "dilemma": {{"option_a": "选项A（具体行动+代价）", "option_b": "选项B（具体行动+代价）", "both_cost": "两选项都失去的代价"}} | null,
   "narrative_thread": "main" | "side" | "hidden",
   "info_asymmetry": {{"reader_knows": ["本章读者知道但主角不知道的事"], "protagonist_knows": ["本章主角知道但读者还不知道的事"], "reveals_at_chapter": 揭示章号（默认null=本章不揭示）}} | null,
-  "anchor_to": 整数（本章锚定的主线 arc_id，多弧时用于跨弧主线延续）
+  "anchor_to": 整数（本章锚定的主线 arc_id，多弧时用于跨弧主线延续）,
+  "emotion_core": "{EMOTION_CORE_LIST}之一",
+  "emotion_intensity": 1-5 整数（1=轻微情绪，5=爆点情绪）
 }}
 
 【筹码（stakes）与两难（dilemma）填写指引】（2026-07-25 战略审视 Commit 1）
@@ -76,6 +79,14 @@ OUTLINE_SYSTEM = f"""你是一位网文策划，将弧级大纲拆解为结构�
   · protagonist_knows：列出本章主角已知但读者暂不知的关键信息
   · reveals_at_chapter：如果本章要揭示某秘密，填揭示章号（默认 null）
 - anchor_to 默认 = 本章所在 arc_id。多弧项目里"主线跨弧延续"时可填更早的 arc_id（锚点归一）。
+
+【情绪锚点（emotion_core + emotion_intensity）填写指引】（2026-07-25 战略审视 Commit 3）
+- emotion_core 必填，7 选 1：憋屈 / 压抑 / 爽快 / 震惊 / 虐心 / 甜蜜 / 燃
+- emotion_intensity 必填，1-5 整数：1=轻微，3=中等，5=爆点
+- 每章的情绪 = emotion_core × emotion_intensity（例如憋屈×5 = 极憋屈蓄势章 / 爽快×5 = 巅峰打脸章）
+- ⚠ 关键约束：避免连续 3 章同 emotion_core（情绪疲劳 → 读者弃书）
+  · 建议节拍：憋屈×3 → 爽快×5（释放）→ 震惊×4（转折）→ 压抑×2（蓄势）→ 爽×5（再释放）
+  · acceptance 阶段会扫"近 5 章 emotion_core 多样性"，< 3 唯一值触发警告
 - stakes 必须具体到「人/物/机会」，不要写"失败/成功"这种抽象词
 - dilemma 两个选项都必须有「具体代价」，不能写"无论如何都有损失"这种空话
 
@@ -198,6 +209,21 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
             t["anchor_to"] = anchor_raw
         else:
             t["anchor_to"] = None  # 由 orchestrator 用 current_arc 兜底
+
+        # 2026-07-25 战略审视 Commit 3：emotion_core + emotion_intensity
+        # emotion_core 必须是 EMOTION_CORES 7 类之一,否则置 "压抑"（默认兜底）
+        # emotion_intensity 必须是 1-5 整数,否则置 3（中等）
+        emotion_raw = t.get("emotion_core")
+        if isinstance(emotion_raw, str) and emotion_raw in EMOTION_CORES:
+            t["emotion_core"] = emotion_raw
+        else:
+            t["emotion_core"] = "压抑"  # 默认兜底,LLM 不写也能跑
+
+        intensity_raw = t.get("emotion_intensity")
+        if isinstance(intensity_raw, int) and 1 <= intensity_raw <= 5:
+            t["emotion_intensity"] = intensity_raw
+        else:
+            t["emotion_intensity"] = 3  # 默认中等强度
 
     # 二期：foreshadowing_ops 标准化 + 校验 + 注入伏笔种子到 memory
     from .foreshadow_helper import normalize_foreshadow_ops

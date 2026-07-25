@@ -24,7 +24,7 @@ from ..memory.manager import get_writer_context, maybe_update_style_samples
 from ..config.prompt_templates import (
     get_genre_instruction, get_hook_guidance,
     get_character_voice_reminder, get_methodology_instruction,
-    UNIVERSAL_WRITING_RULES,
+    UNIVERSAL_WRITING_RULES, EMOTION_CORES,
 )
 # 简化（#45）：writer.py 之前自己实现 _call_with_budget（约 30 行重试逻辑），
 # 跟 rewriter.py 几乎一样。统一抽到 engine.utils.call_with_budget_with_retry。
@@ -322,6 +322,24 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
         if anchor else ""
     )
 
+    # 2026-07-25 战略审视 Commit 3：情绪锚点渲染
+    emotion_core_raw = task.get("emotion_core")
+    if isinstance(emotion_core_raw, str) and emotion_core_raw in EMOTION_CORES:
+        emotion_core = emotion_core_raw
+    else:
+        emotion_core = "压抑"  # 默认兜底（无值/越界/None 都走这里）
+    emotion_intensity = task.get("emotion_intensity")
+    if not isinstance(emotion_intensity, int) or not 1 <= emotion_intensity <= 5:
+        emotion_intensity = 3  # 默认中等
+    emotion_desc = EMOTION_CORES.get(emotion_core, "")
+    intensity_label = ["", "轻微", "低", "中等", "高", "爆点"][emotion_intensity]
+    emotion_block = (
+        f"【本章情绪锚点 emotion={emotion_core}×{emotion_intensity}({intensity_label})】\n"
+        + f"情绪核心：{emotion_desc}\n"
+        + "⚠ 本章所有情节都要明确指向这个情绪。\n"
+        + "⚠ 避免连续 3 章同 emotion_core(情绪疲劳→读者弃书)。\n"
+    )
+
     system_dynamic = genre_instr + world_one_liner
 
     user_prompt = f"""【当前写作任务】
@@ -331,7 +349,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 情感迁移：{emotion_shift}
 主线推进：{plot_progression}
 是否弧高潮：{'是（全力以赴）' if task.get('is_arc_climax') else '否'}
-{stakes_block}{dilemma_block}{thread_block}{info_block}{anchor_block}
+{stakes_block}{dilemma_block}{thread_block}{info_block}{anchor_block}{emotion_block}
 
 {world_block}【主角状态】
 姓名：{mc_name} ｜ 等级：{context.get('protagonist_level','凡人')} ｜ 点数：{context.get('protagonist_points',0)}

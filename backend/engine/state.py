@@ -63,6 +63,14 @@ class ChapterTask(TypedDict):
     info_asymmetry: NotRequired[Dict[str, Any]]  # {"reader_knows": [...], "protagonist_knows": [...], "reveals_at_chapter": int}
     anchor_to: NotRequired[int]          # arc_id,所有线索指向的主线锚点
 
+    # ─── 2026-07-25 战略审视 Commit 3: 情绪锚点 ───
+    # 来源：《告别单机》§8 情绪锚点 /《告别"自嗨"》§1 网文是情绪消费品
+    # 设计：每章必填情绪核心 + 强度,避免连续 3 章同样情绪让读者弃书。
+    #   - emotion_core: 7 类之一（憋屈/压抑/爽快/震惊/虐心/甜蜜/燃）
+    #   - emotion_intensity: 1-5 整数
+    emotion_core: NotRequired[str]          # 情绪核心 7 选 1
+    emotion_intensity: NotRequired[int]     # 情绪强度 1-5
+
 
 class NarrativeUnit(TypedDict):
     unit_id: str
