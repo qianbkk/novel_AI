@@ -36,7 +36,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from app.main import app  # noqa: E402
 from app.auth import reset_jwt_secret_cache  # noqa: E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
-from app.models import Project, GenerationJob, WorldSetting, NovelAIBinding  # noqa: E402
+from app.models import Project, GenerationJob, WorldSetting, NovelAIBinding, User  # noqa: E402
 
 
 Base.metadata.create_all(bind=engine)
@@ -234,8 +234,22 @@ def test_unauthenticated_dev_mode_still_works(client):
 
     # 模拟本地用户登录创建项目后又退出登录。dev 模式仍是单租户兼容，
     # 因此未登录列表不能把已有 owner 的项目隐藏掉。
+    #
+    # owner_id 必须指向真实存在的 user：e6e1a1d 给 Project.owner_id 加了
+    # FK → users.id，而 app/database.py 打开了 PRAGMA foreign_keys=ON。
+    # 之前这里直接塞字符串 "local-owner"（无对应 users 行），在旧 schema 下
+    # 侥幸能插进去，加 FK 后必然 IntegrityError。补一行 user 才是这个场景
+    # 本来要表达的语义（"有 owner 的项目"），而不是放宽断言。
     db = SessionLocal()
     try:
+        db.add(User(
+            id="local-owner",
+            email="local-owner@example.com",
+            password_hash="not-a-real-hash-unused-in-this-test",
+        ))
+        # 先落 user 再插 project：Project.owner_id 只是列级 FK，没有声明
+        # relationship()，SQLAlchemy 的 unit-of-work 不会据此排序两条 INSERT。
+        db.commit()
         db.add(Project(
             title="owned but visible in dev",
             genre="都市",

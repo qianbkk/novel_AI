@@ -115,7 +115,13 @@ def test_cascade_delete_metadata():
     bad = []
     for m in models_with_project_fk:
         fk = list(m.__table__.foreign_keys)
-        project_fk = [f for f in fk if "projects" in fk[0].target_fullname] if fk else []
+        # 逐个 FK 判断它自己指向哪张表。之前写的是 `fk[0].target_fullname`
+        # —— 拿第一个 FK 的目标去过滤所有 FK。`__table__.foreign_keys` 是 set，
+        # 迭代顺序不稳定：Foreshadowing 同时有 project_id→projects 和
+        # linked_character_id→characters(SET NULL)，当 project_id 恰好排在
+        # 第 0 位时，整组 FK 都被当成"指向 projects"，SET NULL 那个就被误报。
+        # 这就是该用例时灵时不灵的原因。
+        project_fk = [f for f in fk if f.column.table.name == "projects"]
         if not project_fk:
             continue
         for f in project_fk:
