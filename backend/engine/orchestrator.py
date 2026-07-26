@@ -995,6 +995,16 @@ def run_orchestrator(state: OrchestratorState, max_chapters: int = 10) -> Orches
             print(f"🌱 已从设定包灌入 {n_seeded} 条伏笔种子到 L2 记忆")
     except Exception as e:
         _log.warning("seed_foreshadowing_from_setting failed (non-blocking): %s", e)
+    # 2026-07-26：把真实弧长记进 L2 meta。伏笔的 target_arc → 章号换算原本
+    # 写死每弧 30 章，弧长不是 30 时到期提醒会系统性早报/漏报。
+    try:
+        from .memory.manager import record_arc_length
+        arc_len = record_arc_length(state.get("novel_id", "default"),
+                                    state.get("arc_plans") or [])
+        if arc_len:
+            print(f"📏 弧长基准 {arc_len} 章/弧（用于伏笔到期换算）")
+    except Exception as e:
+        _log.warning("record_arc_length failed (non-blocking): %s", e)
     print(f"\n{'='*60}")
     print(f"🚀 Orchestrator | 目标{max_chapters}章 | 起始Ch{state.get('current_chapter',0)+1}")
     print(f"   {state.get('novel_id')} | 预算${state.get('budget_used_usd',0):.2f}/${state.get('budget_limit_usd',500):.0f}")

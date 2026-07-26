@@ -196,6 +196,9 @@ def test_foreshadow_due_soon_uses_chapter_number():
     }
     task = {"chapter_number": 100, "main_characters": []}
     ctx = get_chapter_relevant_context(memory, task)
-    assert "弧4伏笔" in ctx["foreshadowing_due_soon"], (
+    # 2026-07-26：due_soon 每条现在带到期状态前缀（【第 N 章前回收】/【已超期 N 章…】），
+    # 所以由精确成员改为子串匹配。前缀本身的行为见
+    # test_foreshadow_scheduling_2026_07_26.py。
+    assert any("弧4伏笔" in s for s in ctx["foreshadowing_due_soon"]), (
         f"应在 due_soon 里，实际={ctx['foreshadowing_due_soon']}"
     )

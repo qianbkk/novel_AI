@@ -146,6 +146,33 @@ def seed_foreshadowing_from_setting(novel_id: str, setting: dict) -> int:
     return added
 
 
+def record_arc_length(novel_id: str, arc_plans: list) -> int | None:
+    """把真实平均弧长记进 L2 meta，供伏笔到期章号换算使用。
+
+    2026-07-26：`_foreshadow_target_chapter` 原本把 `target_arc` 按写死的 30 章
+    换算成章号。本项目 arc_plans 的 estimated_chapters 是可变的，弧长不是 30 时
+    到期章号会系统性偏移（弧越靠后偏得越远），伏笔提醒要么早报要么漏报。
+    这里在 run 启动时把真实弧长落进 L2 meta，让换算有据可依。
+
+    用中位数而不是平均数：个别超长/超短弧（比如只有 2 章的收尾弧）不应该
+    把整体换算基准带偏。返回写入的弧长；拿不到有效数据时返回 None 且不写。
+    """
+    lengths = sorted(
+        int(a["estimated_chapters"]) for a in (arc_plans or [])
+        if isinstance(a, dict) and isinstance(a.get("estimated_chapters"), int)
+        and a["estimated_chapters"] > 0
+    )
+    if not lengths:
+        return None
+    median = lengths[len(lengths) // 2]
+    memory = get_l2(novel_id)
+    if memory.setdefault("meta", {}).get("chapters_per_arc") == median:
+        return median  # 幂等：值没变就不重复落盘
+    memory["meta"]["chapters_per_arc"] = median
+    save_l2(novel_id, memory)
+    return median
+
+
 def save_l5(novel_id: str, data: dict) -> None:
     """Atomic write L5 弧总结：同 save_l2 的修法。"""
     os.makedirs(L5_DIR_STR, exist_ok=True)
@@ -321,23 +348,88 @@ def _secondary_summarize_cold_history(existing: str, *, novel_id: str,
         return None, 0.0
 
 
-def _foreshadow_target_chapter(f: dict) -> int:
+# 伏笔调度参数（2026-07-26 架构审视）
+DEFAULT_CHAPTERS_PER_ARC = 30   # target_arc → 章号换算的默认弧长
+FORESHADOW_DUE_WINDOW = 30      # 距到期还有多少章开始提醒
+FORESHADOW_DUE_CAP = 5          # writer prompt 里最多列几条（超出会显式告知条数）
+
+
+def _foreshadow_target_chapter(
+    f: dict, chapters_per_arc: int = DEFAULT_CHAPTERS_PER_ARC,
+) -> int:
     """把一条伏笔换算成「预计回收章号」。
 
     一期修复（量纲 bug）：旧代码直接比较 target_arc（弧ID）和 ch_num（章号），
     量纲不同导致 due_soon 基本不触发。统一换算成章号：
       1. 显式 target_chapter 优先（新数据/DB 注入用这个字段）
-      2. target_arc × 30（弧 ≈ 30 章的粗换算）
-      3. 都没有 → planted_at_chapter + 30（埋下后 30 章内提醒回收）
+      2. target_arc × chapters_per_arc（弧长换算）
+      3. 都没有 → planted_at_chapter + FORESHADOW_DUE_WINDOW
+
+    2026-07-26：弧长由参数传入而不再写死 30。原实现假定每弧恰好 30 章，
+    弧长不是 30 时（本项目 arc_plans 的 estimated_chapters 是可变的）
+    整条伏笔的到期章号会系统性偏移 —— 弧越靠后偏得越远。
     """
     tc = f.get("target_chapter")
     if isinstance(tc, int) and tc > 0:
         return tc
     ta = f.get("target_arc")
     if isinstance(ta, int) and ta > 0:
-        return ta * 30
+        # 弧长非法（0/负数/None/非整数）时退回默认值。注意不能 clamp 到 1 ——
+        # 那会把 target 算成弧号本身，让所有伏笔在第 1 章就"超期"，
+        # 反而制造出满屏假告警。
+        arc_len = chapters_per_arc if isinstance(chapters_per_arc, int) else 0
+        if arc_len <= 0:
+            arc_len = DEFAULT_CHAPTERS_PER_ARC
+        return ta * arc_len
     planted_at = f.get("planted_at_chapter")
-    return (planted_at + 30) if isinstance(planted_at, int) else 10**9
+    return ((planted_at + FORESHADOW_DUE_WINDOW)
+            if isinstance(planted_at, int) else 10**9)
+
+
+def _build_foreshadow_worklist(
+    planted: list, resolved: set, ch_num: int, chapters_per_arc: int,
+) -> tuple[list[str], int, int]:
+    """把待回收伏笔排成「最紧急优先」的工作单。
+
+    返回 (给 prompt 用的字符串列表, 已超期条数, 待回收总条数)。
+
+    2026-07-26 修两个真实缺陷：
+
+    1. **静默丢弃**：旧实现是 `[f["desc"] for f in planted if ...][:5]` ——
+       不排序就截断。planted 是按埋下顺序追加的，所以一条早就超期的伏笔
+       完全可能被列表里排在它前面、但其实还早得很的 5 条挤掉，
+       且没有任何信号。长篇里这等于伏笔静默烂尾。
+       修法：按到期章号升序排，最紧急的先进 prompt；被截断的条数显式写出来。
+
+    2. **超期无信号**：旧实现里"还有 29 章到期"和"已经超期 40 章"
+       在 prompt 里长得一模一样（都是 `→ 描述`），writer 无从区分轻重。
+       修法：给每条加到期状态前缀。
+    """
+    pending = [f for f in planted
+               if isinstance(f, dict) and f.get("desc") and f["desc"] not in resolved]
+    scored = sorted(
+        ((_foreshadow_target_chapter(f, chapters_per_arc), f["desc"]) for f in pending),
+        key=lambda pair: pair[0],
+    )
+    due = [(target, desc) for target, desc in scored
+           if target <= ch_num + FORESHADOW_DUE_WINDOW]
+    overdue_count = sum(1 for target, _ in due if target < ch_num)
+
+    lines: list[str] = []
+    for target, desc in due[:FORESHADOW_DUE_CAP]:
+        if target < ch_num:
+            lines.append(f"【已超期 {ch_num - target} 章，必须优先回收】{desc}")
+        elif target == ch_num:
+            lines.append(f"【本章到期，必须回收】{desc}")
+        else:
+            lines.append(f"【第 {target} 章前回收】{desc}")
+
+    dropped = len(due) - len(due[:FORESHADOW_DUE_CAP])
+    if dropped > 0:
+        # 不静默截断：让 writer（和读日志的人）知道还有多少条没列出来
+        lines.append(f"（另有 {dropped} 条待回收伏笔未列出，已按紧急度排序）")
+
+    return lines, overdue_count, len(due)
 
 
 def get_chapter_relevant_context(memory: dict, task: dict) -> dict:
@@ -361,10 +453,13 @@ def get_chapter_relevant_context(memory: dict, task: dict) -> dict:
                          and c["expires_at_chapter"] > ch_num)][:5]
     planted = constraints.get("foreshadowing_planted", [])
     resolved = set(memory.get("cold", {}).get("resolved_foreshadowing", []))
-    due_soon = [f["desc"] for f in planted
-                if f.get("desc") and f["desc"] not in resolved
-                and _foreshadow_target_chapter(f) <= ch_num + 30][:5]
-    total_tracked = memory.get("meta", {}).get("total_chapters_tracked", 0)
+    meta = memory.get("meta", {}) or {}
+    # 弧长优先用 L2 meta 里记录的真实值（init_arc 写入），没有才退默认 30
+    chapters_per_arc = meta.get("chapters_per_arc") or DEFAULT_CHAPTERS_PER_ARC
+    due_soon, overdue_count, pending_count = _build_foreshadow_worklist(
+        planted, resolved, ch_num, chapters_per_arc,
+    )
+    total_tracked = meta.get("total_chapters_tracked", 0)
     # Phase 5 fix #6 配套：原代码硬截 500 字，长篇丧失"早期脉络"印象。
     # 改成 2000 字上限（更接近 L2 active context token 预算）。
     # Phase 5 fix 之后 L2 cold.compressed_history 已被二次摘要管理，无需再 500-cut。
@@ -383,6 +478,10 @@ def get_chapter_relevant_context(memory: dict, task: dict) -> dict:
         "last_chapter_ending": hot.get("last_chapter_ending", ""),
         "relevant_forbidden": rel_forbidden,
         "foreshadowing_due_soon": due_soon,
+        # 结构化计数（2026-07-26）：给验收/门禁用，prompt 不直接消费。
+        # 有了它，"伏笔超期堆积" 才第一次成为可观测、可断言的信号。
+        "foreshadowing_overdue_count": overdue_count,
+        "foreshadowing_pending_count": pending_count,
         "cold_summary": cold_summary,
     }
 
