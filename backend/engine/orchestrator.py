@@ -872,8 +872,11 @@ def node_human_escalation(state: OrchestratorState) -> OrchestratorState:
     if text:
         try:
             memory = get_l2(state.get("novel_id", "default"))
+            # unverified=True：这一章没过质量门。仍然记进 L2（防缺章漂移），
+            # 但摘要打标，避免草稿内容被当成既成事实污染后续每一章的上下文。
             _updated_mem, _cost = run_tracker(
-                text, task, memory, state.get("novel_id", "default")
+                text, task, memory, state.get("novel_id", "default"),
+                unverified=True,
             )
             _add_cost(state, _cost)
             log(f"  📌 escalation 记忆已兜底（用 draft_text 喂 tracker）", state)

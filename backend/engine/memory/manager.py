@@ -432,6 +432,33 @@ def _build_foreshadow_worklist(
     return lines, overdue_count, len(due)
 
 
+def _format_recent_events(summaries: list) -> str:
+    """把近期章节摘要渲染成 writer 能读的一行，未过质量门的章节显式标出。
+
+    2026-07-26：human_escalation 的章节也会跑 tracker（有意的折中 —— 完全跳过
+    会让 L2 缺章，长篇漂移更严重），但原来打完的标只存在 meta 里、没有任何
+    消费者。结果是草稿质量的情节顺着 recent_events 进入后续每一章的 prompt，
+    被当成已确认的剧情事实，质量债一路传染。
+
+    现在带 unverified 标记的摘要会渲染成「（待修订，情节未定稿）」，让 writer
+    知道这段可以顺、也可以绕，而不是当成不可动摇的既成事实。
+    """
+    parts: list[str] = []
+    for s in summaries or []:
+        if not isinstance(s, dict):
+            continue
+        text = str(s.get("summary") or "").strip()
+        if not text:
+            continue
+        if s.get("unverified"):
+            ch = s.get("chapter")
+            tag = f"（第{ch}章待修订，情节未定稿）" if ch else "（待修订，情节未定稿）"
+            parts.append(f"{text}{tag}")
+        else:
+            parts.append(text)
+    return " | ".join(parts)
+
+
 def get_chapter_relevant_context(memory: dict, task: dict) -> dict:
     """Filter hot/cold/constraints down to only what's relevant to the current task.
 
@@ -444,7 +471,7 @@ def get_chapter_relevant_context(memory: dict, task: dict) -> dict:
     rel_states = {k: v for k, v in all_states.items()
                   if any(k in c or c in k for c in main_chars) or k in main_chars}
     recent = hot.get("recent_summaries", [])[-5:]
-    recent_events = " | ".join(s["summary"] for s in recent) if recent else ""
+    recent_events = _format_recent_events(recent)
     ch_num = task.get("chapter_number", 0)
     forbidden = constraints.get("forbidden_constraints", [])
     rel_forbidden = [c["desc"] for c in forbidden

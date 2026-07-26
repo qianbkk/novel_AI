@@ -14,6 +14,7 @@ from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
 from ..utils import parse_llm_json_response, truncate_preserving_ends
 from ..memory.manager import (
+    _format_recent_events,
     save_l2, expire_constraints, maybe_compress_hot_to_cold,
 )
 
@@ -150,8 +151,15 @@ TRACKER_SYSTEM = """你是叙事状态追踪AI。阅读本章正文，提取状�
 3. **只返回 JSON**，连 markdown fence 也不要。"""
 
 
-def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: str) -> tuple[dict, float]:
-    """提取章节状态变化，更新 L2 hot/cold/constraints/meta 四层。"""
+def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: str,
+                *, unverified: bool = False) -> tuple[dict, float]:
+    """提取章节状态变化，更新 L2 hot/cold/constraints/meta 四层。
+
+    unverified=True 表示这一章没过质量门（human_escalation 路径）。仍然记进
+    记忆是有意的折中——完全跳过会让 L2 缺这一章，100+ 章长篇里漂移更严重——
+    但摘要会被打上 unverified 标记，让下游能区分「已确认的剧情事实」和
+    「待人工修订的草稿内容」，避免低质内容被当成既成事实持续污染后续章节。
+    """
     hot = current_memory.get("hot", {})
     constraints = current_memory.get("constraints", {})
 
@@ -280,9 +288,15 @@ def run_tracker(chapter_text: str, task: dict, current_memory: dict, novel_id: s
     # 章节摘要进热层
     if "chapter_summary" in updates:
         summaries = hot.get("recent_summaries", [])
-        summaries.append({"chapter": task["chapter_number"], "summary": updates["chapter_summary"]})
+        entry = {"chapter": task["chapter_number"], "summary": updates["chapter_summary"]}
+        if unverified:
+            # 2026-07-26：没过质量门的章节仍然记进记忆（防 L2 缺章），但必须打标。
+            # 否则下游把草稿内容当成已确认的剧情事实，低质内容顺着 recent_events
+            # 污染后续每一章的写作上下文 —— 质量债会一路传染。
+            entry["unverified"] = True
+        summaries.append(entry)
         hot["recent_summaries"] = summaries
-        hot["recent_events"] = " | ".join(s["summary"] for s in summaries[-5:])
+        hot["recent_events"] = _format_recent_events(summaries[-5:])
 
     # 世界事件进冷层
     # Phase 8 fix #10：cold 三件套 append-only 但加 dedup。同一事件跨章节被
