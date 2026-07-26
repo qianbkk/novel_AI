@@ -146,6 +146,28 @@ class LLMRouter:
 
         self._engine.configure(routes=routes, api_keys=api_keys)
 
+        # 故障转移链（2026-07-26）：从已配置的 Provider 推导，不新增配置面。
+        # 主 provider 撞额度/限流/鉴权失败时，call() 会按这个顺序换一家继续，
+        # 而不是让 30/50 章的长跑直接断在半路。
+        # 排序规则：按该 provider 承担的 role 数量降序（承担越多说明越是主力，
+        # 也最可能是用户真正配好、额度充足的那家），同数量按名字稳定排序。
+        usage: dict[str, int] = {}
+        model_of: dict[str, str] = {}
+        for r in (self._routes or {}).values():
+            ptype = r["type"]
+            if not ptype or ptype == "mock" or not r.get("key"):
+                continue
+            usage[ptype] = usage.get(ptype, 0) + 1
+            model_of.setdefault(ptype, r["model"])
+        chain = [(p, model_of[p]) for p in
+                 sorted(usage, key=lambda k: (-usage[k], k))]
+        self._engine.set_fallback_chain(chain)
+        if len(chain) > 1:
+            logging.getLogger("novel_ai.llm_router").info(
+                "故障转移链已配置：%s",
+                " → ".join(f"{p}/{m}" for p, m in chain),
+            )
+
         # Wire provider.needs_proxy → engine LLMRouter proxy URL
         # （anthropic / deepseek / kimi 等可能因地区需要走代理；HTTP 客户端按 provider 设置）
         if self._routes:

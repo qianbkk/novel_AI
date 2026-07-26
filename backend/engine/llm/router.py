@@ -88,6 +88,83 @@ class _HTTPClientError(httpx.HTTPError):
         self.status_code = status_code
 
 
+# ══════════════════════════════════════════════
+# Provider 故障分类（2026-07-26 架构审视）
+# ══════════════════════════════════════════════
+# 背景：原实现里"额度耗尽""鉴权失败""服务过载"全都退化成一句含糊的
+# ValueError/HTTPError，call() 无从判断该重试、该换 provider、还是该直接停。
+# 30 章实测里 MiniMax Token Plan 限速(base_resp.status_code=2062)表现为
+# HTTP 200 + 空 choices → `ValueError("MiniMax 返回无 choices")`，
+# 既不重试也不切换，长跑直接断在这里。
+#
+# 继承 ValueError 而不是 RuntimeError：provider 实现里原有的失败路径本来就
+# raise ValueError(如"MINIMAX_API_KEY 未设置")，调用方(agents / tools)也按
+# ValueError 兜底。继承 ValueError 让分类是纯增量的，不破坏任何既有 except。
+class LLMProviderError(ValueError):
+    """某个 provider 这次调用失败了 —— 可以考虑换一个 provider 重试。"""
+
+    def __init__(self, provider: str, message: str, *, kind: str = "error"):
+        super().__init__(f"[{provider}/{kind}] {message}")
+        self.provider = provider
+        self.kind = kind
+
+
+class LLMQuotaError(LLMProviderError):
+    """额度耗尽 / 触发限流 —— 再重试同一个 provider 没有意义，应当换。"""
+
+    def __init__(self, provider: str, message: str):
+        super().__init__(provider, message, kind="quota")
+
+
+class LLMAuthError(LLMProviderError):
+    """鉴权失败 / key 未配置 —— 这个 provider 配置坏了，应当换。"""
+
+    def __init__(self, provider: str, message: str):
+        super().__init__(provider, message, kind="auth")
+
+
+def classify_http_error(provider: str, status_code: int, body: str) -> LLMProviderError:
+    """把 4xx 状态码翻译成故障类型，决定 call() 要不要换 provider。"""
+    snippet = (body or "")[:200]
+    if status_code in (401, 403):
+        return LLMAuthError(provider, f"HTTP {status_code} 鉴权失败: {snippet}")
+    if status_code in (402, 429):
+        return LLMQuotaError(provider, f"HTTP {status_code} 额度/限流: {snippet}")
+    return LLMProviderError(provider, f"HTTP {status_code}: {snippet}")
+
+
+# MiniMax 在 HTTP 200 的响应体里用 base_resp.status_code 表达业务错误。
+# 只有这些码代表"换个 provider 可能就好了"，其余(如 2013 输入格式错误)
+# 换 provider 也一样失败，归为普通 LLMProviderError。
+MINIMAX_QUOTA_CODES = {1002, 1008, 2062}   # 触发限流 / 余额不足 / Token Plan 限速
+MINIMAX_AUTH_CODES = {1004}                # 鉴权失败
+
+
+def raise_for_minimax_base_resp(data: dict) -> None:
+    """检查 MiniMax 响应体里的 base_resp，非 0 就按类型抛出。
+
+    2026-07-26：原实现完全不看 base_resp。额度耗尽时 MiniMax 返回 HTTP 200 +
+    空 choices，代码抛 `ValueError("MiniMax 返回无 choices: {...}")` —— 错误信息
+    里虽然带了原始 data，但类型上无法与"模型输出异常"区分，故障转移无从下手。
+    """
+    base = data.get("base_resp") or {}
+    code = base.get("status_code")
+    if not isinstance(code, int) or code == 0:
+        return
+    msg = base.get("status_msg") or ""
+    detail = f"base_resp.status_code={code} {msg}".strip()
+    if code in MINIMAX_QUOTA_CODES:
+        raise LLMQuotaError("minimax", detail)
+    if code in MINIMAX_AUTH_CODES:
+        raise LLMAuthError("minimax", detail)
+    raise LLMProviderError("minimax", detail)
+
+
+# 触发故障转移的异常集合。httpx.HTTPError 覆盖 TransportError（网络层）、
+# HTTPStatusError（重试 6 次后仍是 5xx）与 _HTTPClientError（未打 provider 标签的 4xx）。
+_FAILOVER_ERRORS = (LLMProviderError, httpx.HTTPError)
+
+
 # ── Proxy mount map ──
 # P3 wiring: Provider.needs_proxy=True → engine.llm.router.LLMRouter.set_proxy_map()
 # lets a configured proxy URL apply to a specific provider's HTTP client.
@@ -157,7 +234,8 @@ _PROVIDER_PROXY: dict[str, str] = {}
         flush=True,
     ),
 )
-def _post_with_retry(client: httpx.Client, url: str, **kwargs) -> httpx.Response:
+def _post_with_retry(client: httpx.Client, url: str, *,
+                     provider: str = "", **kwargs) -> httpx.Response:
     """POST + auto-retry on network errors and 5xx (default 6 attempts, exp backoff 2-60s).
 
     4xx errors are NOT retried (auth/quota fail-fast)。
@@ -179,6 +257,11 @@ def _post_with_retry(client: httpx.Client, url: str, **kwargs) -> httpx.Response
     if 500 <= r.status_code < 600:
         r.raise_for_status()  # HTTPStatusError → caught by tenacity
     elif 400 <= r.status_code < 500:
+        # 2026-07-26：4xx 仍然 fail-fast(不重试)，但改抛分类异常，
+        # 让 call() 能区分「额度耗尽该换 provider」和「请求本身有问题换了也没用」。
+        # provider 为空时退回原来的 _HTTPClientError，保持老调用点行为不变。
+        if provider:
+            raise classify_http_error(provider, r.status_code, r.text)
         raise _HTTPClientError(r.status_code, f"HTTP {r.status_code}: {r.text[:200]}")
     return r
 
@@ -212,6 +295,9 @@ class LLMRouter:
         }
         self.routes: dict[str, tuple[str, str]] = dict(MODEL_ROUTES_DEFAULT)
         self.budget: dict[str, tuple[int, int, int]] = dict(TOKEN_BUDGET_DEFAULT)
+        # 故障转移链（2026-07-26）：主 provider 因额度/鉴权/持续 5xx 失败时，
+        # 按序尝试这里的备选。空列表 = 保持原来的"失败就失败"行为。
+        self.fallback_chain: list[tuple[str, str]] = []
         self._stats: dict = {"total_calls": 0, "total_cost_usd": 0.0, "by_agent": {}}
         self._stats_lock = threading.Lock()
         # Mock 模式：如果设置了 NOVEL_ENGINE_MOCK=1 或调用方显式 use_mock()，
@@ -252,6 +338,16 @@ class LLMRouter:
             self.budget.update(budget)
         if api_keys:
             self.api_keys.update(api_keys)
+
+    def set_fallback_chain(self, chain: list[tuple[str, str]]) -> None:
+        """配置故障转移链：[(provider, model), ...]，按序尝试。
+
+        由 backend.engine.llm_router.install() 从 DB 里已配置的 Provider 推导，
+        不引入新的配置面。mock 会被 _build_attempts 显式排除。
+        """
+        self.fallback_chain = [
+            (p, m) for p, m in (chain or []) if p and p != "mock"
+        ]
 
     def set_proxy_map(self, provider_proxy: dict[str, str]) -> None:
         """Wire per-provider proxy URLs (P3). Keys: 'anthropic' | 'deepseek' |
@@ -315,14 +411,69 @@ class LLMRouter:
             "custom":    self._custom,
             "mock":      self._mock,   # 无需 API key 的测试 provider
         }
-        fn = dispatch.get(provider)
-        if fn is None:
+        if provider not in dispatch:
             raise ValueError(f"未知 Provider：{provider}。支持：{list(dispatch.keys())}")
 
-        if provider == "anthropic":
-            return fn(agent_name, system_prompt, user_prompt, model,
-                      max_tokens, temperature, use_cache, cached_system)
-        return fn(agent_name, system_prompt, user_prompt, model, max_tokens, temperature)
+        attempts = self._build_attempts(provider, model, dispatch)
+        last_exc: Optional[BaseException] = None
+        for idx, (p, m) in enumerate(attempts):
+            fn = dispatch[p]
+            try:
+                if p == "anthropic":
+                    result = fn(agent_name, system_prompt, user_prompt, m,
+                                max_tokens, temperature, use_cache, cached_system)
+                else:
+                    result = fn(agent_name, system_prompt, user_prompt, m,
+                                max_tokens, temperature)
+            except _FAILOVER_ERRORS as exc:
+                last_exc = exc
+                if idx == len(attempts) - 1:
+                    raise
+                nxt = attempts[idx + 1]
+                kind = getattr(exc, "kind", type(exc).__name__)
+                # 故障转移必须是响亮的：静默换 provider 会让"为什么这批章节
+                # 风格突然变了""为什么成本模型对不上"变成无头案。
+                log.warning(
+                    "provider %s 调用失败(%s)，故障转移到 %s/%s：%s",
+                    p, kind, nxt[0], nxt[1], exc,
+                )
+                print(f"  🔀 Provider {p} 不可用（{kind}），切换到 {nxt[0]}/{nxt[1]}",
+                      flush=True)
+                continue
+            if idx > 0:
+                self._note_failover(agent_name, attempts[0][0], p)
+            return result
+        # 理论不可达（最后一次失败会直接 raise），保底不静默返回空
+        raise last_exc if last_exc else RuntimeError("LLM call 未产生任何结果")
+
+    def _build_attempts(
+        self, provider: str, model: str, dispatch: dict,
+    ) -> list[tuple[str, str]]:
+        """主 provider + 可用备选，组成本次调用的尝试顺序。
+
+        规则：
+        - 主 provider 永远排第一
+        - 备选里跳过：主 provider 自己、mock、以及没有 API key 的
+        - 绝不把 mock 当备选：那会把"调用失败"伪装成"生成成功"，
+          写出一堆假章节，违反「禁止静默吞掉调用失败」
+        """
+        attempts = [(provider, model)]
+        seen = {provider}
+        for fb_provider, fb_model in self.fallback_chain:
+            if fb_provider in seen or fb_provider == "mock":
+                continue
+            if fb_provider not in dispatch:
+                continue
+            if not self.api_keys.get(fb_provider):
+                continue
+            attempts.append((fb_provider, fb_model))
+            seen.add(fb_provider)
+        return attempts
+
+    def _note_failover(self, agent: str, primary: str, served_by: str) -> None:
+        with self._stats_lock:
+            fo = self._stats.setdefault("failovers", [])
+            fo.append({"agent": agent, "from": primary, "to": served_by})
 
     # ---------- Provider implementations ----------
     def _mock(self, agent, system_prompt, user_prompt, model, max_tokens, temperature):
@@ -435,7 +586,7 @@ class LLMRouter:
     def _deepseek(self, agent, system_prompt, user_prompt, model, max_tokens, temperature):
         api_key = self.api_keys.get("deepseek", "")
         if not api_key:
-            raise ValueError("DEEPSEEK_API_KEY 未设置，请在 .env 文件中配置")
+            raise LLMAuthError("deepseek", "DEEPSEEK_API_KEY 未设置，请在 .env 文件中配置")
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         payload = {
             "model": model,
@@ -447,7 +598,7 @@ class LLMRouter:
         }
         c = (_get_proxied_client("deepseek", "https://api.deepseek.com")
              if _PROVIDER_PROXY.get("deepseek") else _get_client(120))
-        r = _post_with_retry(c, "https://api.deepseek.com/chat/completions",
+        r = _post_with_retry(c, "https://api.deepseek.com/chat/completions", provider="deepseek",
                              headers=headers, json=payload)
         data = r.json()
         text    = data["choices"][0]["message"]["content"]
@@ -461,7 +612,7 @@ class LLMRouter:
     def _gemini(self, agent, system_prompt, user_prompt, model, max_tokens, temperature):
         api_key = self.api_keys.get("gemini", "")
         if not api_key:
-            raise ValueError("GEMINI_API_KEY 未设置")
+            raise LLMAuthError("gemini", "GEMINI_API_KEY 未设置")
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
                f"{model}:generateContent?key={api_key}")
         payload = {
@@ -471,7 +622,7 @@ class LLMRouter:
         }
         c = (_get_proxied_client("gemini", url) if _PROVIDER_PROXY.get("gemini")
              else _get_client(180))
-        r = _post_with_retry(c, url, json=payload)
+        r = _post_with_retry(c, url, provider="gemini", json=payload)
         data = r.json()
         text = data["candidates"][0]["content"]["parts"][0]["text"]
         self._record(agent, 0.002, 0, 0)
@@ -480,7 +631,7 @@ class LLMRouter:
     def _kimi(self, agent, system_prompt, user_prompt, model, max_tokens, temperature):
         api_key = self.api_keys.get("kimi", "")
         if not api_key:
-            raise ValueError("KIMI_API_KEY 未设置")
+            raise LLMAuthError("kimi", "KIMI_API_KEY 未设置")
         headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         payload = {
             "model": model or "moonshot-v1-32k",
@@ -492,7 +643,7 @@ class LLMRouter:
         }
         c = (_get_proxied_client("kimi", "https://api.moonshot.cn")
              if _PROVIDER_PROXY.get("kimi") else _get_client(120))
-        r = _post_with_retry(c, "https://api.moonshot.cn/v1/chat/completions",
+        r = _post_with_retry(c, "https://api.moonshot.cn/v1/chat/completions", provider="kimi",
                              headers=headers, json=payload)
         data = r.json()
         text    = data["choices"][0]["message"]["content"]
@@ -509,7 +660,7 @@ class LLMRouter:
         # Payload/响应格式：标准 OpenAI chat.completions。
         api_key = self.api_keys.get("minimax", "")
         if not api_key:
-            raise ValueError("MINIMAX_API_KEY 未设置")
+            raise LLMAuthError("minimax", "MINIMAX_API_KEY 未设置")
         # 允许用 MINIMAX_BASE_URL env 覆盖默认 endpoint
         base_url = os.environ.get("MINIMAX_BASE_URL") or "https://api.minimaxi.com/v1"
         url = f"{base_url.rstrip('/')}/text/chatcompletion_v2"
@@ -529,12 +680,16 @@ class LLMRouter:
         }
         c = (_get_proxied_client("minimax", base_url)
              if _PROVIDER_PROXY.get("minimax") else _get_client(120))
-        r = _post_with_retry(c, url, headers=headers, json=payload)
+        r = _post_with_retry(c, url, provider="minimax", headers=headers, json=payload)
         data = r.json()
+        # 2026-07-26：MiniMax 用 HTTP 200 + base_resp.status_code 表达业务错误
+        # （2062 = Token Plan 限速，30 章实测必撞）。必须在读 choices 之前判，
+        # 否则额度问题会退化成含糊的「返回无 choices」，故障转移无从下手。
+        raise_for_minimax_base_resp(data)
         # chat.completions 格式
         choices = data.get("choices", [])
         if not choices:
-            raise ValueError(f"MiniMax 返回无 choices: {data}")
+            raise LLMProviderError("minimax", f"返回无 choices: {str(data)[:300]}")
         msg = choices[0].get("message", {}) or {}
         text = msg.get("content", "") or ""
         if not text and msg.get("reasoning_content"):
@@ -567,10 +722,10 @@ class LLMRouter:
         api_base = self.api_keys.get("custom_api_base", "")
         custom_model = self.api_keys.get("custom_model_id", "")
         if not api_base:
-            raise ValueError("CUSTOM_API_BASE 未设置")
+            raise LLMAuthError("custom", "CUSTOM_API_BASE 未设置")
         actual_model = model or custom_model
         if not actual_model:
-            raise ValueError("CUSTOM_MODEL_ID 未设置")
+            raise LLMAuthError("custom", "CUSTOM_MODEL_ID 未设置")
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -585,7 +740,7 @@ class LLMRouter:
         endpoint = f"{api_base.rstrip('/')}/chat/completions"
         c = (_get_proxied_client("custom", api_base) if _PROVIDER_PROXY.get("custom")
              else _get_client(180))
-        r = _post_with_retry(c, endpoint, headers=headers, json=payload)
+        r = _post_with_retry(c, endpoint, provider="custom", headers=headers, json=payload)
         data = r.json()
         text    = data["choices"][0]["message"]["content"]
         u       = data.get("usage", {})
