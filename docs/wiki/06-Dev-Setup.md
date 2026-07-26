@@ -108,7 +108,16 @@ pytest backend/tests --ignore=backend/tests/invariants
 pytest backend/tests/invariants
 ```
 
-从仓库根目录分两个独立进程运行，避免旧集成测试的进程级数据库配置互相污染。`backend/tests/` 覆盖行为、API、集成与回归测试；`backend/tests/invariants/` 专测结构与跨存储不变量。详细分层和聚焦命令见 [`backend/tests/README.md`](../../backend/tests/README.md)。引擎自身另有 `engine/tools/system_test.py`（Mock LLM 集成测试）和 `acceptance_tests.py`（验收标准）。
+从仓库根目录分两个独立进程运行，避免旧集成测试的进程级数据库配置互相污染。`backend/tests/` 覆盖行为、API、集成与回归测试；`backend/tests/invariants/` 专测结构与跨存储不变量。详细分层和聚焦命令见 [`backend/tests/README.md`](../../backend/tests/README.md)。
+
+引擎自身另有两个**离线 CLI 工具**，跑 30 章真实 LLM 测试后必跑：
+
+| 命令 | 作用 |
+|---|---|
+| `python -m engine.tools.acceptance_tests all` | 12 项验收标准（AC-1~AC-12：设定一致性 / 题材切换 / 任务单质量 / 平台字数钩子 / 角色弧一致性 + 但是法则密度 / 信息差多样性 / 情绪锚点多样性 / 三线分布 + 扮猪吃虎节拍 / 升级循环 / 对话提示词密度）。无数据时全 SKIP → True |
+| `python -m engine.tools.beat_checker <novel_ai_dir> [--window 10] [--save]` | 节拍校验（扮猪吃虎 / 打脸三阶段 + 升级循环 + 情绪多样性 + 钩子存在性），扫 `output/chapters/ch_NNNN_meta.json` 产红/黄/绿报告。退出码 RED=2 / YELLOW=1 / GREEN=0 供 CI 用 |
+
+单项跑：`acceptance_tests ac1`..`ac12` / `beat_checker <dir>`。详细字段定义与节拍规则见 [03-Writing-Engine.md](03-Writing-Engine.md#方法论内化与节拍校验)。
 
 ## 部署注意事项
 

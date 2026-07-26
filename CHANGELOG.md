@@ -4,6 +4,43 @@ This file records release-level behavior changes. Individual fixes and implement
 
 ## Unreleased
 
+### 战略审视 7 项 backlog 全部交付（2026-07-25 → 2026-07-26）
+
+基于真实 30+ 章 LLM 跑批后的战略审视,识别的方法论密度 gap 全部在 17 个聚焦 commit 内落地,审计子代理发现的 3 处真实缺陷在 2 个修复合并 commit 内修复。
+
+#### Added — 方法论与字段
+
+- **4 招方法论内化**(`prompt_templates.py`):`INFO_ASYMMETRY_INSTRUCTION`(信息差三模式) / `BUT_LAW_INSTRUCTION`(章首+章中+章尾转折) / `THREE_LAYER_HOOK_INSTRUCTION`(微观/中观/宏观) / `MODULAR_NARRATIVE_INSTRUCTION`(主/支/暗线)+ `get_methodology_instruction()` helper。writer prompt 默认全开,终章仅保留 3 层钩子。顺手修 `writer.py:296` 原 `{{}}` f-string bug(set literal + dict 元素 → `TypeError`)
+- **7 个 ChapterTask 结构化字段**(`state.py:ChapterTask` 通过 `NotRequired[...]` 增量加):`stakes` / `dilemma` / `narrative_thread` / `info_asymmetry` / `anchor_to` / `emotion_core`(7 类之一)/ `emotion_intensity`(1-5)。老 task JSON 自动兼容
+- **POV_LOCK_INSTRUCTION**(`prompt_templates.py`)+ `normalizer.detect_pov_switching`:第一人称锁定主角,每章 ≤2 次切换,需 `【POV 切换 → 角色名】` 显式标注
+- **`engine/tools/beat_checker.py`** 离线节拍校验器:扮猪吃虎三阶段 + 升级循环 + 情绪多样性 + 钩子存在性,扫 `ch_NNNN_meta.json` 产红/黄/绿报告,退出码 RED=2/YELLOW=1/GREEN=0(CI 友好)
+- **`engine/tools/acceptance_tests.py` 5→12 项**:AC-1~AC-5 原版保留,新增 AC-6(但是法则密度)/ AC-7(信息差多样性)/ AC-8(情绪锚点多样性)/ AC-9(三线分布)/ AC-10(扮猪吃虎节拍)/ AC-11(升级循环)/ AC-12(对话提示词密度)
+
+#### Changed
+
+- **normalizer 对话提示词阈值**:5 → 25(预警)/ 50(强制 4 策略替换:动作卡位/神态/情境/语感)。原报告阈值错
+- **`_standardize_tasks()` 抽出 helper**:`run_outline` 与 `run_outline_card` B/C 分支共享同一份字段兜底 + 章号契约;顺手修 `_mark_arc_climax` 短弧(<3 章)IndexError 隐患
+- **`outline.py` prompt schema** 加 7 字段填写指引 + 7 钩子/7 爽点 enum
+
+#### Fixed — 审计子代理发现的 3 处真实缺陷
+
+- **🔴 Critical#1 meta.json 落盘断层**:`orchestrator.save_chapter`(line 749)+ `bootstrap.py` 写 meta dict 不含 `shuang_type`/`ending_hook_type`/`emotion_core`/`foreshadowing_ops`/`is_arc_climax`/`narrative_thread`/`emotion_intensity` → `beat_checker` 与 AC-10/AC-11 真实链路恒为 YELLOW(空转)。`.get(...,'')` 兜底,老 task 也能写
+- **🟡 Medium#1 normalizer `.format()` 叠加 f-string 崩溃**:`dialogue_replace_prompt` 在含 `{污染样本}` 的 f-string 上又 `.format(cnt=)`,章节文本含 `{` 时 `KeyError`。全部改纯 f-string
+- **🟡 Medium#4 outline card B/C 跳过标准化**:同上,修法见 Changed 段
+
+#### Tests
+
+- **138 个战略审视回归测试**(`backend/tests/test_*_2026_07_25.py`):覆盖 4 招方法论 + 7 字段渲染 + beat_checker + 对话癌 + POV 锁定 + 12 项验收
+- **26 个审计修回归测试**(`backend/tests/test_*_2026_07_26.py`):覆盖 Critical#1 真实链路 + Medium#1 FORCE 分支 + Medium#4 card 标准化
+- 新增测试 fixture 设计原则:`isolated_novel_ai_dir` / `isolated_chapters_dir` 把 `paths.py` 重定向到 `tmp_path`,不污染真实 `NOVEL_AI_DIR` 数据;FORCE 分支 mock 在 `normalizer` 模块的 `LLMRouter` / `get_active_router` 名字上,覆盖模块级 + 函数级 import 两条路径
+
+### Documentation
+
+- [03-Writing-Engine.md](docs/wiki/03-Writing-Engine.md) § 方法论内化与节拍校验:把原"已知方法论 gap 与补全计划"待办段全部替换为已交付能力清单 + 审计修 3 处缺陷 + commit 映射表
+- [06-Dev-Setup.md](docs/wiki/06-Dev-Setup.md) 测试段加 beat_checker / acceptance_tests 12 项 CLI 用法
+- [07-Real-LLM-Testing.md](docs/wiki/07-Real-LLM-Testing.md) § 7.1 战略审视后必跑步骤 + § 7.2 改了什么清单
+- [00-Home.md](docs/wiki/00-Home.md) 工程化基线更新(75/100 → 含战略审视 17 commit + 审计修 2 commit)
+
 ### 工程化提升（2026-07-24 → 2026-07-25）
 
 本阶段把 63/100 的工程化基线推到 75/100。10 个 commit 覆盖 P0 全部 6 项 + P1 全部 3 项 + 1 项 /simplify 高 ROI 修复 + 2 项 /code-review critical bug 修复。

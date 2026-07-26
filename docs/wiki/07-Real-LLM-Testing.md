@@ -122,6 +122,43 @@ LLM 返 {title, body} 包装
 - [ ] 已有 MiniMax Provider + 15 role assignments 绑定（同进程防 master_key 漂移）
 - [ ] budget_limit_usd ≥ $1（避免 BUDGET_HARD 硬停）
 
+### 7.1 战略审视 + 审计修 后的必跑步骤
+
+30 章跑完后,**除了之前 7 项 checklist,必跑**:
+
+```bash
+# 1. 节拍校验（扮猪吃虎 / 升级循环 / 情绪多样性 / 钩子存在）
+python -m engine.tools.beat_checker backend/data/engine --window 10
+# 期望:overall_status=GREEN(4 维度全绿)。有 RED 项需查 details 找是哪条规则
+# 退出码:RED=2 / YELLOW=1 / GREEN=0
+
+# 2. 12 项验收标准
+python -m engine.tools.acceptance_tests all
+# 期望:12/12 通过。无数据时全 SKIP → True
+
+# 3. 单项 FAIL 排查
+python -m engine.tools.acceptance_tests ac6   # 但是法则密度
+python -m engine.tools.acceptance_tests ac7   # 信息差多样性
+python -m engine.tools.acceptance_tests ac8   # 情绪多样性
+python -m engine.tools.acceptance_tests ac9   # 三线分布
+python -m engine.tools.acceptance_tests ac12  # 对话提示词密度
+```
+
+详细字段与规则见 [03-Writing-Engine.md § 方法论内化与节拍校验](03-Writing-Engine.md#方法论内化与节拍校验)。这些工具自 2026-07-25 起加入,跑 30+ 章后必跑。
+
+### 7.2 战略审视 + 审计修 改了什么(2026-07-25~26)
+
+每章自动携带的方法论/字段(无需手动配置):
+
+- **4 招方法论内化**:writer prompt 默认注入信息差 / 但是法则 / 3 层期待感 / 模块化叙事
+- **7 个 ChapterTask 字段**:outline 阶段自动填 `stakes` / `dilemma` / `narrative_thread` / `info_asymmetry` / `anchor_to` / `emotion_core` / `emotion_intensity`(老 task JSON 自动兼容)
+- **normalizer 后处理**:满篇"某某说/道"对话癌检测(≥25 预警 / ≥50 强制 4 策略替换)+ POV 视角切换密度检测(默认 ≤2/章)
+- **meta.json 字段完整**:审计修 Critical#1,save_chapter 落盘必含 7 字段,beat_checker / AC-10 / AC-11 不再恒为 YELLOW
+- **dialogue_replace_prompt 安全**:审计修 Medium#1,污染样本含 `{` 不再 KeyError
+- **card B/C 标准化**:审计修 Medium#4,选中 B/C 分支不再字段缺失 / 章号错乱
+
+下次 30 章真跑前不需要手动设置任何方法论字段,流程照旧 → 跑完跑 §7.1 三条 CLI 即可。
+
 ## 8. 续跑卡住的 draft 项目（2026-07-24 实战）
 
 `preset_worldbuild.py` 跑挂在 stage 2（MiniMax 突发 429 限流）后，
