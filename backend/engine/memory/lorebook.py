@@ -1,7 +1,16 @@
-"""keyword worldbook prototype (task 12 — OFFLINE ONLY)
+"""关键词世界书 —— 按本章实际内容触发的设定检索。
 
-Pure data → pure data offline keyword/alias trigger retrieval. NOT wired into
-the writer prompt. Used for offline precision/recall measurement only.
+2026-07-26 接线：本模块原本标注 "OFFLINE ONLY / NOT wired into the writer
+prompt"，写好了、带 21 个测试，但从未接进写作回路 —— 引擎的写作上下文只有 L2
+摘要 + 人物状态的**子串匹配**，没有任何按需检索。同类长篇写作项目的共识是
+「摘要 + 检索 + 图谱」多层记忆，检索层缺失正是几十万字后设定漂移的主因。
+
+现在 `build_lorebook_from_setting()` 从 setting_package 派生词条（主角 / 关键
+配角 / 世界名 / 力量体系与各等级 / 货币），`writer.build_writer_prompt()` 用
+本章任务与近期剧情做触发查询，把命中的设定原文注入 prompt。相比原来那个固定的
+【世界观速览】摘要块，这里是**相关性驱动 + 预算受控 + 认别名**的按需注入。
+
+Pure data → pure data：本模块不碰 IO、不调 LLM，可离线测精确率/召回率。
 
 Capabilities:
 - Chinese no-whitespace text matching
@@ -21,6 +30,119 @@ from __future__ import annotations
 import re
 import unicodedata
 from typing import Iterable
+
+
+# 词条优先级：数字越大越先占预算。主角/关键配角 > 世界名 > 体系 > 等级/货币。
+PRIORITY_PROTAGONIST = 5
+PRIORITY_CHARACTER = 4
+PRIORITY_WORLD = 4
+PRIORITY_POWER_SYSTEM = 3
+PRIORITY_DETAIL = 2
+
+
+def _clip(s: object, n: int) -> str:
+    return str(s or "").strip()[:n]
+
+
+def _entry(key: str, content: str, priority: int, aliases: list | None = None) -> dict | None:
+    """构造一条词条；key 或 content 为空就返回 None（由调用方过滤）。"""
+    key = (key or "").strip()
+    content = (content or "").strip()
+    if not key or not content:
+        return None
+    return {
+        "key": key,
+        "aliases": [a for a in (aliases or []) if a and str(a).strip() and str(a).strip() != key],
+        "content": content,
+        "priority": priority,
+    }
+
+
+def build_lorebook_from_setting(setting: dict) -> list[dict]:
+    """从 setting_package 派生世界书词条。
+
+    只用已有数据，不新增任何字段或存储。字段来源见
+    `backend/schema/setting_package.schema.json`。
+
+    刻意**不**把 `world_setting.unique_elements` 做成词条：它们是整句描述
+    （如「债务可以具象化为实体」），拿来当关键词会匹配不到任何东西，
+    只会白占预算。这类总览信息由 writer 的【世界观速览】块负责。
+    """
+    if not isinstance(setting, dict):
+        return []
+
+    out: list[dict] = []
+
+    mc = setting.get("protagonist") or {}
+    if isinstance(mc, dict):
+        parts = [
+            _clip(mc.get("background"), 120),
+            _clip(mc.get("personality"), 80),
+            f"初始境界：{_clip(mc.get('initial_power_level'), 30)}"
+            if mc.get("initial_power_level") else "",
+            "口癖：" + "、".join(str(q) for q in (mc.get("speech_quirks") or [])[:3])
+            if mc.get("speech_quirks") else "",
+        ]
+        out.append(_entry(_clip(mc.get("name"), 30),
+                          "｜".join(p for p in parts if p),
+                          PRIORITY_PROTAGONIST))
+
+    for c in (setting.get("key_characters") or []):
+        if not isinstance(c, dict):
+            continue
+        parts = [
+            _clip(c.get("role"), 20),
+            _clip(c.get("background"), 120),
+            "口癖：" + "、".join(str(q) for q in (c.get("speech_quirks") or [])[:3])
+            if c.get("speech_quirks") else "",
+        ]
+        out.append(_entry(_clip(c.get("name"), 30),
+                          "｜".join(p for p in parts if p),
+                          PRIORITY_CHARACTER))
+
+    ws = setting.get("world_setting") or {}
+    if isinstance(ws, dict):
+        out.append(_entry(_clip(ws.get("surface_world_name"), 30),
+                          f"表世界。{_clip(ws.get('hidden_world_history'), 150)}"
+                          if ws.get("hidden_world_history") else "表世界（故事主舞台）",
+                          PRIORITY_WORLD))
+        out.append(_entry(_clip(ws.get("hidden_world_name"), 30),
+                          f"里世界。{_clip(ws.get('hidden_world_history'), 150)}"
+                          if ws.get("hidden_world_history") else "里世界（隐藏设定）",
+                          PRIORITY_WORLD))
+
+    ps = setting.get("power_system") or {}
+    if isinstance(ps, dict):
+        levels = [lv for lv in (ps.get("levels") or []) if isinstance(lv, dict)]
+        level_names = [_clip(lv.get("name"), 20) for lv in levels]
+        level_names = [n for n in level_names if n]
+        ladder = " → ".join(level_names)
+        out.append(_entry(
+            _clip(ps.get("name"), 30),
+            "｜".join(p for p in [_clip(ps.get("description"), 120),
+                                  f"等级：{ladder}" if ladder else ""] if p),
+            PRIORITY_POWER_SYSTEM,
+            aliases=level_names,
+        ))
+        for idx, lv in enumerate(levels):
+            name = _clip(lv.get("name"), 20)
+            desc = _clip(lv.get("description") or lv.get("desc"), 100)
+            pos = f"第 {idx + 1} 级/共 {len(levels)} 级"
+            out.append(_entry(name, f"{pos}。{desc}" if desc else pos, PRIORITY_DETAIL))
+        out.append(_entry(_clip(ps.get("currency"), 20),
+                          f"{_clip(ps.get('name'), 30)} 的资源单位" if ps.get("name")
+                          else "力量体系的资源单位",
+                          PRIORITY_DETAIL))
+
+    # 去重（同 key 保留优先级最高的那条）
+    best: dict[str, dict] = {}
+    for e in out:
+        if e is None:
+            continue
+        cur = best.get(e["key"])
+        if cur is None or e["priority"] > cur["priority"]:
+            best[e["key"]] = e
+    return list(best.values())
 
 
 def normalize(s: str) -> str:

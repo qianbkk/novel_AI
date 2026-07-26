@@ -191,6 +191,51 @@ def _build_world_block(task: dict, setting: dict) -> str:
     return "【世界观速览（写作时必须遵守，不得违背）】\n" + "\n".join(parts) + "\n"
 
 
+# 世界书注入预算（字符）。刻意保守：writer prompt 已经有 10+ 个约束块，
+# 再堆下去 LLM 的遵守率会掉（07-Real-LLM-Testing.md §4 已观察到长 prompt
+# 连输出格式都不守）。世界书只补「本章真正会用到的那几条设定原文」。
+LOREBOOK_BUDGET_CHARS = 900
+
+
+def _build_lorebook_block(task: dict, context: dict, setting: dict) -> str:
+    """按本章实际内容触发的设定原文注入。
+
+    2026-07-26：engine 的写作上下文原本只有 L2 摘要 + 人物状态子串匹配，
+    没有任何按需检索 —— `memory/lorebook.py` 写好且带测试，却从未接线。
+    检索层缺失是长篇设定漂移的主因（同类项目普遍是「摘要 + 检索 + 图谱」）。
+
+    触发查询用「本章要写什么 + 最近发生了什么」拼成，而不是拿整本设定去灌：
+    命中的才注入，且总量受 LOREBOOK_BUDGET_CHARS 限制。
+    """
+    try:
+        from ..memory.lorebook import build_lorebook_from_setting, match as _lore_match
+        entries = build_lorebook_from_setting(setting)
+        if not entries:
+            return ""
+        query = "\n".join(str(x) for x in [
+            task.get("chapter_goal", ""),
+            task.get("core_conflict", ""),
+            task.get("plot_progression", ""),
+            task.get("shuang_description", ""),
+            " ".join(task.get("main_characters") or []),
+            context.get("recent_events", ""),
+            context.get("last_chapter_ending", ""),
+            " ".join(str(t) for t in (context.get("active_threads") or [])),
+        ] if x)
+        hits = _lore_match(entries, query, budget=LOREBOOK_BUDGET_CHARS)
+        if not hits:
+            return ""
+        lines = "\n".join(f"  · {h['key']}：{h['content']}" for h in hits)
+        return (
+            "\n【本章相关设定（原文，必须与之一致；未列出的设定不要自行发明）】\n"
+            + lines + "\n"
+        )
+    except Exception:
+        # 世界书是增强项，失败不该阻断写作 —— 但要留下信号，不静默吞掉
+        log.exception("_build_lorebook_block failed; 本章降级为无世界书注入")
+        return ""
+
+
 def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, str]:
     """Build (cached_system_prefix, dynamic_user_prompt).
 
@@ -207,6 +252,8 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
     # 300 章实测里 writer 眼中的世界只剩"主角等级"一个字符串。
     # 这里拼一个紧凑的【世界观速览】块（预算 ~400-600 字），全量丢弃 → 摘要注入。
     world_block = _build_world_block(task, setting)
+    # 世界书按需检索（2026-07-26 接线）：世界观速览给总貌，世界书给本章要用到的原文
+    lorebook_block = _build_lorebook_block(task, context, setting)
 
     genre_instr    = _genre_instruction(genre)
     if task.get("is_final_chapter"):
@@ -385,7 +432,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 是否弧高潮：{'是（全力以赴）' if task.get('is_arc_climax') else '否'}
 {stakes_block}{dilemma_block}{thread_block}{info_block}{anchor_block}{emotion_block}
 
-{world_block}【主角状态】
+{world_block}{lorebook_block}【主角状态】
 姓名：{mc_name} ｜ 等级：{context.get('protagonist_level','凡人')} ｜ 点数：{context.get('protagonist_points',0)}
 道具：{', '.join(context.get('inventory', []) or []) or '无'}
 场景：{context.get('scene_location','未指定')} ｜ 时间：{context.get('time_context','未指定')}
