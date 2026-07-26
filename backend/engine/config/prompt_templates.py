@@ -89,7 +89,7 @@ POV_LOCK_INSTRUCTION = """
 【POV 视角锁定约束】（每章必检）
 
 1. 默认第一人称 POV 锁定主角：
-   - 本章全篇应从主角视角出发（"林渊看到/听见/想到"）
+   - 本章全篇应从主角视角出发（"{主角}看到/听见/想到"）
    - 严禁"穿越式跳视角"（不写 A 突然看到 B 的内心）
    - 单章 POV 切换次数 ≤ 2 次
 
@@ -104,6 +104,17 @@ POV_LOCK_INSTRUCTION = """
 
 ⚠ 反模式：单章 3+ 次 POV 切换、视角与场景脱节、全知视角泄漏
 """
+
+
+def get_pov_lock_instruction(protagonist_name: str = "") -> str:
+    """把 POV_LOCK_INSTRUCTION 里的 `{主角}` 占位替换成本书真实主角名。
+
+    2026-07-26：常量原文写死了测试项目的主角名「林渊」，会随每章 prompt 发给
+    真实 LLM —— 其它题材的项目等于被塞进一个不存在的角色名。改成占位符后由本
+    函数按 setting.protagonist.name 渲染；拿不到名字时退回中性的「主角」。
+    """
+    name = (protagonist_name or "").strip() or "主角"
+    return POV_LOCK_INSTRUCTION.replace("{主角}", name)
 
 
 # ═══════════════════════════════════════════════

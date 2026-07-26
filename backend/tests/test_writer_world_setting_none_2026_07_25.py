@@ -54,8 +54,12 @@ def test_build_writer_prompt_with_world_setting_none():
     sys_d, usr_p = build_writer_prompt(task, _make_minimal_context(), setting)
     assert isinstance(sys_d, str)
     assert isinstance(usr_p, str)
-    # 默认 fallback 到 "云州"
-    assert "表世界「云州」" in usr_p
+    # 2026-07-26：原断言是 `"表世界「云州」" in usr_p`，锁定的是一个缺陷 ——
+    # 缺表世界名时 fallback 到测试项目的「云州」，会把别的书的专名塞进任意项目的
+    # prompt。现在改为降级成不提任何专名的中性约束。
+    # 见 test_writer_prompt_no_project_leak_2026_07_26.py。
+    assert "表世界「" not in usr_p
+    assert "必须原样复用上文给出的名称" in usr_p
 
 
 def test_build_writer_prompt_with_world_setting_empty_dict():
@@ -69,7 +73,9 @@ def test_build_writer_prompt_with_world_setting_empty_dict():
         "power_system": {},
     }
     sys_d, usr_p = build_writer_prompt(task, _make_minimal_context(), setting)
-    assert "表世界「云州」" in usr_p
+    # 同上：空 dict 也不得发明「云州」，降级为中性约束
+    assert "表世界「" not in usr_p
+    assert "必须原样复用上文给出的名称" in usr_p
 
 
 def test_build_writer_prompt_with_world_setting_populated():

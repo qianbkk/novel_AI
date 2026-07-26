@@ -24,7 +24,7 @@ from ..memory.manager import get_writer_context, maybe_update_style_samples
 from ..config.prompt_templates import (
     get_genre_instruction, get_hook_guidance,
     get_character_voice_reminder, get_methodology_instruction,
-    POV_LOCK_INSTRUCTION,
+    POV_LOCK_INSTRUCTION, get_pov_lock_instruction,
     UNIVERSAL_WRITING_RULES, EMOTION_CORES,
 )
 # 简化（#45）：writer.py 之前自己实现 _call_with_budget（约 30 行重试逻辑），
@@ -221,8 +221,41 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
     # 但 Python 解析 `setting.get('world_setting') or {{}}` 时把 `{{}}` 当 set literal
     # （含 dict 元素），触发 TypeError: unhashable type: 'dict'。
     # 修法：在 f-string 外提前算好 _surface_world_name，用 {name} 占位
+    #
+    # 2026-07-26 修跨项目污染：这里的 fallback 原本是 "云州"，而下面的
+    # 【世界观设定一致性硬约束】写死了测试项目的角色名（林渊 / 苏晚栀 / 孟浩 /
+    # 顾青锋）。任何其它题材的项目都会收到「必须使用林渊」这条硬指令 —— 与同一
+    # 个 prompt 里的【关键人物】块直接矛盾，诱导 LLM 串味写出别的书的专名。
+    # 现在世界名与角色名全部按 setting 动态渲染，缺失时降级为不提名字的通用约束。
     ws = setting.get("world_setting") or {}
-    _surface_world_name = ws.get("surface_world_name") or "云州"
+    _surface_world_name = ws.get("surface_world_name") or ""
+
+    roster: list[str] = []
+    for _name in ([mc_name] + list(task.get("main_characters") or [])
+                  + [(_c or {}).get("name") for _c in (setting.get("key_characters") or [])]):
+        if _name and _name not in roster:
+            roster.append(str(_name))
+    roster_str = " / ".join(roster[:8])
+
+    _consistency_lines: list[str] = []
+    if roster_str:
+        _consistency_lines.append(
+            f"- 本章必须严格使用上面【关键人物】列出的角色名（{roster_str}），不得改名、合并、拆分"
+        )
+    _consistency_lines.append("- 不得新增未列出的新角色名")
+    if _surface_world_name:
+        _consistency_lines.append(
+            f"- 表世界「{_surface_world_name}」+ 里世界设定（如力量体系 / 势力名 / 地名）"
+            "必须原样复用，不要重新发明同义词"
+        )
+    else:
+        _consistency_lines.append(
+            "- 世界观设定（力量体系 / 势力名 / 地名）必须原样复用上文给出的名称，不要重新发明同义词"
+        )
+    _consistency_lines.append(
+        "- 严禁「吞设定」：本章正面提及的关键人物 / 伏笔 / 地名，本章正文里至少要出现一次"
+    )
+    world_consistency_block = "【世界观设定一致性硬约束】\n" + "\n".join(_consistency_lines)
 
     # 4 招方法论（2026-07-25 战略审视 Commit 0）：但/但是 / 信息差 / 3 层期待感 / 模块化叙事
     # 默认全开；如果 task 标记了 "disable_methodology"（如终章/草稿模式）可降级为子集
@@ -377,11 +410,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 
 【本章出场人物】{', '.join(task.get('main_characters', []) or [])}
 
-【世界观设定一致性硬约束】
-- 本章必须严格使用上面【关键人物】列出的角色名（林渊 / 苏晚栀 / 孟浩 / 顾青锋 等），不得改名、合并、拆分
-- 不得新增未列出的新角色名
-- 表世界「{_surface_world_name}」+ 里世界设定（如力量体系 / 势力名 / 地名）必须原样复用，不要重新发明同义词
-- 严禁「吞设定」：本章正面提及的关键人物 / 伏笔 / 地名，本章正文里至少要出现一次
+{world_consistency_block}
 
 【本章禁止事项】
 {forbidden_str}
@@ -395,7 +424,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 
 {methodology_block}
 
-{POV_LOCK_INSTRUCTION}
+{get_pov_lock_instruction(mc_name)}
 现在开始写第{task.get('chapter_number', 0)}章。
 
 【输出格式】严格 JSON，不要任何 markdown fence 或额外文字：
