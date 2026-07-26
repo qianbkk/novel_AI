@@ -1,36 +1,35 @@
 # CLAUDE.md
 
-本文件是仓库级长期约束。开始任何任务前先读 `README.md`、`docs/INDEX.md` 和本文件；具体架构以 `docs/wiki/` 与源码为准。
+仓库级长期约束。只放系统级规则；具体架构与操作细节以 `README.md`、`docs/INDEX.md`、`docs/wiki/` 和源码为准，开工前先读。
 
 ## 项目边界
 
-- 后端是 FastAPI + SQLAlchemy，前端是 React + TypeScript + Vite。
-- `backend/engine` 是 LangGraph 长篇写作引擎，通过独立子进程运行。
-- 后端与引擎以绑定目录中的 JSON/TXT 文件显式同步，不要擅自改成进程内调用。
-- 复用现有 Schema、Provider 路由、角色分配、预算、质量门、分层记忆和 BridgeRun；不要建立平行系统。
+- 后端 FastAPI + SQLAlchemy，前端 React + TypeScript + Vite。
+- `backend/engine` 是 LangGraph 长篇写作引擎，以独立子进程运行，与后端只通过绑定目录里的 JSON/TXT 文件同步 —— 不要改成进程内调用。
+- 复用现有 Schema、Provider 路由、角色分配、预算、质量门、分层记忆和 BridgeRun，不建平行系统。
 
-## 必须保持的不变量
+## 不变量
 
-- 所有 project-scoped API 必须执行 ownership 校验；生产模式不得退化为匿名访问。
-- Provider key、JWT、cookie、Authorization、完整 prompt 和模型原始敏感响应不得写入日志、SSE 或错误响应。
-- 所有 LLM 调用必须走现有路由并计入预算；禁止绕过质量门或静默吞掉调用失败。
-- 引擎落盘应使用现有原子写入模式；重复执行、进程中断和恢复不得覆盖已完成章节或重复回写状态。
-- 旧数据库、旧章节 meta 和旧设定包保持向后兼容。数据库结构变化必须有 Alembic/迁移方案和回归测试。
-- 不复制许可证不兼容的第三方代码。外部项目只借鉴思想，代码复用前先核对许可证。
+- project-scoped API 必须做 ownership 校验；生产模式不得退化为匿名访问。
+- Provider key、JWT、cookie、Authorization、完整 prompt 和模型原始敏感响应不得进日志、SSE 或错误响应。
+- 所有 LLM 调用走现有路由并计入预算；不得绕过质量门或静默吞掉调用失败。**失败要响亮**：故障转移、降级、占位兜底都必须留下明确信号。
+- prompt 里不得出现任何具体项目的专名（角色名/地名/世界名）—— 一律从 setting 渲染，缺失时降级为中性措辞。
+- 引擎落盘用现有原子写入模式；重复执行、进程中断和恢复不得覆盖已完成章节或重复回写状态。
+- 旧数据库、旧章节 meta、旧设定包保持向后兼容；表结构变化必须有迁移方案和回归测试。
+- 不复制许可证不兼容的第三方代码。
 
 ## 修改规则
 
-- 先调查真实调用链，再写能复现问题的测试，再做最小实现。
-- 保留工作区已有改动；不要回滚、覆盖或格式化任务范围外的文件。
-- 未经任务明确授权，不增加依赖、环境变量、数据库表、公共 API，不修改核心 Agent prompt 或 LangGraph 拓扑。
-- 不以通过测试为目的删除、跳过、放宽断言或扩大 mock。
-- 不创建 phase/iteration/audit 报告。当前行为更新到已有主题文档，历史过程留在 Git。
-- 临时输出放在已忽略的 `docs/runs/`、`docs/drafts/` 或系统临时目录，不提交运行产物和真实用户数据。
-- Windows 是主要开发环境；路径处理同时考虑 Windows 和 POSIX，文件读写显式使用 UTF-8。
+- 先查真实调用链 → 再写能复现问题的测试 → 再做最小实现。
+- 保留工作区已有改动；不回滚、覆盖或格式化任务范围外的文件。
+- 不以通过测试为目的删除、跳过、放宽断言或扩大 mock。**发现断言锁定的是缺陷时，改成断言正确行为并写明原因**，不要默默删掉。
+- 不增加依赖、环境变量、数据库表或公共 API，除非任务明确要求。
+- 不创建 phase/iteration/audit 报告；当前行为更新到已有主题文档，过程留在 Git。临时产物放已忽略的 `docs/runs/`、`docs/drafts/`。
+- Windows 是主要开发环境；路径同时兼容 Windows 和 POSIX，文件读写显式 UTF-8。
 
 ## 验证
 
-行为测试和结构不变量测试必须使用两个独立 pytest 进程：
+行为测试与结构不变量测试必须分两个 pytest 进程：
 
 ```powershell
 pytest backend/tests --ignore=backend/tests/invariants
@@ -38,23 +37,14 @@ pytest backend/tests/invariants
 python -m compileall -q backend/app backend/engine backend/scripts backend/tests
 npm --prefix frontend run build
 git diff --check
-git status --short
 ```
 
-可以先运行目标测试，但交付时必须报告实际运行的命令、结果、未验证项和剩余风险。不得声称未实际运行的检查已经通过。
+可以先跑目标测试，但交付时必须报告实际运行的命令、结果、未验证项和剩余风险，并与改动前的基线对照——不得把既有失败说成新回归，也不得声称未实际运行的检查已通过。
 
-## 真实 LLM 测试经验（2026-07-22 30 章实战）
-
-跑真实端到端（30+ 章真 LLM 生成）前必看 `docs/wiki/07-Real-LLM-Testing.md`——本节是核心要点速览。
-
-- **不要"健壮地"把脏数据透传下游**。章节标题问题 #8 教训：5 处独立处理 title 都没解析 JSON 包装，降级路径不带"脏数据"信号。**本质修复 = 在最早环节（writer 阶段）就解析干净**。
-- **MiniMax-M3 30 章实战**：单章 3-5 min、HTTP 529 高频、Token Plan 速率限制 (status_code 2062) 30 章后大概率撞。**6 attempts + 2-60s backoff + before_sleep print** 必备。
-- **master_key 漂移**：每次重启 uvicorn 用同一 `backend/data/.dev_master_key` 文件 + 同 env 启动；跨进程**必须**先删旧 Provider 重建（不同进程 master key 不一致）。
-- **bridge subprocess env**：`engine/workers/run_bridge_subprocess.py` 顶部已加载 .env 兜底，**父进程（uvicorn）也必须用 .env env 启动**，否则 env 透传失败。
-- **真实 LLM 跑全 audit 30 章超预算**：默认 $0.5 不够，实际 $0.6-0.8。要么升 Token Plan 要么 `audit_mode=lite`。
+跑真实 LLM 端到端前先读 `docs/wiki/07-Real-LLM-Testing.md`（成本、限流、master_key 漂移、env 透传等踩坑均已沉淀在那里）。
 
 ## Git
 
 - 禁止 `git reset --hard`、`git checkout --`、强制推送和破坏性清理。
-- 一个任务对应一个聚焦提交；提交前检查 `git diff --stat` 和 `git diff --check`。
-- 除非用户明确要求，不 push、不合并到 `main`、不改写历史。
+- 一个任务一个聚焦提交；提交前看 `git diff --stat` 和 `git diff --check`。
+- 除非用户明确要求，不 push、不合并、不改写历史。
