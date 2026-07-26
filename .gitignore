@@ -26,6 +26,9 @@ backend/data/
 # Personal tooling scratch dirs (本地自查，不入库)
 .claude-viz/
 .understand-anything/
+# Session runtime artifacts (子 agent worktree 快照 + 本地 bridge driver,不进仓)
+.claude/
+.codex/
 
 # OS / editor
 .DS_Store
