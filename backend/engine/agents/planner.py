@@ -390,44 +390,87 @@ def _merge_snapshot_into_setting(setting: dict, snap: dict) -> dict:
             setting["foreshadowing_seeds"] = fs_seeds
 
     # ── 卷级骨架 → arc_outline ──
+    #
+    # 2026-07-27 修（Phase B 真实 LLM 冒烟暴露）：
+    # worldbuild 落库的 world_settings.plot_skeleton_json 存的**已经是 arc 形态**
+    # （arc_id / arc_name / arc_goal / arc_climax_description / ...），
+    # 而旧实现按"卷"形态读 vol.get("title") / vol.get("summary") —— 这两个 key
+    # 在 arc 形态里根本不存在，导致 arc_goal 落成 ""，被 schema 拒绝，
+    # planner 每次 exit_code=1，整条写作链路卡死在第一步。
+    #
+    # 修法：两种形态都认。arc 形态按原字段名取，卷形态回退 title/summary。
+    # 不放宽 schema —— 真实数据里 arc_goal 有几百字完整内容，是被丢掉了。
     plot_skel = snap.get("plot_skeleton") or []
-    if plot_skel:
+    if isinstance(plot_skel, list) and plot_skel:
+        def _pick(vol: dict, *keys: str, default: str = "") -> str:
+            """按优先级取第一个非空字段（arc 形态名在前，卷形态名兜底）。"""
+            for k in keys:
+                v = vol.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v
+            return default
+
         arcs: list[dict] = []
         for i, vol in enumerate(plot_skel[:6], start=1):
+            if not isinstance(vol, dict):
+                continue  # 畸形元素跳过，不让整条链路崩
+            name = _pick(vol, "arc_name", "title", default=f"第{i}弧")
+            goal = _pick(vol, "arc_goal", "summary", default=f"{name}：待补充弧目标")
+            # 高潮/收尾优先用各自字段；缺失才退回 goal（而不是无脑全等于 summary，
+            # 那会让三个字段塌缩成同一句话，白白丢掉信息量）
+            climax = _pick(vol, "arc_climax_description", "climax", default=goal)
+            ending = _pick(vol, "arc_ending_state", "ending", default=goal)
+            est = vol.get("estimated_chapters")
+            chars = vol.get("new_characters_introduced")
             arcs.append({
                 "arc_id": i,
-                "arc_name": vol.get("title") or f"第{i}弧",
-                "arc_goal": vol.get("summary") or "",
-                "estimated_chapters": 30,
-                "arc_climax_description": vol.get("summary") or "",
-                "arc_climax_chapter_offset": 22,
-                "emotion_curve": "低开→持续上升→高潮→收尾",
-                "new_characters_introduced": [],
-                "arc_ending_state": vol.get("summary") or "",
-                "is_final_arc": i == len(plot_skel),
+                "arc_name": name,
+                "arc_goal": goal,
+                "estimated_chapters": est if isinstance(est, int) and est > 0 else 30,
+                "arc_climax_description": climax,
+                "arc_climax_chapter_offset": vol.get("arc_climax_chapter_offset") or 22,
+                "emotion_curve": _pick(vol, "emotion_curve",
+                                       default="低开→持续上升→高潮→收尾"),
+                "new_characters_introduced": chars if isinstance(chars, list) else [],
+                "arc_ending_state": ending,
+                "is_final_arc": False,  # 统一在末尾标定，避免补位后出现两个终弧
             })
         # planner 必须满足 ≥4 弧硬约束；plot_skeleton 不足 4 时用 snapshot
         # 弧 + setting 原有的 arc_outline 末尾补齐（保留 planner 的增量）
         if len(arcs) < 4:
             existing = list(setting.get("arc_outline") or [])
             for ea in existing:
-                ea.setdefault("arc_id", len(arcs) + 1)
+                if not isinstance(ea, dict):
+                    continue
+                ea = dict(ea)
+                n = len(arcs) + 1
+                ea["arc_id"] = n
+                # 既有弧也可能 arc_goal 为空 —— schema 会拒，这里补一个非空占位
+                if not str(ea.get("arc_goal", "")).strip():
+                    ea["arc_goal"] = f"{ea.get('arc_name') or f'第{n}弧'}：待补充弧目标"
+                ea["is_final_arc"] = False
                 arcs.append(ea)
                 if len(arcs) >= 4:
                     break
             while len(arcs) < 4:
+                n = len(arcs) + 1
                 arcs.append({
-                    "arc_id": len(arcs) + 1,
-                    "arc_name": f"第{len(arcs) + 1}弧",
-                    "arc_goal": "（来自 planner 增量）",
+                    "arc_id": n,
+                    "arc_name": f"第{n}弧",
+                    "arc_goal": f"第{n}弧：待补充弧目标（planner 自动补位）",
                     "estimated_chapters": 30,
-                    "arc_climax_description": "（来自 planner 增量）",
+                    "arc_climax_description": f"第{n}弧高潮：待补充",
                     "arc_climax_chapter_offset": 22,
                     "emotion_curve": "低开→持续上升→高潮→收尾",
                     "new_characters_introduced": [],
-                    "arc_ending_state": "（来自 planner 增量）",
-                    "is_final_arc": len(arcs) == 3,
+                    "arc_ending_state": f"第{n}弧收尾：待补充",
+                    "is_final_arc": False,
                 })
+        if arcs:
+            # 终弧只能有一个，且必须是最后一弧
+            for a in arcs:
+                a["is_final_arc"] = False
+            arcs[-1]["is_final_arc"] = True
         setting["arc_outline"] = arcs
 
     # ── tagline / title_candidates 不动：planner 的增量价值 ──
