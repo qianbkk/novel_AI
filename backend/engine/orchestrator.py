@@ -1012,6 +1012,20 @@ def run_orchestrator(state: OrchestratorState, max_chapters: int = 10) -> Orches
     print(f"🚀 Orchestrator | 目标{max_chapters}章 | 起始Ch{state.get('current_chapter',0)+1}")
     print(f"   {state.get('novel_id')} | 预算${state.get('budget_used_usd',0):.2f}/${state.get('budget_limit_usd',500):.0f}")
     print(f"{'='*60}\n")
+    # §A4：从 calibration_result.json 闭环 PASS_SCORE（路由阈值真来自校准）。
+    # 缺/损坏文件时 resolve_pass_score 显式告警并用 DEFAULT —— 不静默。
+    try:
+        from .config.pass_score import (
+            resolve_pass_score, DEFAULT_CALIBRATION_PATH,
+        )
+        cal_path = os.environ.get("NOVEL_CALIBRATION_PATH", DEFAULT_CALIBRATION_PATH)
+        value, label = resolve_pass_score(cal_path)
+        global PASS_SCORE
+        PASS_SCORE = value
+        print(f"🎯 质量门阈值 PASS_SCORE = {value:.2f}（来源：{label}）")
+    except Exception as e:
+        _log.warning("resolve_pass_score 异常，沿用模块默认 PASS_SCORE=%.2f：%s",
+                     PASS_SCORE, e)
     # graph 用 checkpointer 编译 → 必须传 config.configurable.thread_id
     # 否则 LangGraph 报 "Checkpointer requires one or more of the following
     # 'configurable' keys: thread_id, ..." → exit_code=1（你独立验证）

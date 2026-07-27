@@ -179,11 +179,41 @@ def run_calibration() -> dict:
     print(f"\n  总成本：${total_cost:.4f}")
     print(f"  校准整体：{'✅ 通过' if calibration_result['passed'] else '❌ 需要调整'}")
 
+    # 2026-07-27 §A4：落盘前补 recommended_pass_score，供
+    # engine.config.pass_score.resolve_pass_score 读出来给 orchestrator 用。
+    # 推导逻辑：取所有"被模型判为人写"且得分 ≥ GOOD_SCORE 的样本的 score 中位数。
+    # 无充足证据时落到 DEFAULT_PASS_SCORE（让 resolve_pass_score 仍能跑）。
+    calibration_result["recommended_pass_score"] = _recommend_pass_score(results)
+
     result_path = os.path.join(RESULT_DIR, "calibration_result.json")
     # 迭代 #49: 改用 atomic_write_json
     atomic_write_json(result_path, calibration_result)
     print(f"  结果已保存：{result_path}")
     return calibration_result
+
+
+def _recommend_pass_score(checker_results: dict) -> float:
+    """由校准结果推导推荐阈值。
+
+    直觉：把"评分器判定为人写"的样本中、分数最低的若干样本视为"勉强及格"，
+    取它们的中位数作为阈值 —— 校准出的阈值能通过这种"边界"样本，比默认
+    6.5 更有数据支撑。无样本时退回默认。
+    """
+    from ..config.pass_score import DEFAULT_PASS_SCORE
+    # 收集所有"label=human"的样本得分（评分器把它们判为人写 → 真样本）
+    human_scores: list[float] = []
+    for checker, samples in checker_results.items():
+        for s in samples:
+            if s.get("label") == "human":
+                human_scores.append(float(s.get("score", 0.0)))
+    if not human_scores:
+        return DEFAULT_PASS_SCORE
+    # 取最低 25% 分位作为"勉强及格"基准 —— 比最小值稳，比中位数严
+    human_scores.sort()
+    n = len(human_scores)
+    cutoff = max(1, n // 4)  # 至少 1 个
+    boundary = human_scores[:cutoff]
+    return sum(boundary) / len(boundary)
 
 
 def cmd_report() -> None:
