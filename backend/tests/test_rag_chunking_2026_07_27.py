@@ -35,11 +35,18 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+from pathlib import Path
 
-import pytest
+_TESTS_DIR = Path(__file__).resolve().parent
+if str(_TESTS_DIR) not in sys.path:
+    sys.path.insert(0, str(_TESTS_DIR))
 
-from app.rag.embedding import cosine_similarity
-from app.rag.retrieval import Chunk, retrieve_relevant_chunks, split_chapter_to_chunks
+import pytest  # noqa: E402
+
+from app.rag.embedding import cosine_similarity  # noqa: E402
+from app.rag.retrieval import Chunk, retrieve_relevant_chunks, split_chapter_to_chunks  # noqa: E402
+from _test_db import isolated_test_db  # noqa: E402,F401  -- chapter_factory 依赖
 
 
 # ─── 常量（spec 锚点，对照 architecture-roadmap-2026-07-27.md §A1）─────────
@@ -58,9 +65,15 @@ SEARCH_BUDGET_CHARS = 900
 
 @pytest.fixture
 def chapter_factory(isolated_test_db):
-    """造一个 project，返回 (add_chapter, project_id) 供检索测试插入数据。"""
+    """造一个 project，返回 (add_chapter, project_id) 供检索测试插入数据。
+
+    2026-07-27：add_chapter 同时落 EmbeddingChunk（场景切块），与真实链路
+    app/bridge/chapter_import.py 一致 —— 测试用 chapter_factory 插入一章就
+    等价于生产环境导入一章（chunk 已入库，可被检索）。
+    """
     from app.database import SessionLocal
     from app.models import Project, Chapter
+    from app.rag.retrieval import persist_chapter_chunks
 
     db = SessionLocal()
     try:
@@ -87,9 +100,16 @@ def chapter_factory(isolated_test_db):
                 content=content,
             )
             d.add(ch)
+            d.flush()
+            cid = ch.id
+            # 同步落场景切块（生产代码通过 chapter_import.add_chapter 走同样的路径）
+            asyncio.run(persist_chapter_chunks(
+                project_id=pid, chapter_id=cid, chapter_no=chapter_no,
+                content=content, db=d,
+            ))
             d.commit()
             d.refresh(ch)
-            return ch.id
+            return cid
         finally:
             d.close()
 
@@ -109,7 +129,8 @@ def fixed_vocab_embed(monkeypatch):
     """
     vocab = sorted(set("艾德里安莉拉凯恩深渊回廊夺回徽记对峙法师魔纹魔石回廊封锁雨夜市集"))
 
-    def _embed(text: str) -> list[float]:
+    async def _embed(text: str) -> list[float]:
+        # 真实 embed_text 是 async；mock 必须 await 才不报"object list can't be used in 'await'"
         text_chars = set(text)
         return [1.0 if c in text_chars else 0.0 for c in vocab]
 
@@ -194,16 +215,26 @@ def test_chunk_size_stays_in_target_range():
 
 
 def test_chunks_overlap_to_preserve_causality():
-    """块间重叠 1-2 句：相邻块的尾句应出现在下一块的开头（防切断因果）。"""
-    sentences = [f"第{i}句内容。" for i in range(1, 31)]
+    """块间重叠 1-2 句：相邻块的尾句应出现在下一块的开头（防切断因果）。
+
+    2026-07-27 测试修订：原断言用 30×5=150 字输入，与 §A1 切块目标区间
+    300-500 字冲突；且 60 字符 tail 与 2 句 overlap 假设不一致（2 句是
+    66 字但只覆盖最后 2 句，第 3 句不进下一块）。改为按 spec 直接断言：
+    块 1 的开头包含块 0 末尾的两句（overlap=CHUNK_OVERLAP_SENTENCES）。
+    """
+    sentences = [f"这是第{i}句的具体内容，长一些以便分块。" for i in range(1, 101)]
     content = "".join(sentences)
     chunks = split_chapter_to_chunks(content, chapter_no=1, source_id="c1")
-    assert len(chunks) >= 2
-    # 第一块的尾部应至少有一个完整句出现在任一后续块里
-    tail = chunks[0].text[-30:]
-    assert any(tail in c.text for c in chunks[1:]), (
-        f"块间无重叠：块 0 尾部 {tail!r} 不在任何后续块里"
-    )
+    assert len(chunks) >= 2, f"长内容应切多块，实际 {len(chunks)} 块"
+    head1 = chunks[1].text[:200]
+    # 块 1 开头应含句 "这是第24句的具体内容..." 和 "这是第25句的具体内容..."
+    # （块 0 末 3 句 = [23,24,25]，overlap=2 = 后两句进入块 1）
+    for s in sentences[23:25]:
+        assert s in head1, (
+            f"重叠契约破缺：句 {s[:30]!r} 不在下一块开头"
+        )
+    # 反向：块 0 的首句不应出现在块 1（验证切块真的"换"了内容，不是整段复制）
+    assert chunks[0].text[:20] not in chunks[1].text
 
 
 def test_chunks_preserve_head_and_tail():
