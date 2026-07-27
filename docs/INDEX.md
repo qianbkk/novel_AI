@@ -13,6 +13,7 @@ This directory documents the current system. Historical implementation plans, co
 - [Development](wiki/06-Dev-Setup.md): local setup, scripts, tests, and deployment.
 - [Real LLM testing](wiki/07-Real-LLM-Testing.md): 30-chapter end-to-end run experience, root causes, and runbook.
 - [Frontend runbook](wiki/08-Frontend-Runbook.md): user-facing operation flow + troubleshooting (no manual backend).
+- [Architecture roadmap](wiki/09-Architecture-Roadmap.md): what long-form quality still needs — gap analysis with code evidence, staged build tasks, and the 3→10→30→50 chapter test ladder.
 - [Architecture quick reference](wiki/ARCHITECTURE.md): concise operational view and invariants.
 
 ## Maintenance policy
