@@ -15,6 +15,7 @@ import type {
   BridgeStatus,
   BridgePendingItem,
   BridgeBudget,
+  BridgeMemory,
   NovelAIBinding,
   RuleConfig,
   PostProcessResult,
@@ -362,6 +363,11 @@ export const api = {
 
   getBridgeBudget: (projectId: string) =>
     request<BridgeBudget>(`/projects/${projectId}/bridge/budget`),
+
+  // 分层记忆快照（L2 热/冷/约束 + L5 弧归档）。伏笔逾期 / 未过质量门的章节 /
+  // tracker 解析失败都从这里读 —— 长篇跑飞前唯一能提前看到的信号。
+  getBridgeMemory: (projectId: string) =>
+    request<BridgeMemory>(`/projects/${projectId}/bridge/memory`),
 
   submitReview: (
     projectId: string,

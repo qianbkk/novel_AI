@@ -394,6 +394,85 @@ export interface BridgeBudget {
   [key: string]: unknown;
 }
 
+// ─── 分层记忆快照（GET /bridge/memory）───
+// 之前前端"记忆层"是拿章节数/字数硬算的伪指标（还标了本项目根本不存在的
+// L1/L3 层）。这套类型对应真实落盘的 L2 热/冷/约束 + L5 弧归档。
+export interface MemoryForeshadowing {
+  desc?: string;
+  planted_at_chapter?: number;
+  target_chapter?: number;
+  target_arc?: number;
+  due_chapter: number;
+  overdue: boolean;
+  [key: string]: unknown;
+}
+
+export interface MemoryStats {
+  last_updated_chapter: number;
+  total_chapters_tracked: number;
+  chapters_per_arc: number | null;
+  unverified_chapter_count: number;
+  unverified_chapters: number[];
+  foreshadowing_planted_count: number;
+  foreshadowing_resolved_count: number;
+  foreshadowing_overdue_count: number;
+  active_thread_count: number;
+  character_state_count: number;
+  constraint_count: number;
+  established_fact_count: number;
+  recent_summaries_total: number;
+  world_events_total: number;
+  tracker_parse_failure_count: number;
+  arc_count: number;
+}
+
+export interface BridgeMemory {
+  available: boolean;
+  l2_available: boolean;
+  l5_available: boolean;
+  novel_id?: string;
+  message?: string;
+  stats: MemoryStats;
+  l2: {
+    hot?: {
+      protagonist_level?: string | null;
+      protagonist_level_num?: number | null;
+      protagonist_points?: number | null;
+      inventory?: string[];
+      active_threads?: string[];
+      character_states?: Record<string, string>;
+      recent_summaries?: Array<{ chapter?: number; summary?: string; unverified?: boolean }>;
+      recent_events?: string;
+      scene_location?: string | null;
+      time_context?: string | null;
+      last_chapter_ending?: string;
+    };
+    cold?: {
+      world_events?: string[];
+      closed_threads?: string[];
+      resolved_foreshadowing?: string[];
+    };
+    constraints?: {
+      forbidden_constraints?: Array<Record<string, unknown>>;
+      established_facts?: Array<Record<string, unknown>>;
+      foreshadowing_planted?: MemoryForeshadowing[];
+    };
+    meta?: {
+      last_updated_chapter?: number | null;
+      total_chapters_tracked?: number | null;
+      chapters_per_arc?: number | null;
+      tracker_parse_failure_count?: number;
+      last_tracker_parse_failure_chapter?: number | null;
+    };
+  };
+  l5: {
+    arc_summaries?: Array<Record<string, unknown>>;
+    character_arcs?: Record<string, string>;
+    major_revelations?: string[];
+    compressed_history?: string;
+  };
+}
+
 // ════════════════════════════════════════════════════════════════════════════
 // 世界构建板块结构化类型
 // ════════════════════════════════════════════════════════════════════════════

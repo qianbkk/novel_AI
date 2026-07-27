@@ -16,7 +16,9 @@ from sse_starlette.sse import EventSourceResponse
 from ..auth import get_current_user_optional
 from ..auth_scope import is_production_mode, require_owned_project
 from ..bridge.chapter_import import import_chapters_from_novel_ai
-from ..bridge.reports import apply_review, read_budget_log, read_pending, read_status
+from ..bridge.reports import (
+    apply_review, read_budget_log, read_memory, read_pending, read_status,
+)
 from ..bridge.setting_sync import pull_setting_package, push_setting_concept
 from ..database import SessionLocal, get_db
 from ..logging_setup import get_logger
@@ -548,6 +550,17 @@ def pending(project_id: str, request: Request, db: Session = Depends(get_db)):
 def budget(project_id: str, request: Request, db: Session = Depends(get_db)):
     _, binding = _get_project_and_binding(request, project_id, db)
     return read_budget_log(binding.novel_ai_dir)
+
+
+@router.get("/memory")
+def memory(project_id: str, request: Request, db: Session = Depends(get_db)):
+    """分层记忆快照（L2 热/冷/约束 + L5 弧归档）。
+
+    只读。在此之前记忆状态没有任何 API，伏笔逾期 / 质量债 / tracker 解析失败
+    这些长篇致命信号只能去绑定目录手翻 JSON。
+    """
+    _, binding = _get_project_and_binding(request, project_id, db)
+    return read_memory(binding.novel_ai_dir, binding.novel_id)
 
 
 @router.post("/review")

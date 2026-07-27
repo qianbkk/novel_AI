@@ -45,14 +45,6 @@ function runningBadge(p: Project) {
   );
 }
 
-function memoryDepth(p: Project, chapters: ChapterListItem[]) {
-  const l1 = p.status === "ready" ? 5 : 1;
-  const l2 = Math.min(12, chapters.length);
-  const words = chapters.reduce((a, c) => a + c.word_count, 0);
-  const l3 = Math.min(12, Math.floor(Math.log10(Math.max(1, words)) * 3) + 1);
-  return { l1, l2, l3 };
-}
-
 // 6 大模块元数据：显示在顶栏罗盘
 const MODULES = [
   { idx: "M01", title: "多重记忆防御", sub: "三道防线·可控推理", metric: "L1 弧段 + L2 衔接 + L3 压缩" },
@@ -394,7 +386,6 @@ export default function Dashboard() {
           {projects.map((p, i) => {
             const chs = chapterMap[p.id] || [];
             const recent = chs.slice(-3).reverse();
-            const mem = memoryDepth(p, chs);
             const projectWords = chs.reduce((a, c) => a + c.word_count, 0);
             const arcPct = Math.min(100, Math.round((chs.length / 200) * 100));
             // 弧曲线数据：取最近 12 章的累计字数
@@ -439,28 +430,29 @@ export default function Dashboard() {
                     : ""}
                 </div>
 
-                {/* 三道记忆防线 · 缩略视图 */}
+                {/* 项目产出概览。
+                    这里原本是三行标着 L1/L2/L3 的"三道记忆防线"，分母还是
+                    /5、/12 —— 但本项目的记忆只有 L2（热/冷/约束）和 L5（弧归档），
+                    L1/L3 根本不存在，那三行的数值全是拿 chapters.length 和
+                    log10(字数) 硬算的。列表页给每张卡片拉一次真实记忆不划算，
+                    所以改成如实展示已有数据；真实分层记忆看写作控制台的
+                    「分层记忆快照」面板。 */}
                 <div className="memory-stack" style={{ marginTop: 10, gap: 4 }}>
-                  <div className="memory-row memory-row--l1" style={{ padding: "6px 10px 6px 12px" }}>
-                    <span className="memory-row__layer">L1</span>
-                    <span className="memory-row__title" style={{ fontSize: 11.5 }}>
-                      主线记忆 · {mem.l1}/5 弧段
-                    </span>
-                    <span className="memory-row__count">{p.status === "ready" ? "已建立" : "草拟中"}</span>
-                  </div>
                   <div className="memory-row memory-row--l2" style={{ padding: "6px 10px 6px 12px" }}>
-                    <span className="memory-row__layer">L2</span>
+                    <span className="memory-row__layer">章</span>
                     <span className="memory-row__title" style={{ fontSize: 11.5 }}>
-                      衔接锁 · 已写 {chs.length} 章
+                      已写 {chs.length} 章
                     </span>
-                    <span className="memory-row__count">{mem.l2}/12</span>
+                    <span className="memory-row__count">{p.status === "ready" ? "设定已建立" : "设定草拟中"}</span>
                   </div>
                   <div className="memory-row memory-row--l3" style={{ padding: "6px 10px 6px 12px" }}>
-                    <span className="memory-row__layer">L3</span>
+                    <span className="memory-row__layer">字</span>
                     <span className="memory-row__title" style={{ fontSize: 11.5 }}>
-                      压缩存储 · {projectWords.toLocaleString()} 字
+                      累计 {projectWords.toLocaleString()} 字
                     </span>
-                    <span className="memory-row__count">深度 {mem.l3}/12</span>
+                    <span className="memory-row__count">
+                      {chs.length ? `均 ${Math.round(projectWords / chs.length).toLocaleString()}/章` : "—"}
+                    </span>
                   </div>
                 </div>
 

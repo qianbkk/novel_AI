@@ -2,11 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
-  BridgeLogLine, BridgePendingItem, BridgeStatus, BridgeBudget,
+  BridgeLogLine, BridgePendingItem, BridgeStatus, BridgeBudget, BridgeMemory,
   ChapterListItem, Project,
 } from "../types";
 import { useReveal } from "../hooks/useReveal";
 import { useToast } from "../components/Toast";
+import { MemoryPanel } from "../components/MemoryPanel";
 
 type PanelData = BridgeStatus | BridgePendingItem[] | Record<string, unknown>[] | Record<string, unknown> | null;
 
@@ -50,6 +51,9 @@ export default function BridgeConsole() {
   const [plotStep, setPlotStep] = useState<number>(0); // 当前 chapter 在七要素中的进度
   const [budget, setBudget] = useState<BridgeBudget | null>(null);
   const [budgetLoading, setBudgetLoading] = useState(false);
+  const [memory, setMemory] = useState<BridgeMemory | null>(null);
+  const [memoryLoading, setMemoryLoading] = useState(false);
+  const [memoryError, setMemoryError] = useState<string | null>(null);
   const [autoscroll, setAutoscroll] = useState(true);  // 日志自动滚动开关
   const eventSourceRef = useRef<EventSource | null>(null);
   const logEndRef = useRef<HTMLDivElement | null>(null);
@@ -93,6 +97,9 @@ export default function BridgeConsole() {
         toast.error("加载章节列表失败", String(e));
         setChapters([]);
       });
+    // 静默拉一次记忆快照：还没跑过引擎时后端返回 available:false（不是错误），
+    // 所以首屏不弹 toast，仅在真实请求失败时记 memoryError。
+    void fetchMemory(true);
     return () => eventSourceRef.current?.close();
   }, [projectId]);
 
@@ -232,6 +239,8 @@ export default function BridgeConsole() {
         api.listChapters(projectId!).then(setChapters).catch((e) => {
           toast.warn("刷新章节列表失败", String(e));
         });
+        // 记忆是每章 tracker 写的，跑完必刷 —— 否则面板永远停在开跑前的快照
+        void fetchMemory(true);
       });
       es.addEventListener("error", (e) => {
         try {
@@ -302,6 +311,24 @@ export default function BridgeConsole() {
     }
   }
 
+  async function fetchMemory(quiet = false) {
+    if (!projectId) return;
+    setMemoryLoading(true);
+    try {
+      const data = await api.getBridgeMemory(projectId);
+      if (!mountedRef.current) return;
+      setMemory(data);
+      setMemoryError(null);
+    } catch (e) {
+      if (!mountedRef.current) return;
+      // 记忆读不到是硬故障（长篇一致性全靠它），不静默
+      setMemoryError(String(e));
+      if (!quiet) toast.error("记忆快照拉取失败", String(e));
+    } finally {
+      if (mountedRef.current) setMemoryLoading(false);
+    }
+  }
+
   async function submitReview(item: BridgePendingItem, action: "accept" | "reject" | "edit") {
     if (!projectId) return;
     setError(null);
@@ -340,13 +367,6 @@ export default function BridgeConsole() {
       toast.error("保存失败", String(e));
     }
   }
-
-  // 记忆层温度：从章节数据粗略推算
-  // L2 热 = 高频上场章节数；L5 弧 = 已写章节数 / 25 (4 弧基准)
-  const totalWords = chapters.reduce((a, c) => a + c.word_count, 0);
-  const memPips = Math.min(10, Math.max(0, Math.ceil(chapters.length / 1.5))); // 0-10
-  const arcPips = Math.min(10, Math.max(0, Math.ceil((chapters.length / 25) * 10))); // 0-10
-  const pipsToShow = Array.from({ length: 10 }, (_, i) => i < memPips);
 
   if (!projectId) return <div className="banner banner-danger">缺少项目 ID。</div>;
 
@@ -425,40 +445,15 @@ export default function BridgeConsole() {
           </div>
         </div>
 
-        {/* 三个温度计：L2 衔接锁热度 · L3 压缩存储容量 · L5 弧进度 */}
-        <div className="memory-stack" style={{ marginBottom: 18 }}>
-          <div className="thermo">
-            <span className="thermo__label">L2 衔接锁热度</span>
-            <div className="thermo__pip-row">
-              {pipsToShow.map((filled, i) => (
-                <span
-                  key={i}
-                  className={`thermo__pip ${filled ? (i < 4 ? "is-cold" : i < 7 ? "is-cool" : i < 9 ? "is-warm" : "is-hot") : ""}`}
-                  style={filled ? undefined : { opacity: 0.35 }}
-                />
-              ))}
-            </div>
-            <span className="thermo__legend">{chapters.length} 章</span>
-          </div>
-          <div className="thermo">
-            <span className="thermo__label">L3 压缩存储</span>
-            <div className="thermo__pip-row">
-              {Array.from({ length: 10 }, (_, i) => i < Math.min(10, Math.floor(Math.log10(Math.max(1, totalWords)) * 2))).map((_, i) => (
-                <span key={i} className="thermo__pip is-cool" />
-              ))}
-            </div>
-            <span className="thermo__legend">{totalWords.toLocaleString()} 字</span>
-          </div>
-          <div className="thermo">
-            <span className="thermo__label">L5 弧进度</span>
-            <div className="thermo__pip-row">
-              {Array.from({ length: 10 }, (_, i) => i < arcPips).map((_, i) => (
-                <span key={i} className="thermo__pip is-cold" style={{ background: "var(--accent)", borderColor: "var(--accent)" }} />
-              ))}
-            </div>
-            <span className="thermo__legend">弧 {Math.floor(chapters.length / 25) + 1}/4</span>
-          </div>
-        </div>
+        {/* 分层记忆快照 —— 全部读自 GET /bridge/memory 的真实落盘文件。
+            这里以前是三个用 chapters.length / log10(字数) 硬算的温度计，
+            还标了本项目根本不存在的 L3 层：跑飞时它照样一片绿。 */}
+        <MemoryPanel
+          memory={memory}
+          loading={memoryLoading}
+          error={memoryError}
+          onRefresh={() => fetchMemory()}
+        />
 
         {/* 章节时间线 sparkline（最近 30 章字数曲线） */}
         {chapters.length > 0 && (() => {
