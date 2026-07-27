@@ -246,7 +246,7 @@ def run_checker(text: str, task: dict, audit_mode: str = "full") -> tuple[dict, 
     scores = []
 
     # 主评
-    r1, c1 = score_chapter(text, task, "checker_main")
+    r1, c1 = score_chapter(text, task, agent_name="checker_main")
     total_cost += c1
     s1 = calculate_weighted_score(r1.get("dimensions", {}))
     scores.append(s1)
@@ -254,13 +254,13 @@ def run_checker(text: str, task: dict, audit_mode: str = "full") -> tuple[dict, 
 
     if audit_mode == "full":
         # 交叉评 1
-        r2, c2 = score_chapter(text, task, "checker_cross1")
+        r2, c2 = score_chapter(text, task, agent_name="checker_cross1")
         total_cost += c2
         s2 = calculate_weighted_score(r2.get("dimensions", {}))
         scores.append(s2)
 
         # 交叉评 2
-        r3, c3 = score_chapter(text, task, "checker_cross2")
+        r3, c3 = score_chapter(text, task, agent_name="checker_cross2")
         total_cost += c3
         s3 = calculate_weighted_score(r3.get("dimensions", {}))
         scores.append(s3)
