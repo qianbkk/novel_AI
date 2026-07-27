@@ -551,7 +551,12 @@ export interface GraphNode {
 
 export interface GraphEdge {
   from_id: string;
+  /** 2026-07-27：后端补上 from_type / to_type，FactionGraph 需要它们区分
+   *  角色→势力 边。之前缺这两字段时，FactionGraph 用 i%5 合成边，
+   *  用户截图会出现"图上敌对但世界构建文本里没写"的虚假关系。 */
+  from_type?: string;
   to_id: string;
+  to_type?: string;
   relation: string;
   mutual: boolean;
   intensity: number | null;

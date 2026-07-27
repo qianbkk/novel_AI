@@ -430,10 +430,10 @@ export default function WorldBuild() {
                 />
               ) : (
                 <>
-                  {result.characters.length > 0 && (
+                  {result.characters.length > 0 && result.factions.length > 0 && (
                     <FactionGraph
-                      factions={result.factions}
-                      characters={result.characters}
+                      projectId={projectId!}
+                      factionNames={result.factions.map((f) => f.name)}
                     />
                   )}
                   <div className="legislation-grid">

@@ -198,6 +198,7 @@ def get_relations_graph(
 ):
     """完整关系图谱数据（供前端 SVG 渲染）。"""
     chars = db.query(Character).filter_by(project_id=project_id).all()
+    factions = db.query(Faction).filter_by(project_id=project_id).all()
     rels = db.query(EntityRelation).filter_by(project_id=project_id).all()
 
     return RelationGraphOut(
@@ -209,11 +210,23 @@ def get_relations_graph(
                 "role_kind": "character",
             }
             for c in chars
+        ] + [
+            {
+                "id": f.id,
+                "name": f.name,
+                "role": None,
+                # 前端用 role_kind 区分 character 与 faction 图节点 (FactionGraph
+                # 之前用的是 i%5 合成边，这里让 FactionGraph 接真实 faction 边)。
+                "role_kind": "faction",
+            }
+            for f in factions
         ],
         edges=[
             {
                 "from_id":   r.from_id,
+                "from_type": r.from_type,
                 "to_id":     r.to_id,
+                "to_type":   r.to_type,
                 "relation":  r.relation,
                 "mutual":    bool(r.mutual),
                 "intensity": r.intensity,
