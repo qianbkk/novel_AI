@@ -1,6 +1,6 @@
 # GitHub Actions CI — 2026-07-25 新增（修 P0 质量门）
 # 之前仓库无 CI，9 个 error + 19 个 warning 全靠人眼发现。
-# 现在 PR/push 自动跑：backend pytest 双进程 + frontend lint/typecheck/build。
+# 现在 PR/push 自动串行跑 backend 两层 pytest + frontend lint/typecheck/build。
 # 任何一步失败直接红 X，main 分支不允许合入。
 name: CI
 
@@ -26,10 +26,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r backend/requirements.txt pytest
-      - name: Behavior tests
-        run: pytest backend/tests --ignore=backend/tests/invariants -q
+      # 两层共享 SQLite/日志资源，必须在同一 job 中串行；并行会产生锁争用和假失败。
       - name: Invariant tests
         run: pytest backend/tests/invariants -q
+      - name: Behavior tests
+        run: pytest backend/tests --ignore=backend/tests/invariants -q
       - name: Compile check
         run: python -m compileall -q backend/app backend/engine backend/scripts backend/tests
       - name: Ruff (changed files only)
@@ -66,4 +67,5 @@ jobs:
       - name: TypeScript typecheck
         run: npm run typecheck
       - name: Production build
-        run: npm run build
+        # typecheck 已单独执行；这里避免 tsc -b 重复编译一次。
+        run: npm run build:vite

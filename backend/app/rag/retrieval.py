@@ -32,7 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models import Chapter, ChapterCharacter, Character, EmbeddingChunk
-from .embedding import embed_text, cosine_similarity
+from .embedding import embed_text, cosine_similarity, embedding_model_label
 
 REPETITION_THRESHOLD = 0.85  # 经验阈值；接入真实 embedding 模型后需要按实际相似度分布重新校准
 
@@ -104,25 +104,32 @@ async def add_chapter(project_id: str, chapter_no: int, title: str, content: str
         if c.name and c.name in content:
             db.add(ChapterCharacter(chapter_id=chapter.id, character_id=c.id))
 
-    # 向量侧：embed 整章正文，存一份 chunk
-    embedding = await embed_text(content)
-    db.add(
-        EmbeddingChunk(
-            project_id=project_id,
-            source_type="chapter",
-            source_id=chapter.id,
-            text_snippet=content[:200],
-            embedding_json=embedding,
-        )
+    # 向量侧统一按场景切块；不再额外写一条整章向量，避免双份索引与语义平均。
+    await persist_chapter_chunks(
+        project_id=project_id,
+        chapter_id=chapter.id,
+        chapter_no=chapter_no,
+        content=content,
+        db=db,
     )
-    db.flush()
-
-    warnings = check_repetition(project_id, chapter.id, embedding, db)
+    new_rows = db.query(EmbeddingChunk).filter_by(
+        project_id=project_id, source_type="chapter", source_id=chapter.id,
+    ).all()
+    warnings = check_repetition(
+        project_id, chapter.id,
+        [row.embedding_json for row in new_rows], db,
+    )
     db.commit()
     return {"chapter_id": chapter.id, "repetition_warnings": warnings}
 
 
-def check_repetition(project_id: str, chapter_id: str, embedding: list[float], db: Session) -> list[dict]:
+def check_repetition(
+    project_id: str,
+    chapter_id: str,
+    embeddings: list[list[float]],
+    db: Session,
+) -> list[dict]:
+    """按章节聚合最高场景相似度，避免同一旧章节因多个块重复告警。"""
     others = (
         db.query(EmbeddingChunk)
         .filter(
@@ -132,12 +139,23 @@ def check_repetition(project_id: str, chapter_id: str, embedding: list[float], d
         )
         .all()
     )
-    warnings = [
-        {"compared_chapter_id": other.source_id, "similarity": round(cosine_similarity(embedding, other.embedding_json), 3)}
-        for other in others
-    ]
-    warnings = [w for w in warnings if w["similarity"] >= REPETITION_THRESHOLD]
-    return sorted(warnings, key=lambda w: -w["similarity"])
+    best_by_chapter: dict[str, float] = {}
+    for other in others:
+        best = max(
+            (cosine_similarity(embedding, other.embedding_json) for embedding in embeddings),
+            default=0.0,
+        )
+        if best >= REPETITION_THRESHOLD:
+            best_by_chapter[other.source_id] = max(
+                best_by_chapter.get(other.source_id, 0.0), best,
+            )
+    return sorted(
+        (
+            {"compared_chapter_id": source_id, "similarity": round(similarity, 3)}
+            for source_id, similarity in best_by_chapter.items()
+        ),
+        key=lambda warning: -warning["similarity"],
+    )
 
 
 async def semantic_search_chapters(
@@ -155,15 +173,17 @@ async def semantic_search_chapters(
         chunks = [c for c in chunks if c.source_id in candidate_chapter_ids]
 
     query_embedding = await embed_text(query)
-    scored = [
-        {
-            "chapter_id": c.source_id,
-            "similarity": round(cosine_similarity(query_embedding, c.embedding_json), 3),
-            "snippet": c.text_snippet,
-        }
-        for c in chunks
-    ]
-    return sorted(scored, key=lambda s: -s["similarity"])[:top_k]
+    best_by_chapter: dict[str, dict] = {}
+    for chunk in chunks:
+        similarity = cosine_similarity(query_embedding, chunk.embedding_json)
+        current = best_by_chapter.get(chunk.source_id)
+        if current is None or similarity > current["similarity"]:
+            best_by_chapter[chunk.source_id] = {
+                "chapter_id": chunk.source_id,
+                "similarity": round(similarity, 3),
+                "snippet": chunk.text_snippet,
+            }
+    return sorted(best_by_chapter.values(), key=lambda s: -s["similarity"])[:top_k]
 
 
 # ─── 场景切块（2026-07-27 §A1 改造） ────────────────────────────
@@ -295,14 +315,16 @@ async def retrieve_relevant_chunks(
     scored.sort(key=lambda t: (-t[0], t[1].id))
     chosen = scored[:max(top_k * 4, 8)]  # 候选池留余地，让 budget 截断有选择
 
-    # 清掉进程级缓存（每次检索独立，避免跨测试污染；进程级是 in-memory 的简配）
-    _chapter_no_cache.clear()
+    source_ids = {row.source_id for _, row in chosen}
+    chapter_numbers = dict(
+        db.query(Chapter.id, Chapter.chapter_no).filter(Chapter.id.in_(source_ids)).all()
+    ) if source_ids else {}
 
     kept: list[dict] = []
     used = 0
     for sim, row in chosen:
         snippet = row.text_snippet or ""
-        ch_no = _chapter_no_cached(db, row.source_id)
+        ch_no = chapter_numbers.get(row.source_id, 0)
         if used + len(snippet) > budget_chars:
             if used == 0:
                 # 第一块就超预算：硬截到剩余预算，避免返回 0 块
@@ -329,51 +351,16 @@ async def retrieve_relevant_chunks(
     return kept
 
 
-def self_chapter_no(row, db: Session | None = None) -> int:
-    """从 EmbeddingChunk 反查所属章节号。
-
-    库内结构：EmbeddingChunk.source_id = chapter.id；Chapter.id 是字符串主键，
-    Chapter.chapter_no 才是用户视角的章号。EmbeddingChunk 与 Chapter 没建
-    SQLAlchemy relationship，所以这里做一次显式查询。
-
-    db 可选：retriever 主循环里已经查过一次 Chapter，缓存避免 N+1。
-    """
-    sid = getattr(row, "source_id", None)
-    if not sid or db is None:
-        return 0
-    try:
-        ch = db.query(Chapter).filter_by(id=sid).first()
-    except Exception:
-        return 0
-    if ch is None:
-        return 0
-    return ch.chapter_no if isinstance(ch.chapter_no, int) else 0
-
-
-# 简单的 in-call 缓存：source_id -> chapter_no，避免每个 chunk 都打一次 DB
-_chapter_no_cache: dict[str, int] = {}
-
-
-def _chapter_no_cached(db: Session, source_id: str) -> int:
-    if source_id in _chapter_no_cache:
-        return _chapter_no_cache[source_id]
-    ch = db.query(Chapter).filter_by(id=source_id).first()
-    no = ch.chapter_no if ch is not None and isinstance(ch.chapter_no, int) else 0
-    _chapter_no_cache[source_id] = no
-    return no
-
-
 # ─── 块入库（供 chapter_import / 手工 add_chapter 调用，§A1 改造兼容层）────
 
 async def persist_chapter_chunks(
     *, project_id: str, chapter_id: str, chapter_no: int, content: str,
     db: Session, source_type: str = "chapter",
 ) -> list[Chunk]:
-    """把一章切块并落 EmbeddingChunk（text_snippet 存块全文）。
-
-    与旧的 add_chapter() 路径并存：旧路径仍写一条整章向量以保兼容性；
-    新路径写场景块。两条路径都以 source_id = chapter_id 关联章节。
-    """
+    """幂等地把一章切块并落 EmbeddingChunk（text_snippet 存块全文）。"""
+    db.query(EmbeddingChunk).filter_by(
+        project_id=project_id, source_type=source_type, source_id=chapter_id,
+    ).delete(synchronize_session=False)
     chunks = split_chapter_to_chunks(content, chapter_no=chapter_no,
                                       source_id=chapter_id)
     if not chunks:
@@ -387,7 +374,7 @@ async def persist_chapter_chunks(
             source_id=chapter_id,
             text_snippet=c.text,   # 块全文，不再截前 200 字
             embedding_json=emb,
-            model="",  # 留空：从 embed_text 调用链自动记录（兼容旧字段）
+            model=embedding_model_label(),
         )
         db.add(row)
         out.append(c)

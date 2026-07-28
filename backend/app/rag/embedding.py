@@ -67,6 +67,12 @@ def _model_for(provider: str) -> str:
     return _settings().embedding_model or QWEN3_DEFAULT_MODEL
 
 
+def embedding_model_label() -> str:
+    """返回可公开记录的模型标签，不包含 API base 或凭据。"""
+    provider = _resolved_provider()
+    return "mock-ngram" if provider == "mock" else _model_for(provider)
+
+
 def _mock_ngram_embedding(text: str, dims: int = MOCK_EMBEDDING_DIMS) -> list[float]:
     vec = [0.0] * dims
     text = text or ""
