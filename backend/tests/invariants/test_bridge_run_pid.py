@@ -30,31 +30,37 @@ class TestBridgeRunPidColumns:
 class TestRecoverOrphanBridgeRuns:
     """_recover_orphan_bridge_runs 按 pid 活体探测分流。"""
 
-    def test_recover_only_dead_runs(self, db_bootstrap, tracked_project_id):
-        """pid 还活着 → 不动；pid 已死 → 标 failed；pid 为 NULL → 标 failed。"""
+    def test_recover_only_dead_runs(self, db_bootstrap, tracked_project_ids):
+        """pid 还活着 → 不动；pid 已死 → 标 failed；pid 为 NULL → 标 failed。
+
+        每个项目最多只能有一条 active run；不同场景必须使用不同项目，测试本身
+        不能绕过生产 partial unique index。
+        """
         from app.main import _recover_orphan_bridge_runs
 
-        project_id = tracked_project_id
+        alive_project_id, dead_project_id = tracked_project_ids
+        legacy_project_id = f"{dead_project_id}-legacy"
         db = SessionLocal()
         try:
-            db.add(Project(id=project_id, title="pid-test", genre="test",
-                           status="ready", config_json={}))
+            for project_id in (alive_project_id, dead_project_id, legacy_project_id):
+                db.add(Project(id=project_id, title="pid-test", genre="test",
+                               status="ready", config_json={}))
             db.commit()
 
             # 场景 1: 找一个**真活着**的进程（自己）。预期：不动。
             alive_pid = os.getpid()
             run_alive = BridgeRun(
-                project_id=project_id, command="run",
+                project_id=alive_project_id, command="run",
                 status="running", pid=alive_pid,
             )
             # 场景 2: pid=999999999 (基本不存在)。预期：标 failed。
             run_dead = BridgeRun(
-                project_id=project_id, command="run",
+                project_id=dead_project_id, command="run",
                 status="running", pid=999_999_999,
             )
             # 场景 3: 老数据没 pid。预期：标 failed (兼容旧 schema)。
             run_legacy = BridgeRun(
-                project_id=project_id, command="run",
+                project_id=legacy_project_id, command="run",
                 status="running", pid=None,
             )
             db.add_all([run_alive, run_dead, run_legacy])
@@ -78,6 +84,13 @@ class TestRecoverOrphanBridgeRuns:
             assert run_legacy.status == "failed"
             assert run_legacy.finished_at is not None
         finally:
+            db.query(BridgeRun).filter(
+                BridgeRun.project_id == legacy_project_id
+            ).delete(synchronize_session=False)
+            db.query(Project).filter(
+                Project.id == legacy_project_id
+            ).delete(synchronize_session=False)
+            db.commit()
             db.close()
 
     def test_alive_pid_not_marked_as_orphan(self, db_bootstrap, tracked_project_id):

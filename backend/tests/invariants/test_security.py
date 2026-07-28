@@ -622,9 +622,12 @@ class TestMasterKeyStableAcrossCalls:
         assert get_master_key().decode() == key_b, \
             "env 路径必须是 source-of-truth，切了 env 必须立刻用新 key"
 
-    def test_reset_master_key_cache_helper(self, monkeypatch):
+    def test_reset_master_key_cache_helper(self, monkeypatch, tmp_path):
         """reset_master_key_cache() 后下次 generate 必须拿到新 key（dev 分支）。"""
         self._clean_dev_state(monkeypatch)
+        from app import security
+        test_path = tmp_path / ".dev_master_key"
+        monkeypatch.setattr(security, "_DEV_MASTER_KEY_PATH", test_path)
         from app.security import get_master_key, reset_master_key_cache
         k1 = get_master_key()
         reset_master_key_cache()

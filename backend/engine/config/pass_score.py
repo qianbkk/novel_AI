@@ -1,6 +1,6 @@
-"""engine/config/pass_score.py — §A4 校准闭环到 PASS_SCORE
+"""engine/config/pass_score.py — 校准闭环到 PASS_SCORE
 
-背景（docs/drafts/architecture-roadmap-2026-07-27.md §A4）：
+问题背景：
 - 旧实现：PASS_SCORE=6.5 硬编码（orchestrator.py:67），从未被校准过
 - calibrate_checker.run_calibration() 的输出和落盘 calibration_result.json
   都没有 `recommended_pass_score` 字段

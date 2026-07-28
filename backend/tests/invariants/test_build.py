@@ -538,9 +538,9 @@ class TestMemorySaveAtomic:
         """
         from pathlib import Path
         manager_py = Path(BACKEND_ROOT) / "engine" / "memory" / "manager.py"
-        utils_py = Path(BACKEND_ROOT) / "engine" / "utils.py"
+        shared_atomic_io_py = Path(BACKEND_ROOT) / "shared" / "atomic_io.py"
         manager_content = manager_py.read_text(encoding="utf-8")
-        utils_content = utils_py.read_text(encoding="utf-8")
+        shared_atomic_io_content = shared_atomic_io_py.read_text(encoding="utf-8")
         manager_lines = manager_content.splitlines()
         body_start = None
         for i, line in enumerate(manager_lines):
@@ -563,16 +563,16 @@ class TestMemorySaveAtomic:
         assert "_atomic_write_json" in code_body, (
             "save_l5 必须调 _atomic_write_json helper（atomic write）"
         )
-        # helper 本体必须在 utils.py：def atomic_write_json(...) 必须存在 + 有 .tmp + os.replace
-        utils_lines = utils_content.splitlines()
+        # helper 本体已迁到 shared.atomic_io，engine.utils 只保留兼容 re-export。
+        shared_lines = shared_atomic_io_content.splitlines()
         helper_start = None
-        for i, line in enumerate(utils_lines):
+        for i, line in enumerate(shared_lines):
             if line.startswith("def atomic_write_json"):
                 helper_start = i + 1
                 break
-        assert helper_start is not None, "engine/utils.py 找不到 atomic_write_json helper（iter #39 后应在 utils）"
+        assert helper_start is not None, "shared/atomic_io.py 找不到 atomic_write_json helper"
         helper_lines = []
-        for line in utils_lines[helper_start:]:
+        for line in shared_lines[helper_start:]:
             if line.startswith("def ") or line.startswith("class "):
                 break
             helper_lines.append(line)

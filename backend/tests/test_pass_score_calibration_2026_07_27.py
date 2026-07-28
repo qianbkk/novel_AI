@@ -2,7 +2,7 @@
 
 架构审视 §A4 — 校准闭环到 PASS_SCORE。
 
-真实缺口（见 docs/drafts/architecture-roadmap-2026-07-27.md §A4）：
+真实缺口：
 - `engine/orchestrator.py:67` 把 `PASS_SCORE = 6.5` 写死成模块常量。
 - `engine/tools/calibrate_checker.py:182` 把校准结果落盘到
   `calibration_result.json`，但 `run_calibration()` 的输出和落盘文件都

@@ -126,9 +126,7 @@ LangGraph 状态机驱动的多 Agent 网文写作引擎，被后端以子进程
 
 ## 方法论内化与节拍校验（2026-07-25~26 战略审视交付）
 
-> 本节描述**当前已交付**的能力。来源是真实 30+ 章 LLM 测试后的战略审视与子代理审计;原始审视草稿见 `docs/drafts/strategic-review-2026-07-25.md`(`.gitignore` 本地保留)。所有识别 gap 已在 17 个聚焦 commit 内全部交付,审计发现的 3 处真实缺陷在 2 个修复合并 commit 内全部修复。
->
-> 附录「[从 backlog 到交付的 commit 映射](#从-backlog-到交付的-commit-映射)」给出审视文档原列的 7 个 backlog commit 与最终实现的对应关系。
+> 本节只描述当前可用能力。设计与审计过程保留在 Git 历史中，文档不依赖本地草稿或运行产物。
 
 ### 0. 关键事实速校(来自战略审视)
 
@@ -295,19 +293,4 @@ pytest backend/tests/invariants
 | `test_normalizer_force_branch_2026_07_26.py` | 9 | 审计修 Medium#1 |
 | `test_outline_card_standardize_2026_07_26.py` | 7 | 审计修 Medium#4 |
 
-### 5. 从 backlog 到交付的 commit 映射
-
-`docs/drafts/strategic-review-2026-07-25.md` 中按 5★ 优先级排的 8 个 backlog commit,本轮全部交付(Commit 0~7 共 14 个聚焦 commit,加审计修 2 commit = 16):
-
-| Backlog commit | 实际交付(来源 git log) |
-|---|---|
-| **Commit 0**:4 招方法论写入 prompt_templates.py | `prompt_templates.py` 加 `INFO_ASYMMETRY`/`BUT_LAW`/`THREE_LAYER_HOOK`/`MODULAR_NARRATIVE`/`POV_LOCK`/`EMOTION_CORES`;`writer.py` 在 user_prompt 渲染;顺手修原 `{{}}` f-string bug |
-| **Commit 1**:但是法则 + stakes + dilemma 字段扩展 | `state.py:ChapterTask` 加 `stakes` + `dilemma`(NotRequired);`outline.py` 标准化 + writer prompt 渲染 + 测试 |
-| **Commit 2**:info_asymmetry + narrative_thread + anchor_to 字段 | `state.py:ChapterTask` 加 3 字段;outline 标准化 + writer 渲染 + 测试 |
-| **Commit 3**:emotion_core + emotion_intensity 字段 | `state.py:ChapterTask` 加 2 字段;outline 标准化 + writer 渲染 + 测试 |
-| **Commit 4**:beat_checker 离线工具 | `engine/tools/beat_checker.py`(扮猪吃虎三阶段 + 升级循环 + 情绪多样性 + 钩子存在),CLI 红/黄/绿 |
-| **Commit 5**:对话癌 normalizer 阈值修正 + 强制替换 | `normalizer.py` 阈值 5→25/50,4 策略替换 |
-| **Commit 6**:POV 视角锁定 prompt 约束 | `prompt_templates.POV_LOCK_INSTRUCTION` + `normalizer.detect_pov_switching` + 切换密度 issues |
-| **Commit 7**:30 章自动验收脚本扩到 12 项 | `acceptance_tests.py` 加 AC-6~AC-12(但是法则密度/信息差多样性/情绪多样性/三线分布 + 复用 beat_checker/normalizer) |
-
-实际交付多出 2 个 commit(wiki backlog 文档 + 测试 commit),见 [00-Home.md](00-Home.md) 工程化基线说明。
+历史规划、审计过程与提交拆分不在活跃文档重复维护；需要追溯时使用 Git。当前能力、入口和约束以上述章节及源码为准。

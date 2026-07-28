@@ -2,7 +2,7 @@
 
 架构审视 — 向量检索按场景切块 + 检索命中语义相关块 + 预算控制 + cosine fail-safe 保护。
 
-背景（docs/drafts/architecture-roadmap-2026-07-27.md §A1）：
+问题背景：
 
 - 现状缺口（`app/rag/retrieval.py:76-85`）：
     * 整章 embed 成单一向量——一章 2000-3000 字压成一个向量，语义被平均掉，
@@ -49,7 +49,7 @@ from app.rag.retrieval import Chunk, retrieve_relevant_chunks, split_chapter_to_
 from _test_db import isolated_test_db  # noqa: E402,F401  -- chapter_factory 依赖
 
 
-# ─── 常量（spec 锚点，对照 architecture-roadmap-2026-07-27.md §A1）─────────
+# ─── 常量（spec 锚点）─────────────────────────────────────
 
 # 切块目标区间：300-500 字/块、块间 1-2 句重叠
 CHUNK_SIZE_TARGET_MIN = 300

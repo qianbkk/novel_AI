@@ -1,7 +1,6 @@
 """设定回流 reviser 框架。
 
-背景（docs/drafts/architecture-roadmap-2026-07-27.md §A2）：
-正文在演化，但 `setting_package.json` 和 `arc_plans` 停在第 0 章。几百章后
+正文持续演化时，`setting_package.json` 和 `arc_plans` 可能停留在初始状态。几百章后
 必然对不上 L2 已确立的事实。本框架给"设定修订"一个可扩展的入口：
 - 任何 reviser 实现 `propose(memory, setting, state) -> list[Revision]`
 - 框架负责：注册 / 校验 / 证据闸门 / human_pending 落点 / 重复幂等 / 异常降级
@@ -30,7 +29,7 @@ class Revision:
     target ∈ VALID_TARGETS：被拒收的 target 在 run_revisers 里丢弃。
     path   字符串寻址（"key_characters[0].description"）——简洁，不引
     JSONPath 库；后续若需要复杂路径再升级。
-    evidence **必须**非空，否则被丢弃（§A2 验收点 2）。
+    evidence **必须**非空，否则被丢弃。
     """
     target: str
     path: str

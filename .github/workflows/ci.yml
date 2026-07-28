@@ -14,9 +14,6 @@ jobs:
   backend-tests:
     name: Backend (pytest)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: backend
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
@@ -24,16 +21,17 @@ jobs:
         with:
           python-version: "3.10"
           cache: pip
+          cache-dependency-path: backend/requirements.txt
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r backend/requirements.txt pytest
       - name: Behavior tests
         run: pytest backend/tests --ignore=backend/tests/invariants -q
       - name: Invariant tests
         run: pytest backend/tests/invariants -q
       - name: Compile check
-        run: python -m compileall -q app engine scripts tests
+        run: python -m compileall -q backend/app backend/engine backend/scripts backend/tests
       - name: Ruff (changed files only)
         # 历史代码已有 1000+ style 警告，不在 CI 拦；只对本次 PR 改动文件跑 ruff
         # 保证新代码风格不漂移，老代码未来按 PR 逐步收敛

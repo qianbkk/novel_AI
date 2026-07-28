@@ -1,8 +1,7 @@
 """prompt_compliance.py — writer prompt 指令遵循率测量（§A5 验收先决条件）
 
-背景（docs/drafts/architecture-roadmap-2026-07-27.md §A5）：
-writer prompt 有 24 个 `【】` 指令块。直觉上"块多了 = 遵循率下降"，但没测过
-就无从判断改好还是改坏。本工具给"先测量"提供入口：
+writer prompt 有多个 `【】` 指令块。直觉上“块多了 = 遵循率下降”，但需要先测量
+才能判断改好还是改坏。本工具提供可重复的遵循率测量入口：
 - build_chapter_constraints(task, setting, context) → Constraint 列表
 - score_compliance(chapter_text, constraints) → 各项命中 / 漏命中报告
 
@@ -13,8 +12,7 @@ writer prompt 有 24 个 `【】` 指令块。直觉上"块多了 = 遵循率下
   "人名"（粗略：用常见姓氏模式）
 
 本工具不动 writer prompt，只读 build_writer_prompt 输出 + 真章节正文，跑
-N 章统计各项命中率。这是 §A5 唯一允许"先做"的部分；改 prompt 等基线
-数据出来再做。
+N 章统计各项命中率。修改 prompt 前应先建立基线，避免凭直觉调整。
 """
 from __future__ import annotations
 import re

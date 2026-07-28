@@ -21,14 +21,14 @@ from tests._test_db import isolated_test_db  # noqa: F401
 
 
 @pytest.fixture
-def project_with_bound_engine(api_client):
-    """新建 project + 种 2 章 + 绑定 engine-e2e 目录 + 种 setting_package.json。
+def project_with_bound_engine(api_client, tmp_path):
+    """新建 project + 种 2 章 + 绑定隔离引擎目录 + 种 setting_package.json。
     返回 (project_id, engine_dir, original_chapter_text)。"""
     from app.database import SessionLocal
     from app.models import Chapter, NovelAIBinding, Project
 
     pid = "test-rewrite-" + uuid.uuid4().hex[:8]
-    engine_dir = _BACKEND / "data" / "engine-e2e"
+    engine_dir = tmp_path / "engine-e2e"
 
     db = SessionLocal()
     try:
@@ -69,12 +69,6 @@ def project_with_bound_engine(api_client):
         "power_system": {"name": "债感修炼体系",
                          "description": "通过回应他人对你的债来修炼。"},
     }, ensure_ascii=False), encoding="utf-8")
-
-    # 清理上次测试可能留下的 candidates（ch_0001_v*.txt）
-    ch_dir = engine_dir / "output" / "chapters"
-    if ch_dir.exists():
-        for p in ch_dir.glob("ch_0001_v*.txt"):
-            p.unlink()
 
     return pid, engine_dir, original_content
 

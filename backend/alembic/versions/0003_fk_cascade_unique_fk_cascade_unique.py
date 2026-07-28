@@ -36,6 +36,18 @@ _TABLES_WITH_PROJECT_FK = [
 
 
 def upgrade() -> None:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    if not inspector.has_table("projects"):
+        # 干净数据库路径：0001 是兼容老库的空 baseline，0002 只创建 users。
+        # 到 0003 时若核心表仍不存在，直接按当前 ORM metadata 创建最终 schema；
+        # 老库已有 projects 时继续走下面的显式重建迁移。
+        from app.database import Base
+        from app import models  # noqa: F401  — 注册全部 ORM 表
+
+        Base.metadata.create_all(bind=bind)
+        return
+
     # 1) Project.owner_id FK → users.id (nullable)
     #    SQLite 缺 ALTER TABLE ADD FOREIGN KEY，只能 recreate 表
     op.execute("PRAGMA foreign_keys=OFF")

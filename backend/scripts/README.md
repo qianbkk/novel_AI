@@ -4,7 +4,10 @@ Scripts are CLI entry points, not a storage area for experiment code.
 
 ## Supported
 
-- `run_mvp.py`: run the complete bridge workflow for an existing project.
+- `run_mvp.py`: run the compact bridge workflow for an existing project.
+- `drive_30ch_bridge.py`: run the frontend-equivalent bridge workflow for N chapters.
+- `continue_worldbuild.py`: resume worldbuilding for an existing draft project.
+- `backfill_worldbuild.py`: backfill worldbuilding data for an explicitly named project.
 - `audit_project.py`: verify cross-storage project invariants.
 - `backup_cli.py`: create and inspect database backups.
 - `cleanup_test_projects.py`: remove test project data.
@@ -27,4 +30,4 @@ python -m scripts.strip_chapter_headers --chapters-dir data/engine/output/chapte
 python -m scripts.strip_chapter_headers --chapters-dir data/engine/output/chapters --apply
 ```
 
-One-off benchmark and migration scripts should use a local `local_*.py` filename and must not be committed. Delete them after the investigation is complete; durable behavior belongs in the application or test suite.
+One-off benchmark, screenshot-audit, and migration scripts should use a local `local_*.py` filename and must not be committed. Their output belongs under ignored `test_output/` or `docs/runs/`, never beside maintained scripts. Delete them after the investigation is complete; durable behavior belongs in the application or test suite.

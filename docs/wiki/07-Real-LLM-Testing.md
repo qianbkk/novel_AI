@@ -1,28 +1,21 @@
 # 07 · 真实 LLM 端到端测试 — 经验沉淀
 
-> 本页沉淀 30 章真实 MiniMax-M3 端到端测试（2026-07-22 + 2026-07-24）发现的所有问题、根因、本质修复与教训。
-> 每次跑真实 LLM 测试前先看本节 — 历史上踩过的坑不要再踩。
-> 历史报告已归档至 [`docs/runs/_archive/`](../runs/_archive/)（REPORT_30ch-2026-07-22.md / REPORT_v3_30ch-2026-07-23.md / audit-driven-fixes-design_2026-07-20.md）。
-> 最新一次实战（2026-07-24，含 31 章真跑 + Dashboard 修复）的 stdout/SSE 原始日志见 `docs/runs/30ch-real-2026-07-24/`（`.gitignore`，本地保留）。
+> 本页保留真实长篇跑批仍然有效的操作约束、故障模式和质量验收方法。
+> 历史运行日志与报告不是文档依赖：本地如需保留，统一放在已忽略的 `docs/runs/`；设计与修复过程通过 Git 历史追溯。
 
 ## 1. 跑真实 LLM 测试的最小流程
 
-```
-1. cd backend && python scripts/preset_worldbuild.py
-   → 创建 project + 用真 LLM 跑 10 阶段 worldbuild（不再走 mock）
-   → 输出 project_id 写到 docs/runs/<run-dir>/pid.txt
+```bash
+# 1. 启动后端和前端，在页面配置 Provider、角色绑定并创建项目
+# 2. 完成世界构建；若已有 draft 项目中断，可续跑
+cd backend
+python -m scripts.continue_worldbuild <project_id>
 
-2. python scripts/setup_minimax_provider.py
-   → 创建 MiniMax-M3 Provider + 绑定 15 个 role assignment
-   → 同进程必须（避免 master_key 漂移导致解密失败）
-
-3. python scripts/test_30ch_phase2.py
-   → push-concept → planner → pull-setting → bootstrap → select A →
-     init_arc → run 30 → import-chapters
-   → 详细 sse log 写到 docs/runs/<run-dir>/
+# 3. 走与前端 BridgeConsole 等价的 HTTP + SSE 流程
+python -m scripts.drive_30ch_bridge <project_id> --chapters 30
 ```
 
-每次跑用 `NOVEL_RUN_DIR` env 隔离目录（避免覆盖上次）。
+`drive_30ch_bridge.py` 为每个项目使用独立的 `backend/data/engine/project/<project_id>/`，不依赖日期目录或硬编码项目。运行日志由后端日志、`BridgeRun` 记录和项目专属引擎目录共同保存；如需额外实验输出，放入已忽略的 `docs/runs/<run-id>/`。
 
 ## 2. 30 章跑出来的 8 个问题
 
@@ -161,19 +154,14 @@ python -m engine.tools.acceptance_tests ac12  # 对话提示词密度
 
 ## 8. 续跑卡住的 draft 项目（2026-07-24 实战）
 
-`preset_worldbuild.py` 跑挂在 stage 2（MiniMax 突发 429 限流）后，
-项目 `real30ch-16862056` 留在 `draft` 状态、绑定目录还没建。
-本想整段重跑但 preset 总是**新建 project**，丢了"续跑"语义。
-
-`backend/scripts/continue_worldbuild.py` 是这条修复路径：
+真实模型世界构建若因 429 或解析失败中断，项目会留在 `draft` 状态。不要用一次性脚本另建项目；`backend/scripts/continue_worldbuild.py` 提供可复用的续跑路径：
 
 - 接受现有 `project_id`，**不重建**
 - 跑前先 `cleanup_partial` 把上一轮失败的 WorldSetting/Character 等中间产物清掉
 - 跑 10 stages，每 stage 失败重试 6 次（429 / 5xx / JSON parse 全捕获）
 - 跑完直接标 `project.status=ready` + 写 GenerationJob=done
 
-该脚本只跑 ~14 分钟（10 stages × 60-90s），比 preset_worldbuild 短很多，
-因为没有 mock fallback overhead，纯 LLM 链路。
+具体耗时取决于 Provider 限流和模型响应速度；脚本保持同一项目语义并避免创建重复测试项目。
 
 ## 9. 30 章 Bridge pipeline 真实跑通（2026-07-24 实战）
 

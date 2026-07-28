@@ -3,13 +3,9 @@
 结构化项目文档，供人类与 AI Agent 快速理解本仓库的架构、模块职责、关键接口与运行方式。
 
 > 本 wiki 与仓库根目录的 `README.md`（使用指南）、`CHANGELOG.md`（发布级变化）互补，不重复其内容，侧重**架构级理解**。
-> 历史设计与审计报告归档于 `docs/runs/_archive/`，不再活跃引用。
+> 历史实现过程保留在 Git 中；`docs/runs/` 只存本地真实模型跑批产物，不属于活跃文档。
 >
-> **工程化基线**：2026-07-25 起两轮共 19 个聚焦 commit：
-> - P0/P1 全部 9 项短板 + /simplify 4 项高 ROI 修复 + /code-review 2 项 critical bug（13 commits，基线 75/100）
-> - 战略审视 7 项 backlog 全部交付（4 招方法论 + 7 ChapterTask 字段 + beat_checker + 对话癌阈值 + POV 锁定 + 12 项验收），子代理审计发现 3 处真实缺陷并修复（Critical#1 meta 落盘 + Medium#1 normalizer .format() + Medium#4 card B/C 标准化）
->
-> 当前能力见 [03-Writing-Engine.md § 方法论内化与节拍校验](03-Writing-Engine.md#方法论内化与节拍校验)。新增 164 个回归测试（138 战略审视 + 26 审计修），配合原有结构不变量测试，确保每章跑完可一键节拍/验收审计。
+> 当前写作引擎包含方法论提示、结构化章节任务、质量门、节拍校验和 12 项离线验收。具体能力见 [03-Writing-Engine.md § 方法论内化与节拍校验](03-Writing-Engine.md#方法论内化与节拍校验)，测试分层见 [`backend/tests/README.md`](../../backend/tests/README.md)。
 
 ## 阅读顺序
 
@@ -31,7 +27,7 @@
 - 当前行为写到对应主题文档；不另起新 phase/iteration 报告
 - 一份内容只在一处文档维护，其余文档**链过去**而非**抄过去**
 - 用现在时写"现状"，用 Git 历史追溯"来龙去脉"
-- 临时草稿进 `docs/drafts/`，跑测试产物进 `docs/runs/`（均 `.gitignore`）
+- 临时草稿进 `docs/drafts/`，真实模型跑批产物进 `docs/runs/`（均 `.gitignore`，不得成为源码或文档依赖）
 - 不在文档里写 commit hash 或手工维护的"最后更新"字段
 
 ## 项目一句话简介
@@ -48,7 +44,7 @@ Novel_AI/
 ├── frontend/           React + TypeScript + Vite 前端
 ├── docs/               项目文档
 │   ├── wiki/           当前活跃 wiki（你看的就是这个）
-│   └── runs/           跑测试的临时产物（`.gitignore`）
+│   └── runs/           本地真实模型跑批产物（`.gitignore`，不作为文档依赖）
 └── dev.bat             Windows 一键启停脚本（后端 + 前端）
 ```
 

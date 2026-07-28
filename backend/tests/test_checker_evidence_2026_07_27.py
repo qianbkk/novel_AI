@@ -2,7 +2,7 @@
 
 架构审视 §A3 — checker 评分 30% 权重建立在无证据的判断上。
 
-证据（docs/drafts/architecture-roadmap-2026-07-27.md §A3）：
+问题证据：
 - engine/agents/checker.py:78-86 score_chapter 的 user_prompt 只有【章节信息+正文】，
   没有 setting/L2/上章结尾。
 - 但评分维度里 consistency(15%) + plot_logic(15%) = 30% 权重压在没有证据的判断上。
