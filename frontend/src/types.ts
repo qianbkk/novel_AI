@@ -459,6 +459,37 @@ export interface MemoryStats {
   arc_count: number;
 }
 
+export interface RagStatus {
+  available: boolean;
+  chapter_count: number;
+  indexed_chapter_count: number;
+  coverage_percent: number;
+  chunk_count: number;
+  unindexed_chapter_nos: number[];
+  orphaned_chunk_count: number;
+  empty_chunk_count: number;
+  dimensions: Array<{ dimension: number; count: number }>;
+  models: Array<{ model: string; count: number }>;
+  mixed_dimensions: boolean;
+  default_budget_chars: number;
+}
+
+export interface RagPreview {
+  query: string;
+  chunks: Array<{
+    chunk_id: string;
+    chapter_no: number;
+    source_id: string;
+    text: string;
+    similarity: number;
+  }>;
+  used_chars: number;
+  budget_chars: number;
+  budget_percent: number;
+  degraded: boolean;
+  message: string | null;
+}
+
 export interface BridgeMemory {
   available: boolean;
   l2_available: boolean;

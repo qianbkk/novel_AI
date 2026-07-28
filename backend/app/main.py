@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from .database import Base, SessionLocal, engine
-from .api import auth, bridge, chapters, projects, providers, role_assignments, worldbuild, rules, foreshadowings, ai_assist, world, outline, chapter_titles
+from .api import auth, bridge, chapters, context, projects, providers, role_assignments, worldbuild, rules, foreshadowings, ai_assist, world, outline, chapter_titles
 from .api.role_assignments import seed_role_assignments
 from .backup_db import take_all_snapshots
 from .config import get_allowed_origins_list
@@ -276,6 +276,7 @@ app.include_router(projects.router)
 app.include_router(worldbuild.router)
 app.include_router(worldbuild.meta_router)  # /worldbuild/stages (无 project_id)
 app.include_router(chapters.router)
+app.include_router(context.router)
 app.include_router(providers.router)
 app.include_router(role_assignments.router)
 app.include_router(bridge.router)

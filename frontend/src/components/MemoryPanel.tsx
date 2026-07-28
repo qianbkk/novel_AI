@@ -1,4 +1,6 @@
-import type { BridgeMemory } from "../types";
+import { useState } from "react";
+import { api } from "../api/client";
+import type { BridgeMemory, RagPreview, RagStatus } from "../types";
 
 /**
  * 分层记忆快照面板。
@@ -39,12 +41,96 @@ function Chips({ items, empty }: { items: string[]; empty: string }) {
   );
 }
 
-export function MemoryPanel({ memory, loading, error, onRefresh }: {
+function RagContextSection({
+  status, query, setQuery, preview, loading, onPreview,
+}: {
+  status: RagStatus | null;
+  query: string;
+  setQuery: (value: string) => void;
+  preview: RagPreview | null;
+  loading: boolean;
+  onPreview: () => void;
+}) {
+  if (!status) return null;
+  return (
+    <div className="memory-layer context-layer" data-testid="rag-context">
+      <div className="memory-layer__head">
+        <span className="memory-row__layer">RAG</span>
+        <span className="memory-layer__desc">
+          {status.indexed_chapter_count}/{status.chapter_count} 章已索引 · {status.chunk_count} 块 · 覆盖 {status.coverage_percent}%
+        </span>
+      </div>
+      {(status.unindexed_chapter_nos.length > 0 || status.orphaned_chunk_count > 0 || status.mixed_dimensions) && (
+        <div className="banner banner-warn">
+          {status.unindexed_chapter_nos.length > 0 && `未索引章节：${status.unindexed_chapter_nos.join("、")}。`}
+          {status.orphaned_chunk_count > 0 && ` 孤儿块 ${status.orphaned_chunk_count} 个。`}
+          {status.mixed_dimensions && " 向量维度混用，跨维度命中会降级为空。"}
+        </div>
+      )}
+      <div className="context-search">
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => { if (event.key === "Enter") onPreview(); }}
+          placeholder="输入下一章意图，预览会注入的往事片段"
+          aria-label="上下文检索预览"
+        />
+        <button className="btn btn-sm" onClick={onPreview} disabled={loading || !query.trim()}>
+          {loading ? "检索中…" : "预览上下文"}
+        </button>
+      </div>
+      {preview && (
+        <div className="context-preview">
+          <div className="context-preview__budget">
+            使用 {preview.used_chars}/{preview.budget_chars} 字（{preview.budget_percent}%）
+          </div>
+          {preview.degraded ? (
+            <div className="text-faint">{preview.message || "没有可注入片段"}</div>
+          ) : preview.chunks.map((chunk) => (
+            <article key={chunk.chunk_id} className="context-hit">
+              <div>第 {chunk.chapter_no} 章 · 相似度 {chunk.similarity.toFixed(3)}</div>
+              <p>{chunk.text}</p>
+            </article>
+          ))}
+        </div>
+      )}
+      <div className="text-faint context-meta">
+        维度：{status.dimensions.map((item) => `${item.dimension}D×${item.count}`).join(" / ") || "无"}；
+        模型：{status.models.map((item) => `${item.model}×${item.count}`).join(" / ") || "无"}
+      </div>
+    </div>
+  );
+}
+
+export function MemoryPanel({ projectId, memory, ragStatus, loading, error, onRefresh }: {
+  projectId: string;
   memory: BridgeMemory | null;
+  ragStatus: RagStatus | null;
   loading: boolean;
   error: string | null;
   onRefresh: () => void;
 }) {
+  const [ragQuery, setRagQuery] = useState("");
+  const [ragPreview, setRagPreview] = useState<RagPreview | null>(null);
+  const [ragLoading, setRagLoading] = useState(false);
+  const [ragError, setRagError] = useState<string | null>(null);
+
+  async function previewContext() {
+    if (!ragQuery.trim()) return;
+    setRagLoading(true);
+    setRagError(null);
+    try {
+      setRagPreview(await api.previewRagContext(projectId, {
+        query: ragQuery,
+        top_k: 3,
+        budget_chars: ragStatus?.default_budget_chars || 900,
+      }));
+    } catch (previewError) {
+      setRagError(String(previewError));
+    } finally {
+      setRagLoading(false);
+    }
+  }
   const header = (
     <div className="memory-panel__head">
       <h4 className="memory-panel__title">分层记忆快照</h4>
@@ -77,6 +163,11 @@ export function MemoryPanel({ memory, loading, error, onRefresh }: {
         <div className="banner banner-info" data-testid="memory-empty">
           {memory?.message || "记忆文件尚未生成 —— 先跑一次写作命令，tracker 会在每章结束后写入。"}
         </div>
+        <RagContextSection
+          status={ragStatus} query={ragQuery} setQuery={setRagQuery}
+          preview={ragPreview} loading={ragLoading} onPreview={previewContext}
+        />
+        {ragError && <div className="banner banner-danger">上下文预览失败：{ragError}</div>}
       </div>
     );
   }
@@ -93,6 +184,12 @@ export function MemoryPanel({ memory, loading, error, onRefresh }: {
   return (
     <div className="card memory-panel" data-testid="memory-panel">
       {header}
+
+      <RagContextSection
+        status={ragStatus} query={ragQuery} setQuery={setRagQuery}
+        preview={ragPreview} loading={ragLoading} onPreview={previewContext}
+      />
+      {ragError && <div className="banner banner-danger">上下文预览失败：{ragError}</div>}
 
       {/* ─── 汇总指标：红色的都是长篇会翻车的信号 ─── */}
       <div className="memory-stats" data-testid="memory-stats">

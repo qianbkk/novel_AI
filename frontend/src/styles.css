@@ -3501,6 +3501,17 @@ dialog.ink-dialog__actions {
   color: var(--color-fg-4);
 }
 .memory-layer .memory-row__layer { padding: 2px 8px; }
+.context-search { display: flex; gap: var(--space-2); margin-top: var(--space-2); }
+.context-search input {
+  flex: 1; min-width: 0; padding: 8px 10px; border: 1px solid var(--color-border-1);
+  border-radius: var(--radius-md); background: var(--color-bg-0); color: var(--color-fg-1);
+}
+.context-preview { margin-top: var(--space-2); display: grid; gap: var(--space-2); }
+.context-preview__budget { font: var(--text-xs)/1.4 var(--font-mono); color: var(--color-fg-4); }
+.context-hit { padding: 8px 10px; border-left: 3px solid var(--color-accent); background: var(--color-bg-0); }
+.context-hit > div { font: var(--text-xs)/1.4 var(--font-mono); color: var(--color-accent); }
+.context-hit p { margin: 4px 0 0; font-size: var(--text-sm); color: var(--color-fg-2); white-space: pre-wrap; }
+.context-meta { margin-top: var(--space-2); font-size: var(--text-xs); }
 
 .memory-kv {
   display: grid;

@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
   BridgeLogLine, BridgePendingItem, BridgeStatus, BridgeBudget, BridgeMemory,
-  ChapterListItem, Project,
+  ChapterListItem, Project, RagStatus,
 } from "../types";
 import { useReveal } from "../hooks/useReveal";
 import { useToast } from "../components/Toast";
@@ -52,6 +52,7 @@ export default function BridgeConsole() {
   const [budget, setBudget] = useState<BridgeBudget | null>(null);
   const [budgetLoading, setBudgetLoading] = useState(false);
   const [memory, setMemory] = useState<BridgeMemory | null>(null);
+  const [ragStatus, setRagStatus] = useState<RagStatus | null>(null);
   const [memoryLoading, setMemoryLoading] = useState(false);
   const [memoryError, setMemoryError] = useState<string | null>(null);
   const [autoscroll, setAutoscroll] = useState(true);  // 日志自动滚动开关
@@ -315,9 +316,13 @@ export default function BridgeConsole() {
     if (!projectId) return;
     setMemoryLoading(true);
     try {
-      const data = await api.getBridgeMemory(projectId);
+      const [data, indexStatus] = await Promise.all([
+        api.getBridgeMemory(projectId),
+        api.getRagStatus(projectId),
+      ]);
       if (!mountedRef.current) return;
       setMemory(data);
+      setRagStatus(indexStatus);
       setMemoryError(null);
     } catch (e) {
       if (!mountedRef.current) return;
@@ -449,7 +454,9 @@ export default function BridgeConsole() {
             这里以前是三个用 chapters.length / log10(字数) 硬算的温度计，
             还标了本项目根本不存在的 L3 层：跑飞时它照样一片绿。 */}
         <MemoryPanel
+          projectId={projectId || ""}
           memory={memory}
+          ragStatus={ragStatus}
           loading={memoryLoading}
           error={memoryError}
           onRefresh={() => fetchMemory()}

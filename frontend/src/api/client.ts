@@ -19,6 +19,8 @@ import type {
   BridgePendingItem,
   BridgeBudget,
   BridgeMemory,
+  RagStatus,
+  RagPreview,
   NovelAIBinding,
   RuleConfig,
   PostProcessResult,
@@ -398,6 +400,18 @@ export const api = {
   // tracker 解析失败都从这里读 —— 长篇跑飞前唯一能提前看到的信号。
   getBridgeMemory: (projectId: string) =>
     request<BridgeMemory>(`/projects/${projectId}/bridge/memory`),
+
+  getRagStatus: (projectId: string) =>
+    request<RagStatus>(`/projects/${projectId}/context/rag/status`),
+
+  previewRagContext: (projectId: string, payload: {
+    query: string;
+    top_k?: number;
+    budget_chars?: number;
+  }) => request<RagPreview>(`/projects/${projectId}/context/rag/preview`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  }),
 
   submitReview: (
     projectId: string,
