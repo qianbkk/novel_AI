@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -390,6 +391,21 @@ async def rewrite_chapter_endpoint(
         raise HTTPException(502, "LLM 改写失败，请重试")
 
 
+def _candidate_path(project_id: str, chapter_no: int, version: str, db: Session):
+    import re
+    from pathlib import Path
+    from ..chapter_rewrite import _resolve_engine_paths
+
+    label = version.upper()
+    if not re.fullmatch(r"[A-Z]", label):
+        raise HTTPException(400, "version 必须是单个字母 A-Z")
+    dirs = _resolve_engine_paths(project_id, db)
+    path = Path(dirs["chapters_dir"]) / f"ch_{chapter_no:04d}_v{label}.txt"
+    if not path.is_file():
+        raise HTTPException(404, "candidate not found")
+    return path, label
+
+
 @router.get("/{chapter_no}/candidates")
 async def list_chapter_candidates(
     project_id: str,
@@ -445,3 +461,104 @@ async def list_chapter_candidates(
             pass
 
     return {"chapter_no": chapter_no, "candidates": candidates}
+
+
+@router.get("/{chapter_no}/candidates/{version}")
+async def get_chapter_candidate(
+    project_id: str,
+    chapter_no: int,
+    version: str,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
+    """读取候选全文，并返回相对当前原章的行级 unified diff。"""
+    import difflib
+    import hashlib
+
+    chapter = db.query(Chapter).filter_by(
+        project_id=project_id, chapter_no=chapter_no,
+    ).first()
+    if chapter is None:
+        raise HTTPException(404, "chapter not found")
+    path, label = _candidate_path(project_id, chapter_no, version, db)
+    content = await run_in_threadpool(path.read_text, encoding="utf-8")
+    original = chapter.content or ""
+    diff_lines = list(difflib.unified_diff(
+        original.splitlines(),
+        content.splitlines(),
+        fromfile=f"ch_{chapter_no:04d}.txt",
+        tofile=f"ch_{chapter_no:04d}_v{label}.txt",
+        lineterm="",
+    ))
+    added = sum(1 for line in diff_lines if line.startswith("+") and not line.startswith("+++"))
+    removed = sum(1 for line in diff_lines if line.startswith("-") and not line.startswith("---"))
+    return {
+        "chapter_no": chapter_no,
+        "version": label,
+        "content": content,
+        "content_hash": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "original_revision_hash": chapter_revision_hash(chapter.title, original),
+        "diff_lines": diff_lines,
+        "added_lines": added,
+        "removed_lines": removed,
+    }
+
+
+class CandidateAcceptRequest(BaseModel):
+    expected_revision_hash: str = Field(min_length=64, max_length=64)
+    expected_candidate_hash: str = Field(min_length=64, max_length=64)
+
+
+@router.post("/{chapter_no}/candidates/{version}/accept")
+async def accept_chapter_candidate(
+    project_id: str,
+    chapter_no: int,
+    version: str,
+    payload: CandidateAcceptRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
+    """显式采纳候选；原章或候选在预览后变化都会拒绝。"""
+    import hashlib
+
+    chapter = db.query(Chapter).filter_by(
+        project_id=project_id, chapter_no=chapter_no,
+    ).first()
+    if chapter is None:
+        raise HTTPException(404, "chapter not found")
+    path, label = _candidate_path(project_id, chapter_no, version, db)
+    content = await run_in_threadpool(path.read_text, encoding="utf-8")
+    candidate_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    if candidate_hash != payload.expected_candidate_hash:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "candidate_revision_conflict",
+                "message": "候选版本已变化，请重新预览后再采纳",
+                "current_candidate_hash": candidate_hash,
+            },
+        )
+    try:
+        result = await update_chapter_content(
+            project_id=project_id,
+            chapter_id=chapter.id,
+            title=chapter.title,
+            content=content,
+            expected_revision_hash=payload.expected_revision_hash,
+            db=db,
+            source=f"candidate_v{label}",
+        )
+    except ChapterEditConflictError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "chapter_revision_conflict",
+                "message": "原章已变化，请重新预览差异后再采纳",
+                "current_revision_hash": str(e),
+            },
+        )
+    except ChapterEditNotFoundError as e:
+        raise HTTPException(404, str(e))
+    return result

@@ -120,10 +120,13 @@ async def update_chapter_content(
         chapters_dir.mkdir(parents=True, exist_ok=True)
         target_path = chapters_dir / f"ch_{chapter.chapter_no:04d}.txt"
         target_existed = target_path.exists()
+        backup_path = _backup_path(chapters_dir, chapter.chapter_no, current_hash)
+        backup_path.parent.mkdir(parents=True, exist_ok=True)
         if target_existed:
-            backup_path = _backup_path(chapters_dir, chapter.chapter_no, current_hash)
-            backup_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(target_path, backup_path)
+        else:
+            # 引擎正式稿尚不存在时，仍把数据库中的原章留作可恢复快照。
+            atomic_write_text(str(backup_path), old_content)
         atomic_write_text(str(target_path), normalized_content)
 
     try:

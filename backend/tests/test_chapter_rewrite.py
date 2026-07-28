@@ -240,3 +240,98 @@ class TestRewriteApi:
             assert r.status_code == 200
             labels.append(r.json()["version_label"])
         assert labels == ["D", "E", "F"]
+
+    def test_candidate_detail_returns_diff_and_hash(
+        self, api_client, project_with_bound_engine,
+    ):
+        pid, _, _ = project_with_bound_engine
+        api_client.post(
+            f"/projects/{pid}/chapters/1/rewrite",
+            json={"instruction": "增加冲突", "version_label": "D"},
+        )
+        response = api_client.get(f"/projects/{pid}/chapters/1/candidates/D")
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["version"] == "D"
+        assert len(body["content_hash"]) == 64
+        assert len(body["original_revision_hash"]) == 64
+        assert body["diff_lines"][0].startswith("---")
+        assert body["added_lines"] > 0
+        assert body["removed_lines"] > 0
+
+    def test_accept_candidate_syncs_chapter_and_keeps_backup(
+        self, api_client, project_with_bound_engine,
+    ):
+        from app.database import SessionLocal
+        from app.models import Chapter
+
+        pid, engine_dir, original = project_with_bound_engine
+        api_client.post(
+            f"/projects/{pid}/chapters/1/rewrite",
+            json={"instruction": "增加冲突", "version_label": "D"},
+        )
+        detail = api_client.get(f"/projects/{pid}/chapters/1/candidates/D").json()
+        response = api_client.post(
+            f"/projects/{pid}/chapters/1/candidates/D/accept",
+            json={
+                "expected_revision_hash": detail["original_revision_hash"],
+                "expected_candidate_hash": detail["content_hash"],
+            },
+        )
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert body["source"] == "candidate_vD"
+        assert body["backup_path"]
+
+        candidate = engine_dir / "output" / "chapters" / "ch_0001_vD.txt"
+        final = engine_dir / "output" / "chapters" / "ch_0001.txt"
+        assert final.read_text(encoding="utf-8") == candidate.read_text(encoding="utf-8")
+        assert (engine_dir / body["backup_path"]).read_text(encoding="utf-8") == original
+
+        db = SessionLocal()
+        try:
+            chapter = db.query(Chapter).filter_by(project_id=pid, chapter_no=1).first()
+            assert chapter.content == candidate.read_text(encoding="utf-8")
+        finally:
+            db.close()
+
+    def test_accept_candidate_rejects_stale_original(
+        self, api_client, project_with_bound_engine,
+    ):
+        pid, _, _ = project_with_bound_engine
+        api_client.post(
+            f"/projects/{pid}/chapters/1/rewrite",
+            json={"instruction": "增加冲突", "version_label": "D"},
+        )
+        detail = api_client.get(f"/projects/{pid}/chapters/1/candidates/D").json()
+        response = api_client.post(
+            f"/projects/{pid}/chapters/1/candidates/D/accept",
+            json={
+                "expected_revision_hash": "0" * 64,
+                "expected_candidate_hash": detail["content_hash"],
+            },
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "chapter_revision_conflict"
+
+    def test_accept_candidate_rejects_stale_candidate(
+        self, api_client, project_with_bound_engine,
+    ):
+        pid, engine_dir, _ = project_with_bound_engine
+        api_client.post(
+            f"/projects/{pid}/chapters/1/rewrite",
+            json={"instruction": "增加冲突", "version_label": "D"},
+        )
+        detail = api_client.get(f"/projects/{pid}/chapters/1/candidates/D").json()
+        (engine_dir / "output" / "chapters" / "ch_0001_vD.txt").write_text(
+            "候选已被外部修改", encoding="utf-8",
+        )
+        response = api_client.post(
+            f"/projects/{pid}/chapters/1/candidates/D/accept",
+            json={
+                "expected_revision_hash": detail["original_revision_hash"],
+                "expected_candidate_hash": detail["content_hash"],
+            },
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"]["code"] == "candidate_revision_conflict"

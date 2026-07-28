@@ -129,6 +129,26 @@ export interface ChapterSearchResult {
   snippet: string;
 }
 
+export interface ChapterCandidateSummary {
+  version: string;
+  path: string;
+  word_count: number;
+  snippet: string;
+  instruction_preview?: string;
+  created_at?: number;
+}
+
+export interface ChapterCandidateDetail {
+  chapter_no: number;
+  version: string;
+  content: string;
+  content_hash: string;
+  original_revision_hash: string;
+  diff_lines: string[];
+  added_lines: number;
+  removed_lines: number;
+}
+
 export interface ChapterUpdateResult {
   id: string;
   chapter_no: number;

@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
-import type { ChapterFull, ChapterListItem, ChapterCharacter } from "../types";
+import type {
+  ChapterFull, ChapterListItem, ChapterCharacter,
+  ChapterCandidateSummary, ChapterCandidateDetail,
+} from "../types";
 import { useToast } from "../components/Toast";
 
 /**
@@ -45,6 +48,10 @@ export default function ChapterReader() {
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [findText, setFindText] = useState("");
   const [replaceText, setReplaceText] = useState("");
+  const [candidates, setCandidates] = useState<ChapterCandidateSummary[]>([]);
+  const [candidateDetail, setCandidateDetail] = useState<ChapterCandidateDetail | null>(null);
+  const [candidateLoading, setCandidateLoading] = useState(false);
+  const [candidateAccepting, setCandidateAccepting] = useState(false);
   const mountedRef = useRef(true);
   const requestRef = useRef(0);
   const saveRequestRef = useRef(0);
@@ -122,6 +129,14 @@ export default function ChapterReader() {
         setBaseRevision(full.revision_hash);
         setEditing(false);
         setSaveState("idle");
+        setCandidateDetail(null);
+        api.listChapterCandidates(projectId, chapterNo)
+          .then((result) => {
+            if (mountedRef.current && requestRef.current === requestId) setCandidates(result.candidates);
+          })
+          .catch(() => {
+            if (mountedRef.current && requestRef.current === requestId) setCandidates([]);
+          });
         if (draftKey) {
           try {
             const raw = localStorage.getItem(draftKey);
@@ -227,6 +242,48 @@ export default function ChapterReader() {
     return () => window.removeEventListener("beforeunload", guard);
   }, [dirty]);
 
+  async function openCandidate(version: string) {
+    if (!projectId) return;
+    setCandidateLoading(true);
+    try {
+      setCandidateDetail(await api.getChapterCandidate(projectId, chapterNo, version));
+    } catch (error) {
+      toast.error("候选加载失败", String(error));
+    } finally {
+      setCandidateLoading(false);
+    }
+  }
+
+  async function acceptCandidate() {
+    if (!projectId || !chapter || !candidateDetail) return;
+    if (dirty) {
+      toast.warn("请先保存或放弃当前编辑", "候选采纳不能覆盖未保存草稿");
+      return;
+    }
+    if (!confirm(`采纳候选 v${candidateDetail.version}？当前原章会备份后被替换。`)) return;
+    setCandidateAccepting(true);
+    try {
+      const updated = await api.acceptChapterCandidate(
+        projectId, chapterNo, candidateDetail.version,
+        {
+          expected_revision_hash: candidateDetail.original_revision_hash,
+          expected_candidate_hash: candidateDetail.content_hash,
+        },
+      );
+      setChapter((current) => current ? { ...current, ...updated } : current);
+      setEditTitle(updated.title || "");
+      setEditContent(updated.content);
+      setBaseRevision(updated.revision_hash);
+      setCandidateDetail(null);
+      if (draftKey) localStorage.removeItem(draftKey);
+      toast.success(`已采纳 v${candidateDetail.version}`, updated.backup_path ? "原章已保留备份" : "章节已更新");
+    } catch (error) {
+      toast.error("候选采纳失败", String(error));
+    } finally {
+      setCandidateAccepting(false);
+    }
+  }
+
   function replaceAll() {
     if (!findText) return;
     const matches = editContent.split(findText).length - 1;
@@ -331,6 +388,25 @@ export default function ChapterReader() {
               保存
             </button>
           )}
+          {candidates.length > 0 && (
+            <select
+              className="reader-candidate-select"
+              value={candidateDetail?.version || ""}
+              disabled={candidateLoading || candidateAccepting}
+              onChange={(event) => {
+                if (event.target.value) void openCandidate(event.target.value);
+                else setCandidateDetail(null);
+              }}
+              aria-label="候选版本"
+            >
+              <option value="">候选版本（{candidates.length}）</option>
+              {candidates.map((candidate) => (
+                <option key={candidate.version} value={candidate.version}>
+                  v{candidate.version} · {candidate.word_count} 字
+                </option>
+              ))}
+            </select>
+          )}
           <button
             type="button"
             className="reader-icon-btn"
@@ -413,6 +489,43 @@ export default function ChapterReader() {
                 </div>
               )}
             </header>
+
+            {candidateDetail && (
+              <section className="reader-diff" aria-label={`候选 v${candidateDetail.version} 差异`}>
+                <div className="reader-diff__head">
+                  <div>
+                    <strong>候选 v{candidateDetail.version}</strong>
+                    <span className="reader-diff__stat reader-diff__stat--add">+{candidateDetail.added_lines}</span>
+                    <span className="reader-diff__stat reader-diff__stat--remove">-{candidateDetail.removed_lines}</span>
+                  </div>
+                  <div className="button-row">
+                    <button type="button" className="btn btn-sm btn-ghost" onClick={() => setCandidateDetail(null)}>
+                      关闭
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      disabled={candidateAccepting || dirty}
+                      onClick={() => void acceptCandidate()}
+                    >
+                      {candidateAccepting ? "采纳中…" : "采纳此版本"}
+                    </button>
+                  </div>
+                </div>
+                <div className="reader-diff__lines">
+                  {candidateDetail.diff_lines.map((line, index) => (
+                    <div
+                      key={`${index}-${line.slice(0, 20)}`}
+                      className={line.startsWith("+") && !line.startsWith("+++") ? "is-added" :
+                        line.startsWith("-") && !line.startsWith("---") ? "is-removed" :
+                        line.startsWith("@@") ? "is-hunk" : ""}
+                    >
+                      {line || " "}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
 
             {editing ? (
               <div className="reader-editor">

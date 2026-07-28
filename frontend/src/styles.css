@@ -1399,6 +1399,20 @@ label {
 .reader-save-state--conflict,
 .reader-save-state--error { color: var(--color-stamp); }
 .reader-save-state--saved { color: var(--color-success, #6ad48b); }
+.reader-candidate-select {
+  max-width: 150px; padding: 6px 8px; border: 1px solid var(--reader-border); border-radius: 5px;
+  background: var(--reader-bg); color: var(--reader-fg); font-size: 12px;
+}
+.reader-diff { margin: 0 0 24px; border: 1px solid var(--reader-border); border-radius: 8px; overflow: hidden; }
+.reader-diff__head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 12px; background: rgba(107, 138, 253, 0.08); }
+.reader-diff__stat { margin-left: 8px; font: 600 11px var(--font-mono); }
+.reader-diff__stat--add { color: var(--color-success, #6ad48b); }
+.reader-diff__stat--remove { color: var(--color-stamp); }
+.reader-diff__lines { max-height: 42vh; overflow: auto; padding: 8px 0; background: rgba(0, 0, 0, 0.12); font: 12px/1.55 var(--font-mono); white-space: pre-wrap; word-break: break-word; }
+.reader-diff__lines > div { padding: 0 12px; }
+.reader-diff__lines > .is-added { background: rgba(70, 170, 100, 0.16); color: #9be3ac; }
+.reader-diff__lines > .is-removed { background: rgba(210, 70, 70, 0.16); color: #ffabab; }
+.reader-diff__lines > .is-hunk { color: #9aa9ff; background: rgba(107, 138, 253, 0.10); }
 .reader-editor { display: flex; flex-direction: column; gap: 12px; }
 .reader-editor__title {
   width: 100%; box-sizing: border-box; padding: 8px 10px;

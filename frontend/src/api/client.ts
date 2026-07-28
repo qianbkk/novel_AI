@@ -9,6 +9,8 @@ import type {
   ChapterCreateResult,
   ChapterSearchResult,
   ChapterUpdateResult,
+  ChapterCandidateSummary,
+  ChapterCandidateDetail,
   Provider,
   ProviderCreate,
   RoleAssignment,
@@ -272,6 +274,24 @@ export const api = {
     method: "PATCH",
     body: JSON.stringify(payload),
   }),
+
+  listChapterCandidates: (projectId: string, chapterNo: number) =>
+    request<{ chapter_no: number; candidates: ChapterCandidateSummary[] }>(
+      `/projects/${projectId}/chapters/${chapterNo}/candidates`,
+    ),
+
+  getChapterCandidate: (projectId: string, chapterNo: number, version: string) =>
+    request<ChapterCandidateDetail>(
+      `/projects/${projectId}/chapters/${chapterNo}/candidates/${encodeURIComponent(version)}`,
+    ),
+
+  acceptChapterCandidate: (projectId: string, chapterNo: number, version: string, payload: {
+    expected_revision_hash: string;
+    expected_candidate_hash: string;
+  }) => request<ChapterUpdateResult>(
+    `/projects/${projectId}/chapters/${chapterNo}/candidates/${encodeURIComponent(version)}/accept`,
+    { method: "POST", body: JSON.stringify(payload) },
+  ),
 
   searchChapters: (projectId: string, query: string, characterId?: string) => {
     const params = new URLSearchParams({ query, top_k: "5" });
