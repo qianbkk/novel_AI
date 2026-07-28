@@ -32,7 +32,7 @@ from app.database import SessionLocal
 from app.models import (
     Project, Chapter, ChapterCharacter, Character, Faction,
     PowerSystem, Currency, MapNode, Foreshadowing, RuleConfig,
-    WorldSetting, EntityRelation,
+    WorldSetting, EntityRelation, NovelAIBinding,
 )
 from app.schema_validator import (
     validate_setting_package, validate_chapter_meta, SchemaError,
@@ -41,15 +41,26 @@ from app.logging_setup import get_logger
 
 log = get_logger("novel_ai.audit")
 
-ENGINE_CH_DIR = Path("data/engine/output/chapters")
-NOVELAI_CH_DIR = Path("../novel_AI/output/chapters")
-SETTING_PATH = Path("data/engine/output/setting_package.json")
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_ENGINE_ROOT = BACKEND_ROOT / "data" / "engine"
+
+
+def resolve_project_paths(project_id: str, db) -> tuple[Path, Path]:
+    """按项目 binding 解析设定包与章节目录；无 binding 时使用绝对默认目录。"""
+    binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
+    engine_root = Path(binding.novel_ai_dir) if binding and binding.novel_ai_dir else DEFAULT_ENGINE_ROOT
+    return engine_root / "output" / "setting_package.json", engine_root / "output" / "chapters"
 
 
 class Auditor:
-    def __init__(self, project_id: str, strict: bool = False):
+    def __init__(
+        self, project_id: str, strict: bool = False,
+        setting_path: Path | None = None, chapters_dir: Path | None = None,
+    ):
         self.pid = project_id
         self.strict = strict
+        self.setting_path = setting_path or DEFAULT_ENGINE_ROOT / "output" / "setting_package.json"
+        self.chapters_dir = chapters_dir or DEFAULT_ENGINE_ROOT / "output" / "chapters"
         self.errors: list[str] = []
         self.warnings: list[str] = []
         self.passes: list[str] = []
@@ -113,13 +124,13 @@ def audit_setting_package(a: Auditor):
     如果文件存在但 schema 校验失败（多半是早期版本拉的数据，schema 已演进）
     → info（让用户知道是数据版本问题，不是真 bug）。
     """
-    if not SETTING_PATH.exists():
+    if not a.setting_path.exists():
         a.info(
             "A1-A7: setting_package.json 不存在",
             "项目还没跑过 worldbuild + pull-setting，先做这两步再 audit"
         )
         return
-    raw = json.loads(SETTING_PATH.read_text(encoding="utf-8"))
+    raw = json.loads(a.setting_path.read_text(encoding="utf-8"))
     try:
         validate_setting_package(raw)
         a.check(True, "A1: setting_package.json schema 校验通过")
@@ -321,28 +332,23 @@ def audit_chapters(a: Auditor, db):
     title_line_re = re.compile(r"^第\d+[章卷]\s*\S+")
     md_heading_re = re.compile(r"^#{1,6}\s+")
     for c in chs:
-        for d in [ENGINE_CH_DIR, NOVELAI_CH_DIR]:
-            f = d / f"ch_{c.chapter_no:04d}.txt"
-            if f.exists():
-                lines = f.read_text(encoding="utf-8").splitlines()
-                # 跳过开头的所有空行，找第一个真行
-                first = ""
-                for ln in lines:
-                    if ln.strip():
-                        first = ln.strip()
-                        break
-                if not first:
-                    junk_first.append((c.chapter_no, "文件全空", ""))
-                elif first.startswith("【修改后正文】"):
-                    junk_first.append((c.chapter_no, "首行是占位", first))
-                elif title_line_re.match(first):
-                    junk_first.append((c.chapter_no, "首行是重复标题", first))
-                elif md_heading_re.match(first):
-                    junk_first.append((c.chapter_no, "首行是 markdown 标题", first))
-                elif first == "---":
-                    junk_first.append((c.chapter_no, "首行是 markdown 分隔线", first))
-                # 纯 scene label 【xxx】作为首行是 OK 的，跳过
-                break
+        f = a.chapters_dir / f"ch_{c.chapter_no:04d}.txt"
+        if not f.exists():
+            continue
+        lines = f.read_text(encoding="utf-8").splitlines()
+        # 跳过开头的所有空行，找第一个真行
+        first = next((line.strip() for line in lines if line.strip()), "")
+        if not first:
+            junk_first.append((c.chapter_no, "文件全空", ""))
+        elif first.startswith("【修改后正文】"):
+            junk_first.append((c.chapter_no, "首行是占位", first))
+        elif title_line_re.match(first):
+            junk_first.append((c.chapter_no, "首行是重复标题", first))
+        elif md_heading_re.match(first):
+            junk_first.append((c.chapter_no, "首行是 markdown 标题", first))
+        elif first == "---":
+            junk_first.append((c.chapter_no, "首行是 markdown 分隔线", first))
+        # 纯 scene label 【xxx】作为首行是 OK 的
     a.check(
         not junk_first,
         f"E: 全部 chapter txt 首行是真正文",
@@ -377,10 +383,10 @@ def audit_chapters(a: Auditor, db):
 
 def audit_chapter_meta_files(a: Auditor):
     """G. meta.json 文件 schema 校验（防止 B 类再现：LLM 漏字段 import 时静默）"""
-    if not ENGINE_CH_DIR.exists():
-        a.check(False, "G1: engine chapters dir 存在", str(ENGINE_CH_DIR))
+    if not a.chapters_dir.exists():
+        a.check(False, "G1: engine chapters dir 存在", str(a.chapters_dir))
         return
-    files = sorted(ENGINE_CH_DIR.glob("ch_*_meta.json"))
+    files = sorted(a.chapters_dir.glob("ch_*_meta.json"))
     a.check(
         len(files) >= 1,
         "G1: engine dir 至少 1 个 meta 文件",
@@ -443,16 +449,19 @@ def main():
                         help="WARN 也算失败")
     args = parser.parse_args()
 
-    print(f"Auditing project_id={args.pid} (strict={args.strict})")
-    print(f"  setting: {SETTING_PATH}")
-    print(f"  engine chapters: {ENGINE_CH_DIR}")
-
-    a = Auditor(args.pid, strict=args.strict)
-    audit_setting_package(a)
-    audit_chapter_meta_files(a)
-
     db = SessionLocal()
     try:
+        setting_path, chapters_dir = resolve_project_paths(args.pid, db)
+        print(f"Auditing project_id={args.pid} (strict={args.strict})")
+        print(f"  setting: {setting_path}")
+        print(f"  engine chapters: {chapters_dir}")
+
+        a = Auditor(
+            args.pid, strict=args.strict,
+            setting_path=setting_path, chapters_dir=chapters_dir,
+        )
+        audit_setting_package(a)
+        audit_chapter_meta_files(a)
         audit_worldbuild_db(a, db)
         audit_chapters(a, db)
         audit_orphan_data(a, db)
