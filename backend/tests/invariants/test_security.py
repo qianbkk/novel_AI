@@ -415,7 +415,9 @@ class TestRotateMasterKeyEndToEnd:
             # 4. 轮换
             new_key = base64.urlsafe_b64encode(secrets.token_bytes(32)).decode()
             import sys as _sys, builtins
-            _sys.argv = ["rotate", "--new-key", new_key]
+            # urlsafe base64 可能以 "-" 开头；用 --opt=value 避免 argparse
+            # 把随机密钥误判为下一个 option（约 1/64 概率假失败）。
+            _sys.argv = ["rotate", f"--new-key={new_key}"]
             # 脚本要求"按 Enter 继续"确认备份，monkeypatch 让它自动继续
             monkeypatch.setattr(builtins, "input", lambda prompt="": "")
             rc = mod.main()

@@ -85,6 +85,7 @@ async def update_chapter_content(
     old_content = chapter.content or ""
     target_path: Path | None = None
     target_existed = False
+    old_disk_content: str | None = None
     backup_path: Path | None = None
 
     # 先在数据库事务中重建所有派生数据；此时尚未 commit。
@@ -123,6 +124,7 @@ async def update_chapter_content(
         backup_path = _backup_path(chapters_dir, chapter.chapter_no, current_hash)
         backup_path.parent.mkdir(parents=True, exist_ok=True)
         if target_existed:
+            old_disk_content = target_path.read_text(encoding="utf-8")
             shutil.copy2(target_path, backup_path)
         else:
             # 引擎正式稿尚不存在时，仍把数据库中的原章留作可恢复快照。
@@ -135,8 +137,8 @@ async def update_chapter_content(
         db.rollback()
         if target_path is not None:
             try:
-                if target_existed:
-                    atomic_write_text(str(target_path), old_content)
+                if target_existed and old_disk_content is not None:
+                    atomic_write_text(str(target_path), old_disk_content)
                 elif target_path.exists():
                     target_path.unlink()
             except OSError:

@@ -152,6 +152,11 @@ export function MemoryPanel({ projectId, memory, ragStatus, loading, error, onRe
         <div className="banner banner-danger" data-testid="memory-error">
           记忆快照读取失败：{error}
         </div>
+        <RagContextSection
+          status={ragStatus} query={ragQuery} setQuery={setRagQuery}
+          preview={ragPreview} loading={ragLoading} onPreview={previewContext}
+        />
+        {ragError && <div className="banner banner-danger">上下文预览失败：{ragError}</div>}
       </div>
     );
   }

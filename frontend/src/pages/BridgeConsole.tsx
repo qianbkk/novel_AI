@@ -316,19 +316,27 @@ export default function BridgeConsole() {
     if (!projectId) return;
     setMemoryLoading(true);
     try {
-      const [data, indexStatus] = await Promise.all([
+      const [memoryResult, ragResult] = await Promise.allSettled([
         api.getBridgeMemory(projectId),
         api.getRagStatus(projectId),
       ]);
       if (!mountedRef.current) return;
-      setMemory(data);
-      setRagStatus(indexStatus);
-      setMemoryError(null);
+      if (memoryResult.status === "fulfilled") {
+        setMemory(memoryResult.value);
+        setMemoryError(null);
+      } else {
+        setMemoryError(String(memoryResult.reason));
+        if (!quiet) toast.error("记忆快照拉取失败", String(memoryResult.reason));
+      }
+      if (ragResult.status === "fulfilled") {
+        setRagStatus(ragResult.value);
+      } else if (!quiet) {
+        toast.error("RAG 状态拉取失败", String(ragResult.reason));
+      }
     } catch (e) {
       if (!mountedRef.current) return;
-      // 记忆读不到是硬故障（长篇一致性全靠它），不静默
       setMemoryError(String(e));
-      if (!quiet) toast.error("记忆快照拉取失败", String(e));
+      if (!quiet) toast.error("上下文状态拉取失败", String(e));
     } finally {
       if (mountedRef.current) setMemoryLoading(false);
     }

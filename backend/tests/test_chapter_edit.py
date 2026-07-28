@@ -107,6 +107,41 @@ def test_update_chapter_rejects_stale_revision(api_client, editable_chapter):
     assert current["content"] == "林渊走进云州。旧内容。"
 
 
+def test_update_chapter_restores_original_disk_value_on_commit_failure(
+    api_client, editable_chapter, monkeypatch,
+):
+    from app.database import SessionLocal
+    from app.chapter_edit import update_chapter_content
+
+    project_id, chapter_id, engine_dir = editable_chapter
+    final_path = engine_dir / "output" / "chapters" / "ch_0001.txt"
+    assert final_path.read_text(encoding="utf-8") == "磁盘旧正文"
+
+    db = SessionLocal()
+    original_commit = db.commit
+    try:
+        chapter = api_client.get(f"/projects/{project_id}/chapters/{chapter_id}").json()
+
+        def fail_commit():
+            raise RuntimeError("forced commit failure")
+
+        monkeypatch.setattr(db, "commit", fail_commit)
+        with pytest.raises(RuntimeError, match="forced commit failure"):
+            import asyncio
+            asyncio.run(update_chapter_content(
+                project_id=project_id,
+                chapter_id=chapter_id,
+                title="失败更新",
+                content="不应留在磁盘",
+                expected_revision_hash=chapter["revision_hash"],
+                db=db,
+            ))
+        assert final_path.read_text(encoding="utf-8") == "磁盘旧正文"
+    finally:
+        monkeypatch.setattr(db, "commit", original_commit)
+        db.close()
+
+
 def test_update_chapter_rejects_empty_content(api_client, editable_chapter):
     project_id, chapter_id, _ = editable_chapter
     current = api_client.get(f"/projects/{project_id}/chapters/{chapter_id}").json()
