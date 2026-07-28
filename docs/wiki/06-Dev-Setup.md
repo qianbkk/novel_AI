@@ -2,8 +2,8 @@
 
 ## 环境要求
 
-- Python 3.10+（后端 + 引擎）
-- Node.js（前端，Vite 5 / React 18 / TS 5）
+- Python 3.12+（后端 + 引擎；writer 使用 PEP 701 f-string）
+- Node.js 22+（前端，Vite 5 / React 18 / TS 5）
 - SQLite（内置，无需单独安装）
 
 ## 启动步骤
