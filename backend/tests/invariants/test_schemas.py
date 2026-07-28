@@ -175,7 +175,8 @@ class TestPydanticNullable:
         anno = fields["created_at"].annotation
         # 简化为：直接构造一个 created_at=None 的实例
         inst = ChapterFull(
-            id="x", chapter_no=1, content="x", created_at=None,
+            id="x", chapter_no=1, content="x", revision_hash="0" * 64,
+            created_at=None,
         )
         assert inst.created_at is None
 

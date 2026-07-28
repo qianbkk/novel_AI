@@ -3,6 +3,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from ..auth_scope import require_owned_project
+from ..chapter_edit import (
+    ChapterEditConflictError, ChapterEditNotFoundError, chapter_revision_hash,
+    update_chapter_content,
+)
 from ..chapter_rewrite import (
     ChapterNotFoundError, RewriteConflictError, rewrite_chapter,
 )
@@ -123,9 +127,50 @@ def get_chapter(
         chapter_no=chapter.chapter_no,
         title=chapter.title,
         content=_clean_content_for_import(chapter.content or ""),
+        revision_hash=chapter_revision_hash(chapter.title, chapter.content or ""),
         created_at=chapter.created_at,
         characters=characters,
     )
+
+
+class ChapterUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=200)
+    content: str = Field(min_length=1, max_length=500_000)
+    expected_revision_hash: str = Field(min_length=64, max_length=64)
+
+
+@router.patch("/{chapter_id}")
+async def update_chapter(
+    project_id: str,
+    chapter_id: str,
+    payload: ChapterUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    _user=Depends(_owner_check),
+):
+    """人工编辑章节；用 revision hash 防止覆盖并发更新。"""
+    try:
+        return await update_chapter_content(
+            project_id=project_id,
+            chapter_id=chapter_id,
+            title=payload.title,
+            content=payload.content,
+            expected_revision_hash=payload.expected_revision_hash,
+            db=db,
+        )
+    except ChapterEditNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ChapterEditConflictError as e:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "chapter_revision_conflict",
+                "message": "章节已被其他窗口或后台任务更新，请重新加载后再保存",
+                "current_revision_hash": str(e),
+            },
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @router.get("/{chapter_id}/characters")

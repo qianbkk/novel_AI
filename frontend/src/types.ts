@@ -129,6 +129,18 @@ export interface ChapterSearchResult {
   snippet: string;
 }
 
+export interface ChapterUpdateResult {
+  id: string;
+  chapter_no: number;
+  title: string | null;
+  content: string;
+  revision_hash: string;
+  source: string;
+  indexed_chunk_count: number;
+  engine_file_synced: boolean;
+  backup_path: string | null;
+}
+
 export interface Provider {
   id: string;
   name: string;
@@ -294,6 +306,7 @@ export interface ChapterFull {
   chapter_no: number;
   title: string | null;
   content: string;
+  revision_hash: string;
   // 后端 schema 允许 None（历史数据兼容：raw SQL / _force_reimport 覆盖写入的
   // 旧行 created_at 可能为 null），前端用 string | null 跟 schema 对齐。
   created_at: string | null;

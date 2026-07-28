@@ -242,6 +242,7 @@ class ChapterFull(BaseModel):
     chapter_no: int
     title: Optional[str] = None
     content: str
+    revision_hash: str
     # created_at 在历史数据（用 raw SQL 或 _force_reimport 覆盖写入）里可能为空，
     # 避免把整个详情接口打挂，这里允许 None。Schema v2 兼容。
     created_at: Optional[datetime] = None

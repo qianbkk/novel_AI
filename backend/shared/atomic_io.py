@@ -20,6 +20,32 @@ from typing import Any
 log = logging.getLogger("novel_ai.shared.atomic_io")
 
 
+def atomic_write_text(path: str, content: str) -> None:
+    """原子写 UTF-8 文本，并在 Windows 文件占用时做有限重试。"""
+    p = os.fspath(path)
+    os.makedirs(os.path.dirname(p) or ".", exist_ok=True)
+    tmp = p + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(content)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            pass
+
+    last_err: OSError | None = None
+    for attempt in range(3):
+        try:
+            os.replace(tmp, p)
+            return
+        except OSError as e:
+            last_err = e
+            if attempt < 2:
+                time.sleep(0.1 * (2 ** attempt))
+    if last_err is not None:
+        raise last_err
+
+
 def atomic_write_json(path: str, data: Any) -> None:
     """原子写 JSON：先写 .tmp 再 os.replace，避免半写文件被下次读到。
 

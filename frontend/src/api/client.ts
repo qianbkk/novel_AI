@@ -8,6 +8,7 @@ import type {
   ChapterCharacter,
   ChapterCreateResult,
   ChapterSearchResult,
+  ChapterUpdateResult,
   Provider,
   ProviderCreate,
   RoleAssignment,
@@ -262,6 +263,15 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  updateChapter: (projectId: string, chapterId: string, payload: {
+    title: string | null;
+    content: string;
+    expected_revision_hash: string;
+  }) => request<ChapterUpdateResult>(`/projects/${projectId}/chapters/${chapterId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  }),
 
   searchChapters: (projectId: string, query: string, characterId?: string) => {
     const params = new URLSearchParams({ query, top_k: "5" });

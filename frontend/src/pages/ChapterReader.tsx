@@ -17,6 +17,14 @@ import { useToast } from "../components/Toast";
  * 设计目标：让 300+ 章的长篇小说有真正的「读」体验，而不是点开弹窗看几秒就关。
  */
 type Theme = "dark" | "light" | "sepia";
+type SaveState = "idle" | "draft" | "saving" | "saved" | "error" | "conflict";
+
+type LocalChapterDraft = {
+  title: string;
+  content: string;
+  baseRevision: string;
+  updatedAt: number;
+};
 
 export default function ChapterReader() {
   const { projectId, chapterNo: chapterNoStr } = useParams<{ projectId: string; chapterNo: string }>();
@@ -30,8 +38,16 @@ export default function ChapterReader() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState("");
+  const [editContent, setEditContent] = useState("");
+  const [baseRevision, setBaseRevision] = useState("");
+  const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [findText, setFindText] = useState("");
+  const [replaceText, setReplaceText] = useState("");
   const mountedRef = useRef(true);
   const requestRef = useRef(0);
+  const saveRequestRef = useRef(0);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -69,6 +85,13 @@ export default function ChapterReader() {
     localStorage.setItem("reader.tocOpen", String(tocOpen));
   }, [tocOpen]);
 
+  const draftKey = projectId && Number.isInteger(chapterNo)
+    ? `novel_ai.chapter_draft.${projectId}.${chapterNo}`
+    : null;
+  const dirty = Boolean(chapter) && (
+    editTitle !== (chapter?.title || "") || editContent !== (chapter?.content || "")
+  );
+
   useEffect(() => {
     if (!projectId || !Number.isInteger(chapterNo) || chapterNo < 1) {
       setChapter(null);
@@ -94,6 +117,29 @@ export default function ChapterReader() {
         const full = await api.getChapter(projectId, target.id);
         if (!mountedRef.current || requestRef.current !== requestId) return;
         setChapter(full);
+        setEditTitle(full.title || "");
+        setEditContent(full.content);
+        setBaseRevision(full.revision_hash);
+        setEditing(false);
+        setSaveState("idle");
+        if (draftKey) {
+          try {
+            const raw = localStorage.getItem(draftKey);
+            if (raw) {
+              const draft = JSON.parse(raw) as LocalChapterDraft;
+              if (draft.baseRevision === full.revision_hash &&
+                  (draft.title !== (full.title || "") || draft.content !== full.content)) {
+                setEditTitle(draft.title);
+                setEditContent(draft.content);
+                setEditing(true);
+                setSaveState("draft");
+                toast.info("已恢复本地草稿", "服务器正文未被覆盖");
+              }
+            }
+          } catch {
+            localStorage.removeItem(draftKey);
+          }
+        }
         // 加载出场人物
         try {
           const chars = await api.getChapterCharacters(projectId, target.id);
@@ -116,7 +162,81 @@ export default function ChapterReader() {
     return () => {
       if (requestRef.current === requestId) requestRef.current += 1;
     };
-  }, [projectId, chapterNo, reloadKey, toast]);
+  }, [projectId, chapterNo, reloadKey, toast, draftKey]);
+
+  useEffect(() => {
+    if (!editing || !dirty || !draftKey || !baseRevision) return;
+    const draft: LocalChapterDraft = {
+      title: editTitle,
+      content: editContent,
+      baseRevision,
+      updatedAt: Date.now(),
+    };
+    localStorage.setItem(draftKey, JSON.stringify(draft));
+    setSaveState((current) => current === "conflict" ? current : "draft");
+  }, [editing, dirty, draftKey, baseRevision, editTitle, editContent]);
+
+  async function saveEdits(options: { silent?: boolean } = {}) {
+    if (!projectId || !chapter || !dirty || saveState === "saving" || saveState === "conflict") return;
+    const requestId = ++saveRequestRef.current;
+    setSaveState("saving");
+    try {
+      const updated = await api.updateChapter(projectId, chapter.id, {
+        title: editTitle.trim() || null,
+        content: editContent,
+        expected_revision_hash: baseRevision,
+      });
+      if (!mountedRef.current || saveRequestRef.current !== requestId) return;
+      setChapter((current) => current ? { ...current, ...updated } : current);
+      setEditTitle(updated.title || "");
+      setEditContent(updated.content);
+      setBaseRevision(updated.revision_hash);
+      setSaveState("saved");
+      if (draftKey) localStorage.removeItem(draftKey);
+      if (!options.silent) {
+        toast.success("章节已保存", updated.engine_file_synced ? "数据库、引擎正文与检索索引已同步" : "数据库与检索索引已同步");
+      }
+    } catch (error) {
+      if (!mountedRef.current || saveRequestRef.current !== requestId) return;
+      const message = String(error);
+      if (message.includes("chapter_revision_conflict")) {
+        setSaveState("conflict");
+        toast.error("保存冲突", "服务器版本已变化，请重新加载；本地草稿仍保留");
+      } else {
+        setSaveState("error");
+        if (!options.silent) toast.error("保存失败", message);
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (!editing || !dirty || saveState === "conflict" || saveState === "saving") return;
+    const timer = window.setTimeout(() => { void saveEdits({ silent: true }); }, 1500);
+    return () => window.clearTimeout(timer);
+    // saveEdits intentionally reads the latest render state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editing, dirty, editTitle, editContent, baseRevision, saveState]);
+
+  useEffect(() => {
+    const guard = (event: BeforeUnloadEvent) => {
+      if (!dirty) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", guard);
+    return () => window.removeEventListener("beforeunload", guard);
+  }, [dirty]);
+
+  function replaceAll() {
+    if (!findText) return;
+    const matches = editContent.split(findText).length - 1;
+    if (matches <= 0) {
+      toast.info("未找到匹配文本");
+      return;
+    }
+    setEditContent(editContent.split(findText).join(replaceText));
+    toast.info(`已替换 ${matches} 处`, "等待自动保存或点击保存");
+  }
 
   const sortedChapters = useMemo(
     () => [...allChapters].sort((a, b) => a.chapter_no - b.chapter_no),
@@ -129,6 +249,7 @@ export default function ChapterReader() {
 
   function goToChapter(no: number) {
     if (!projectId) return;
+    if (dirty && !confirm("当前章节还有未保存修改，仍要离开吗？本地草稿会保留。")) return;
     navigate(`/projects/${projectId}/chapter/${no}`);
   }
 
@@ -170,13 +291,46 @@ export default function ChapterReader() {
     <div className={`reader-page reader-theme-${theme}`}>
       {/* 顶部导航栏 */}
       <div className="reader-topbar">
-        <Link to={`/projects/${projectId}/chapters`} className="reader-back">
+        <Link
+          to={`/projects/${projectId}/chapters`}
+          className="reader-back"
+          onClick={(event) => {
+            if (dirty && !confirm("当前章节还有未保存修改，仍要离开吗？本地草稿会保留。")) {
+              event.preventDefault();
+            }
+          }}
+        >
           ← 章节列表
         </Link>
         <div className="reader-topbar__center">
           第 {chapter.chapter_no} 章 · {allChapters.length} 章中
         </div>
         <div className="reader-topbar__right">
+          <span className={`reader-save-state reader-save-state--${saveState}`}>
+            {saveState === "saving" ? "保存中…" : saveState === "saved" ? "已保存" :
+              saveState === "draft" ? "本地草稿" : saveState === "conflict" ? "版本冲突" :
+              saveState === "error" ? "保存失败" : ""}
+          </span>
+          <button
+            type="button"
+            className={`btn btn-sm ${editing ? "btn-primary" : "btn-ghost"}`}
+            onClick={() => {
+              if (editing && dirty && !confirm("退出编辑会保留本地草稿，继续吗？")) return;
+              setEditing((value) => !value);
+            }}
+          >
+            {editing ? "阅读模式" : "编辑"}
+          </button>
+          {editing && (
+            <button
+              type="button"
+              className="btn btn-sm"
+              disabled={!dirty || saveState === "saving" || saveState === "conflict"}
+              onClick={() => void saveEdits()}
+            >
+              保存
+            </button>
+          )}
           <button
             type="button"
             className="reader-icon-btn"
@@ -225,16 +379,27 @@ export default function ChapterReader() {
               {/* 2026-07-23 修复（问题 #8 步骤 E）：title 守卫。
                   后端历史脏数据：title 字段可能是 JSON 字面量（`{"title": "...", "body":`），
                   或 LLM 漂移的长串。展示前检测 + 降级，避免读者看到 JSON 包装。 */}
-              <h1 className="reader-header__title">
-                {(() => {
-                  const t = (chapter.title || "").trim();
-                  if (!t) return "（无标题）";
-                  if (t.startsWith("{") || t.length > 30) {
-                    return "（标题待生成）";
-                  }
-                  return t;
-                })()}
-              </h1>
+              {editing ? (
+                <input
+                  className="reader-editor__title"
+                  value={editTitle}
+                  maxLength={200}
+                  onChange={(event) => setEditTitle(event.target.value)}
+                  placeholder="章节标题"
+                  aria-label="章节标题"
+                />
+              ) : (
+                <h1 className="reader-header__title">
+                  {(() => {
+                    const t = (chapter.title || "").trim();
+                    if (!t) return "（无标题）";
+                    if (t.startsWith("{") || t.length > 30) {
+                      return "（标题待生成）";
+                    }
+                    return t;
+                  })()}
+                </h1>
+              )}
               <div className="reader-header__meta">
                 {chapter.content.length.toLocaleString()} 字 ·{" "}
                 {chapter.created_at ? new Date(chapter.created_at).toLocaleDateString() : "未知日期"}
@@ -249,11 +414,49 @@ export default function ChapterReader() {
               )}
             </header>
 
-            <div className="reader-body">
-              {chapter.content.split(/\n\n+/).map((p, i) => (
-                <p key={i} className="reader-paragraph">{p}</p>
-              ))}
-            </div>
+            {editing ? (
+              <div className="reader-editor">
+                <div className="reader-editor__find">
+                  <input
+                    value={findText}
+                    onChange={(event) => setFindText(event.target.value)}
+                    placeholder="查找"
+                    aria-label="查找文本"
+                  />
+                  <input
+                    value={replaceText}
+                    onChange={(event) => setReplaceText(event.target.value)}
+                    placeholder="替换为"
+                    aria-label="替换文本"
+                  />
+                  <button type="button" className="btn btn-sm" onClick={replaceAll} disabled={!findText}>
+                    全部替换
+                  </button>
+                  <span>{editContent.length.toLocaleString()} 字</span>
+                </div>
+                {saveState === "conflict" && (
+                  <div className="banner banner-danger">
+                    服务器章节已更新。你的本地草稿仍保留；请先复制需要保留的内容，再重新加载。
+                    <button type="button" className="btn btn-sm" onClick={() => setReloadKey((value) => value + 1)}>
+                      重新加载
+                    </button>
+                  </div>
+                )}
+                <textarea
+                  className="reader-editor__content"
+                  value={editContent}
+                  onChange={(event) => setEditContent(event.target.value)}
+                  spellCheck={false}
+                  aria-label="章节正文"
+                />
+              </div>
+            ) : (
+              <div className="reader-body">
+                {chapter.content.split(/\n\n+/).map((p, i) => (
+                  <p key={i} className="reader-paragraph">{p}</p>
+                ))}
+              </div>
+            )}
 
             {/* 底部上下章导航 */}
             <nav className="reader-pager">
