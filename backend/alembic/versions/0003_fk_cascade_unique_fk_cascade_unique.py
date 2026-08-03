@@ -52,6 +52,9 @@ def upgrade() -> None:
     #    SQLite 缺 ALTER TABLE ADD FOREIGN KEY，只能 recreate 表
     op.execute("PRAGMA foreign_keys=OFF")
     try:
+        # SQLite DDL 非事务：旧版 0003 若中途失败可能遗留 projects_new。
+        # projects 仍存在时该表只是失败迁移的临时副本，可清理后重试。
+        op.execute("DROP TABLE IF EXISTS projects_new")
         op.execute("""
             CREATE TABLE projects_new (
                 id VARCHAR PRIMARY KEY,
@@ -75,46 +78,61 @@ def upgrade() -> None:
     finally:
         op.execute("PRAGMA foreign_keys=ON")
 
-    # 2) 所有 project_id FK 加 ondelete=CASCADE
-    #    简单做法：直接 drop+recreate constraint。SQLite ALTER TABLE
-    #    支持 DROP/ADD FOREIGN KEY（在 3.35+）但 constraint 名需已知。
-    #    用 PRAGMA foreign_key_list 查不到 constraint 名，但 sqlite_master
-    #    sql 字段含完整 CREATE TABLE 文本，可 regex 提取。
-    #    更简单：直接重建表（同 #1 模式）
+    # 2) 所有 project_id FK 加 ondelete=CASCADE。
+    # SQLite 旧库的 FK 通常是匿名约束；batch drop 一个推测出来的名字必然失败。
+    # 通过反射复制整张表，只替换 project_id -> projects.id 这一条 FK，再由
+    # batch_alter_table(copy_from=...) 完成安全重建。保留其它列、索引和约束。
     for table in _TABLES_WITH_PROJECT_FK:
-        # 检查表是否有 project_id 列
-        cols = op.get_bind().execute(
-            sa.text(f"PRAGMA table_info({table})")
-        ).fetchall()
-        col_names = [c[1] for c in cols]
-        if "project_id" not in col_names:
+        if not inspector.has_table(table):
             continue
-        # 用 batch_alter_table 让 alembic 自动管理 schema（不加 FK 名
-        # 重建，让 alembic 用新名字）
-        with op.batch_alter_table(table, schema=None) as batch_op:
-            batch_op.drop_constraint(
-                f"fk_{table}_project_id_projects", type_="foreignkey"
-            )
-            batch_op.create_foreign_key(
-                f"fk_{table}_project_id_projects",
-                "projects",
-                ["project_id"], ["id"],
-                ondelete="CASCADE",
-            )
+        metadata = sa.MetaData()
+        reflected = sa.Table(table, metadata, autoload_with=bind)
+        if "project_id" not in reflected.c:
+            continue
 
-    # 3) ChapterCharacter(chapter_id, character_id) UNIQUE
-    op.create_unique_constraint(
-        "uq_chapter_characters_chapter_character",
-        "chapter_characters",
-        ["chapter_id", "character_id"],
-    )
+        old_fks = [
+            fk for fk in reflected.foreign_key_constraints
+            if list(fk.column_keys) == ["project_id"]
+            and fk.referred_table.name == "projects"
+        ]
+        if old_fks and all((fk.ondelete or "").upper() == "CASCADE" for fk in old_fks):
+            continue
+        for fk in old_fks:
+            reflected.constraints.discard(fk)
+        reflected.append_constraint(sa.ForeignKeyConstraint(
+            ["project_id"], ["projects.id"],
+            name=f"fk_{table}_project_id_projects",
+            ondelete="CASCADE",
+        ))
+        with op.batch_alter_table(table, schema=None, copy_from=reflected) as batch_op:
+            batch_op.alter_column("project_id", existing_type=reflected.c.project_id.type)
+
+    # 3) ChapterCharacter(chapter_id, character_id) UNIQUE。
+    # SQLite 不能 ALTER ADD CONSTRAINT，统一用 batch copy-and-move。
+    if inspector.has_table("chapter_characters"):
+        unique_sets = {
+            tuple(item.get("column_names") or [])
+            for item in sa.inspect(bind).get_unique_constraints("chapter_characters")
+        }
+        if ("chapter_id", "character_id") not in unique_sets:
+            with op.batch_alter_table("chapter_characters", schema=None) as batch_op:
+                batch_op.create_unique_constraint(
+                    "uq_chapter_characters_chapter_character",
+                    ["chapter_id", "character_id"],
+                )
 
     # 4) Outline(project_id, arc_id) UNIQUE
-    op.create_unique_constraint(
-        "uq_outlines_project_arc",
-        "outlines",
-        ["project_id", "arc_id"],
-    )
+    if inspector.has_table("outlines"):
+        unique_sets = {
+            tuple(item.get("column_names") or [])
+            for item in sa.inspect(bind).get_unique_constraints("outlines")
+        }
+        if ("project_id", "arc_id") not in unique_sets:
+            with op.batch_alter_table("outlines", schema=None) as batch_op:
+                batch_op.create_unique_constraint(
+                    "uq_outlines_project_arc",
+                    ["project_id", "arc_id"],
+                )
 
 
 def downgrade() -> None:

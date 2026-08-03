@@ -204,7 +204,15 @@ binding → push-concept → planner → pull-setting → bootstrap → init_arc
   （每个项目最新一条 pending/running 的 BridgeRun）
 - Dashboard 加 `runningBadge`：非空就显示⟳+命令名+呼吸动画，点了直接跳 BridgeConsole
 
-## 10. 后续改进（待办）
+## 10. 2026-08-03 真实 MiniMax 回归新增结论
+
+- **writer JSON 长度预算必须按 `body` 计算**：首次真实生成目标 `2000-2200` 字时，旧实现把完整 `{title, body, title_alts}` 包装当正文，续写和截断边界错误，实际正文仅 1230 字。修复后长度预算先提取 `body`、续写只拼正文、最终再封装合法 JSON；最终复跑正文 2211 字，落在允许的 `1900-2300` 容差区间。
+- **outline 硬约束必须进入 writer prompt**：`setting_constraints` / `forbidden_actions` 原先只存在 ChapterTask，writer 只读 memory 中的禁令，导致真实正文越过「不得直接读取尸内记忆」等约束。现已将两组字段作为显式硬契约注入 prompt，并加回归测试。
+- **项目 checker 不能替代独立总编审评**：第一次长度修复复跑中，项目 checker 给 8.2，但独立九维总编因系统面板串题、禁令越界、人物底牌过早揭示给 6.2/FAIL。补上 outline 硬约束注入后最终复跑，项目 checker 8.95、独立总编 7.3/PASS_WITH_NOTE；仍指出功能性对白、闻痕级设定边界和妹妹线索过早揭底。真实验收应保留双评审，且 blocking issue 必须压过平均分。
+- **Alembic 必须验证旧库升级，不只验证空库**：`0003` 在旧 SQLite 的匿名外键上无法按推测名称 drop，且 SQLite 不支持直接 `ALTER ADD UNIQUE`。现改为 batch copy-and-move，并覆盖 `0002 -> head` 旧库路径；实际项目数据库已升级到 `0003_fk_cascade_unique (head)`。
+- **质量遗留**：本次章节长度已达标，但体裁污染与规划服从仍需通过重写/审核门禁继续治理，不能仅凭字数修复宣称内容质量达标。
+
+## 11. 后续改进（待办）
 
 - **DB 层加 `UNIQUE(project_id, name)` 唯一约束** 兜底 characters 重复
 - **加 `GET /projects/<pid>/debug/state-snapshot` 聚合调试端点** 把 L2 + 角色 + 势力 + 伏笔 一次返回（用户提过需求，未做）

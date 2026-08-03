@@ -80,6 +80,95 @@ def test_alembic_upgrade_head_on_clean_db(tmp_path):
         conn.close()
 
 
+def test_alembic_upgrade_head_from_0002_existing_sqlite_db(tmp_path):
+    """旧 SQLite 库的匿名 project_id FK 也必须能从 0002 升到 head。"""
+    import sqlite3
+    import subprocess
+
+    db_path = tmp_path / f"alembic_existing_{_uuid.uuid4().hex[:6]}.sqlite"
+    conn = sqlite3.connect(str(db_path))
+    try:
+        conn.executescript("""
+            CREATE TABLE users (id VARCHAR PRIMARY KEY);
+            CREATE TABLE projects (
+                id VARCHAR PRIMARY KEY,
+                title VARCHAR,
+                genre VARCHAR NOT NULL,
+                audience VARCHAR,
+                config_json JSON NOT NULL,
+                status VARCHAR DEFAULT 'draft',
+                ai_assist_level VARCHAR DEFAULT 'ai_assisted',
+                budget_limit_usd FLOAT,
+                novel_ai_status VARCHAR DEFAULT 'not_started',
+                owner_id VARCHAR,
+                audit_mode VARCHAR DEFAULT 'full',
+                created_at DATETIME
+            );
+            CREATE TABLE world_settings (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR,
+                world_view TEXT,
+                FOREIGN KEY(project_id) REFERENCES projects(id)
+            );
+            CREATE TABLE chapters (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR,
+                chapter_no INTEGER NOT NULL,
+                content TEXT NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id)
+            );
+            CREATE TABLE characters (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR,
+                name VARCHAR NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id)
+            );
+            CREATE TABLE chapter_characters (
+                id VARCHAR PRIMARY KEY,
+                chapter_id VARCHAR,
+                character_id VARCHAR,
+                FOREIGN KEY(chapter_id) REFERENCES chapters(id),
+                FOREIGN KEY(character_id) REFERENCES characters(id)
+            );
+            CREATE TABLE outlines (
+                id VARCHAR PRIMARY KEY,
+                project_id VARCHAR,
+                arc_id INTEGER NOT NULL,
+                arc_name VARCHAR NOT NULL,
+                FOREIGN KEY(project_id) REFERENCES projects(id)
+            );
+            CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL PRIMARY KEY);
+            INSERT INTO alembic_version(version_num) VALUES ('0002_phase4_users');
+        """)
+        conn.commit()
+    finally:
+        conn.close()
+
+    env = os.environ.copy()
+    env["DATABASE_URL"] = f"sqlite:///{db_path}"
+    result = subprocess.run(
+        [sys.executable, "-m", "alembic", "upgrade", "head"],
+        cwd=str(_BACKEND),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"旧库 upgrade head 失败：\nSTDOUT: {result.stdout[-2000:]}\n"
+        f"STDERR: {result.stderr[-2000:]}"
+    )
+
+    conn = sqlite3.connect(str(db_path))
+    try:
+        version = conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+        fk_rows = conn.execute("PRAGMA foreign_key_list(world_settings)").fetchall()
+        assert version == "0003_fk_cascade_unique"
+        assert any(row[2] == "projects" and row[3] == "project_id" and row[6] == "CASCADE" for row in fk_rows)
+    finally:
+        conn.close()
+
+
 def test_alembic_stamp_baseline_on_existing_db(tmp_path):
     """已有 DB 上跑 alembic stamp head（把 baseline 视为已应用）。
 

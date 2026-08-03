@@ -763,6 +763,7 @@ class LLMRouter:
         temperature: float = 0.4,
         *,
         max_continues: int = 2,
+        response_format: str = "plain",
     ) -> tuple[str, float]:
         """**写入路径**的字数控制：调 LLM 生成 + 强制 truncate 到 budget + 续写到 target。
 
@@ -774,11 +775,20 @@ class LLMRouter:
             3. 续写时 prompt 明确写"你前一篇被截断了，请从截断点继续写，剩余 N 字以内"
             4. 最多 max_continues 次（默认 2），最后一次不够也接受
 
+        `response_format="writer_json"` 用于 writer 首次要求 `{title, body}` 的路径：
+        长度计算、续写上下文和最终截断都只针对 `body`，避免 JSON 包装字符被误算为正文；
+        第一次响应解析出标题后，后续续写改为纯正文，最终重新封装为合法 JSON。
+
         Returns: (full_text, total_cost_usd)
         """
+        if response_format not in {"plain", "writer_json"}:
+            raise ValueError(f"未知 response_format: {response_format}")
+
         budget = target_chars
         soft_max = target_chars + tolerance
         accumulated = ""
+        title = ""
+        title_alts: list[str] = []
         total_cost = 0.0
         already_written = 0
 
@@ -815,22 +825,59 @@ class LLMRouter:
             total_cost += cost
             text = text.strip()
 
-            if i == 0:
+            if i == 0 and response_format == "writer_json":
+                body, parsed_title, parsed_alts = _extract_writer_json_parts(text)
+                accumulated = body
+                title = parsed_title
+                title_alts = parsed_alts
+            elif i == 0:
                 accumulated = text
             else:
-                # 续写：append 到已有文本
-                accumulated = accumulated.rstrip() + "\n\n" + text
+                # 续写 prompt 明确要求纯正文；provider 仍偶尔会再次包 JSON，
+                # 这里统一剥掉包装，避免把 `{"title":...}` 拼进章节正文。
+                continuation = text
+                if response_format == "writer_json":
+                    continuation, _, _ = _extract_writer_json_parts(text)
+                accumulated = accumulated.rstrip() + "\n\n" + continuation
 
             already_written = len(accumulated)
 
-            # 第一次如果已经在 budget 内，直接返回
             if already_written >= budget - tolerance:
                 # 截断到 soft_max（避免超太多），用句号边界感知避免切在字中间
                 if already_written > soft_max:
                     accumulated = _truncate_at_sentence_boundary(accumulated, soft_max)
-                return accumulated, total_cost
+                break
 
+        if response_format == "writer_json":
+            return _pack_writer_json(title, accumulated, title_alts), total_cost
         return accumulated, total_cost
+
+
+def _extract_writer_json_parts(raw: str) -> tuple[str, str, list[str]]:
+    """解析 writer 的 `{title, body, title_alts}`，失败时把 raw 当纯正文。
+
+    导入放在函数内，避免 router 模块初始化时与 engine.utils 形成循环依赖。
+    """
+    from ..utils import extract_llm_response_body, parse_llm_json_response
+
+    parsed = parse_llm_json_response(raw, default={})
+    title_alts: list[str] = []
+    if isinstance(parsed, dict):
+        raw_alts = parsed.get("title_alts") or []
+        if isinstance(raw_alts, list):
+            title_alts = [str(item).strip() for item in raw_alts if str(item).strip()][:2]
+    body, title = extract_llm_response_body(raw)
+    return body.strip(), title.strip(), title_alts
+
+
+def _pack_writer_json(title: str, body: str, title_alts: list[str]) -> str:
+    """把长度控制后的正文重新封装为合法 writer JSON。"""
+    payload = {
+        "title": title or "未命名章节",
+        "body": body.strip(),
+        "title_alts": title_alts[:2],
+    }
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _truncate_at_sentence_boundary(text: str, max_chars: int) -> str:

@@ -367,6 +367,7 @@ def call_with_budget_with_retry(
     temperature: float = 0.82,
     tolerance: int = 200,
     max_continues: int = 2,
+    response_format: str = "plain",
     sleep_seconds: float = 30.0,
     max_attempts: int = 2,          # 1 try + 1 retry
 ) -> tuple[str, float]:
@@ -396,6 +397,7 @@ def call_with_budget_with_retry(
                 tolerance=tolerance,
                 temperature=temperature,
                 max_continues=max_continues,
+                response_format=response_format,
             )
         except (_httpx.TransportError, _httpx.HTTPStatusError, ConnectionError) as e:
             last_exc = e

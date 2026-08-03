@@ -69,6 +69,88 @@ class TestLengthBudget:
         assert len(result3) == 100
         assert result3 == "x" * 100
 
+    def test_writer_json_budget_counts_body_and_appends_plain_continuation(self, monkeypatch):
+        """真实 writer 首次返回 JSON 时，长度预算必须按 body 而非包装文本计算。"""
+        from engine.llm.router import LLMRouter
+
+        router = LLMRouter()
+        first_body = "甲" * 900 + "。"
+        continuation = "乙" * 1000 + "。"
+        responses = [
+            (json.dumps({
+                "title": "封档之夜",
+                "body": first_body,
+                "title_alts": ["夜锁档案", "第七盏灯"],
+            }, ensure_ascii=False), 0.01),
+            (continuation, 0.02),
+        ]
+        prompts = []
+
+        def fake_call(**kwargs):
+            prompts.append(kwargs["user_prompt"])
+            return responses.pop(0)
+
+        monkeypatch.setattr(router, "call", fake_call)
+        raw, cost = router.call_with_length_budget(
+            agent_name="writer",
+            system_prompt="sys",
+            user_prompt="write json",
+            target_chars=2100,
+            tolerance=200,
+            max_continues=2,
+            response_format="writer_json",
+        )
+
+        parsed = json.loads(raw)
+        assert parsed["title"] == "封档之夜"
+        assert parsed["title_alts"] == ["夜锁档案", "第七盏灯"]
+        assert parsed["body"] == first_body + "\n\n" + continuation
+        assert 1900 <= len(parsed["body"]) <= 2300
+        assert len(prompts) == 2, "首稿正文不足时必须触发一次续写"
+        assert "上一次写了 901 字" in prompts[1]
+        assert cost == pytest.approx(0.03)
+
+    def test_writer_json_continuation_wrapper_is_not_inserted_into_body(self, monkeypatch):
+        """续写模型若再次返回 JSON，拼接时也只能取其中 body。"""
+        from engine.llm.router import LLMRouter
+
+        router = LLMRouter()
+        first = json.dumps({"title": "夜封档", "body": "甲" * 900 + "。"}, ensure_ascii=False)
+        second_body = "乙" * 1000 + "。"
+        second = json.dumps({"title": "不应采用", "body": second_body}, ensure_ascii=False)
+        responses = [(first, 0.0), (second, 0.0)]
+        monkeypatch.setattr(router, "call", lambda **kwargs: responses.pop(0))
+
+        raw, _ = router.call_with_length_budget(
+            agent_name="writer",
+            system_prompt="sys",
+            user_prompt="write json",
+            target_chars=2100,
+            tolerance=200,
+            response_format="writer_json",
+        )
+        parsed = json.loads(raw)
+        assert parsed["title"] == "夜封档"
+        assert parsed["body"].endswith(second_body)
+        assert '"title"' not in parsed["body"]
+
+    def test_writer_prompt_includes_outline_constraints_and_forbidden_actions(self):
+        """outline 的硬约束不能只存在 task 中，必须实际进入 writer prompt。"""
+        from engine.agents.writer import build_writer_prompt
+
+        task = {
+            "chapter_number": 1,
+            "target_length": "2000-2200",
+            "setting_constraints": ["主角只能闻痕，不能读取完整记忆"],
+            "forbidden_actions": ["不得出现系统面板", "不得让反派正面出场"],
+        }
+        _, prompt = build_writer_prompt(task, {}, {"protagonist": {"name": "沈砚"}})
+        assert "【本章设定约束（outline 硬契约" in prompt
+        assert "主角只能闻痕，不能读取完整记忆" in prompt
+        assert "【本章禁止事项（outline 硬契约" in prompt
+        assert "不得出现系统面板" in prompt
+        assert "不得让反派正面出场" in prompt
+
     def test_writer_uses_length_budget_path(self):
         """run_writer 必须接的是 _call_with_budget，不是 _call_llm。
 

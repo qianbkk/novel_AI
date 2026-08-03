@@ -54,7 +54,8 @@ def _get_router() -> LLMRouter:
 def _call_with_budget(agent_name: str, system: str, user: str,
                       target_chars: int, *, temperature: float = 0.82,
                       tolerance: int = 200,
-                      max_continues: int = 2) -> Tuple[str, float]:
+                      max_continues: int = 2,
+                      response_format: str = "writer_json") -> Tuple[str, float]:
     """Length-budget call (写入路径字数控制). 写作 agent 专用.
 
     #45 简化：实际逻辑已抽到 engine.utils.call_with_budget_with_retry，
@@ -69,6 +70,7 @@ def _call_with_budget(agent_name: str, system: str, user: str,
         temperature=temperature,
         tolerance=tolerance,
         max_continues=max_continues,
+        response_format=response_format,
     )
 
 
@@ -322,8 +324,22 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
     char_states_str = "\n".join(f"  {k}: {v}" for k, v in char_states.items()) or "  无"
     threads = context.get("active_threads", []) or []
     threads_str = "\n".join(f"  - {t}" for t in threads[:6]) or "  无"
-    forbidden = context.get("relevant_forbidden", []) or []
+    # 章节 task 自带的 setting_constraints / forbidden_actions 是 outline 的硬契约。
+    # 旧实现只读取 memory context.relevant_forbidden，导致真实模型完全看不到
+    # 「本章不得直接读取尸内记忆」等规划禁令，能在单元测试全绿时写出越界正文。
+    task_constraints = task.get("setting_constraints", []) or []
+    task_forbidden = task.get("forbidden_actions", []) or []
+    memory_forbidden = context.get("relevant_forbidden", []) or []
+    forbidden = list(dict.fromkeys(
+        str(item).strip()
+        for item in [*task_forbidden, *memory_forbidden]
+        if str(item).strip()
+    ))
     forbidden_str = "\n".join(f"  ✗ {f}" for f in forbidden) or "  无"
+    task_constraints_str = (
+        "\n".join(f"  ✓ {item}" for item in task_constraints if str(item).strip())
+        or "  无"
+    )
     foreshadow = context.get("foreshadowing_due_soon", []) or []
     foreshadow_str = "\n".join(f"  → {f}" for f in foreshadow) or "  无"
     cold_str = context.get("cold_summary", "") or ""
@@ -459,7 +475,10 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 
 {world_consistency_block}
 
-【本章禁止事项】
+【本章设定约束（outline 硬契约，正文必须明确遵守）】
+{task_constraints_str}
+
+【本章禁止事项（outline 硬契约，任何爽点或钩子都不得突破）】
 {forbidden_str}
 
 【即将到期的伏笔（请在本章埋下呼应）】

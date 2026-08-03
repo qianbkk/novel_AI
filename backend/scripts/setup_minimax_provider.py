@@ -12,10 +12,22 @@ from pathlib import Path
 import httpx
 
 API = os.environ.get("NOVEL_API", "http://127.0.0.1:8132")
-KEY = "sk-cp-4nFWmy0to7cDWslbXUu6fq99Kdxl8ZjQKSbT7BeR4O0CfA9o2tFq8-tf3wic4UOlq7Y9HnVUxH1_ypvp8mOcMbBsoVn3wi5Bu-gmYALNbiGSvA0GHPMPxak"
+MODEL = os.environ.get("MINIMAX_MODEL", "MiniMax-M3")
+
+
+def _api_key() -> str:
+    """Read the credential at runtime so secrets never enter source control."""
+    key = os.environ.get("MINIMAX_API_KEY") or os.environ.get("NOVEL_MINIMAX_API_KEY")
+    if not key:
+        raise SystemExit(
+            "MINIMAX_API_KEY is required (NOVEL_MINIMAX_API_KEY is also accepted); "
+            "load it from a local ignored .env file before running this script"
+        )
+    return key
 
 
 def main():
+    key = _api_key()
     # 1. 列出现有 provider
     r = httpx.get(f"{API}/providers", timeout=10)
     print("existing providers:", r.status_code, len(r.json()))
@@ -25,8 +37,8 @@ def main():
         "name": "MiniMax-M3 (real)",
         "provider_type": "minimax",
         "api_base": "https://api.minimaxi.com/v1",
-        "api_key": KEY,
-        "default_model": "MiniMax-M3",
+        "api_key": key,
+        "default_model": MODEL,
         "extra_json": {},
         "needs_proxy": False,
     }
@@ -47,7 +59,7 @@ def main():
         rk = r_row["role_key"]
         r = httpx.put(
             f"{API}/role-assignments/{rk}",
-            json={"provider_id": provider_id, "model_override": "MiniMax-M3"},
+            json={"provider_id": provider_id, "model_override": MODEL},
             timeout=10,
         )
         if r.status_code == 200:

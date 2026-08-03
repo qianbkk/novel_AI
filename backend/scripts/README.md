@@ -14,6 +14,7 @@ Scripts are CLI entry points, not a storage area for experiment code.
 - `export_openapi.py`: export the backend OpenAPI schema.
 - `generate_master_key.py` / `rotate_master_key.py`: manage provider encryption keys.
 - `reconcile_storage.py`: compare database and engine output state.
+- `setup_minimax_provider.py`: configure all engine roles against a running backend; requires `MINIMAX_API_KEY` (or `NOVEL_MINIMAX_API_KEY`) from the process environment and never stores credentials in source.
 
 ## Manual repair and diagnostics
 

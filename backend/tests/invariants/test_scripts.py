@@ -21,6 +21,29 @@ from app.schema_validator import (  # noqa: E402,F401
     get_world_view_rich_schema, get_character_card_schema, get_entity_relation_rich_schema,
 )
 
+class TestSetupMiniMaxProviderSecrets:
+    """Provider setup helpers must never carry reusable credentials in source."""
+
+    def test_api_key_is_loaded_from_environment(self, monkeypatch):
+        from scripts import setup_minimax_provider as setup
+
+        monkeypatch.delenv("MINIMAX_API_KEY", raising=False)
+        monkeypatch.delenv("NOVEL_MINIMAX_API_KEY", raising=False)
+        with pytest.raises(SystemExit, match="MINIMAX_API_KEY is required"):
+            setup._api_key()
+
+        monkeypatch.setenv("MINIMAX_API_KEY", "test-only-minimax-key")
+        assert setup._api_key() == "test-only-minimax-key"
+
+    def test_source_contains_no_hard_coded_provider_key(self):
+        from scripts import setup_minimax_provider as setup
+        import inspect
+
+        source = inspect.getsource(setup)
+        assert "sk-cp-" not in source
+        assert 'KEY = "sk-' not in source
+
+
 class TestMonitorRunNoDeadCode:
     """迭代 #55: scripts/monitor_run.py 之前 initial_chapter_count
     永远返回 0（`if False else 0`）—— db 关了之后查 db 的死代码。
