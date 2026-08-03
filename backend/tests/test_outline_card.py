@@ -25,6 +25,15 @@ import pytest
 
 
 # ─── fakes ───
+def _tasks_response(prefix: str = "X", count: int = 3) -> str:
+    """生成满足章节数量契约的测试响应。"""
+    return "[" + ",".join(
+        '{"chapter_number": %d, "chapter_role": "发展", "chapter_goal": "%s%d"}'
+        % (chapter, prefix, chapter)
+        for chapter in range(1, count + 1)
+    ) + "]"
+
+
 class _FakeRouter:
     """记录每次 call，response 用序列号拼出递增的 chapter_goal 字段：
 
@@ -47,9 +56,7 @@ class _FakeRouter:
             "max_tokens": max_tokens,
             "temperature": temperature,
         })
-        body = self._responses[idx] if idx < len(self._responses) else (
-            '[{"chapter_number": 1, "chapter_role": "发展", "chapter_goal": "X"}]'
-        )
+        body = self._responses[idx] if idx < len(self._responses) else _tasks_response()
         return body, 0.01
 
 
@@ -105,6 +112,22 @@ def test_card_three_branches_make_three_llm_calls(monkeypatch):
     # 每次 system 应该是 OUTLINE_SYSTEM
     for i, call in enumerate(fake.calls):
         assert call["agent"] == "outline", f"call {i} agent 应为 'outline'"
+
+
+def test_card_long_arc_batches_every_branch(monkeypatch):
+    """30 章抽卡的 A/B/C 都应分 3 批，并逐批保留分支 flavor。"""
+    fake = _setup_env(monkeypatch)
+    fake._responses = [_tasks_response(f"call{i}-", 10) for i in range(9)]
+    arc = _sample_arc()
+    arc["estimated_chapters"] = 30
+
+    from engine.agents.outline import run_outline_card
+    candidates, _ = run_outline_card(arc, 1, _sample_setting(), {"hot": {}})
+
+    assert len(fake.calls) == 9
+    assert [len(candidate["tasks"]) for candidate in candidates] == [30, 30, 30]
+    assert all("【悬疑反转专属约束】" in call["user"] for call in fake.calls[3:6])
+    assert all("【情感共鸣专属约束】" in call["user"] for call in fake.calls[6:9])
 
 
 def test_card_b_and_c_not_point_identical_to_a(monkeypatch):
@@ -182,7 +205,7 @@ def test_card_branch_failure_falls_back_to_a_without_crashing(monkeypatch):
             # 第二次调用（B）抛错；C 仍跑
             if self.calls == 2:
                 raise ValueError("simulated LLM outage")
-            return ('[{"chapter_number": 1, "chapter_role": "发展", "chapter_goal": "X"}]'), 0.01
+            return _tasks_response(), 0.01
 
     from engine.llm_router import set_active_router
     failing = _FailingRouter()
@@ -194,10 +217,11 @@ def test_card_branch_failure_falls_back_to_a_without_crashing(monkeypatch):
     # 3 个候选都有（不崩）
     assert len(candidates) == 3
     # B 分支 fallback 到 A（tasks 是 A 的拷贝）
-    # 这里 A 只有 1 个 task 被 fake 返回，所以 B 应当也是 1 个 + 是 fallback
-    assert len(candidates[1]["tasks"]) >= 1, "B 失败的 fallback 至少要有 task"
-    # C 正常返回
-    assert len(candidates[2]["tasks"]) >= 1
+    # B 分支 fallback 必须保留 A 的完整 3 章任务，不能退回不完整列表
+    assert len(candidates[1]["tasks"]) == 3
+    assert candidates[1]["tasks"] == candidates[0]["tasks"]
+    # C 正常返回完整 3 章
+    assert len(candidates[2]["tasks"]) == 3
 
 
 def test_run_outline_uses_shared_helper(monkeypatch):
@@ -224,9 +248,9 @@ def test_card_metadata_consistency(monkeypatch):
     """
     fake = _setup_env(monkeypatch)
     fake._responses = [
-        '[{"chapter_number": 1, "chapter_role": "发展", "chapter_goal": "X"}]',
-        '[{"chapter_number": 1, "chapter_role": "发展", "chapter_goal": "X"}]',
-        '[{"chapter_number": 1, "chapter_role": "发展", "chapter_goal": "X"}]',
+        _tasks_response("A"),
+        _tasks_response("B"),
+        _tasks_response("C"),
     ]
     from engine.agents.outline import run_outline_card
     candidates, _ = run_outline_card(_sample_arc(), 1, _sample_setting(), {"hot": {}})

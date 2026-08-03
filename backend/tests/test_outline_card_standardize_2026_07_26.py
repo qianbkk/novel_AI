@@ -167,7 +167,7 @@ def test_run_outline_batches_long_arc_and_preserves_count(monkeypatch):
     """30 章长弧必须分成 3 批，最终章号连续且数量完整。"""
     calls = []
 
-    def fake_request(_router, arc, start_chapter, _setting, _memory):
+    def fake_request(_router, arc, start_chapter, _setting, _memory, prompt_suffix=""):
         count = arc["estimated_chapters"]
         calls.append((start_chapter, count))
         return ([{
@@ -240,21 +240,20 @@ def test_run_outline_card_bc_chapters_renumbered_when_start_not_one(monkeypatch)
 # ─── 3. run_outline 与 run_outline_card 共享同一 helper(源码静态检查) ─────────────────────────
 
 
-def test_run_outline_calls_standardize_helper():
-    """源码静态检查:run_outline 必须调 _standardize_tasks。"""
+def test_shared_batch_runner_calls_standardize_helper():
+    """源码静态检查:共享分批生成器必须执行任务标准化。"""
     import inspect
-    src = inspect.getsource(outline_mod.run_outline)
+    src = inspect.getsource(outline_mod._run_outline_batches)
     assert "_standardize_tasks(" in src, (
         "run_outline 没用 _standardize_tasks helper —— "
         "审计修 Medium#4 是否被吃掉了?"
     )
 
 
-def test_run_outline_card_calls_standardize_helper():
-    """源码静态检查:run_outline_card B/C 分支必须调 _standardize_tasks。"""
+def test_outline_and_card_share_batch_runner():
+    """普通大纲与抽卡 B/C 必须共享同一分批和数量契约实现。"""
     import inspect
-    src = inspect.getsource(outline_mod.run_outline_card)
-    assert "_standardize_tasks(" in src, (
-        "run_outline_card B/C 分支没用 _standardize_tasks —— "
-        "审计修 Medium#4 是否被吃掉了?"
-    )
+    outline_src = inspect.getsource(outline_mod.run_outline)
+    card_src = inspect.getsource(outline_mod.run_outline_card)
+    assert "_run_outline_batches(" in outline_src
+    assert "_run_outline_batches(" in card_src

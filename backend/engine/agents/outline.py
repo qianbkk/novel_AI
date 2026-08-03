@@ -200,9 +200,10 @@ def _request_outline_batch(
     start_chapter: int,
     setting: dict,
     memory: dict,
+    prompt_suffix: str = "",
 ) -> tuple[list, float]:
     """请求一批章节蓝图并解析 JSON；数量契约由调用方校验。"""
-    user_prompt = _build_user_prompt(arc, start_chapter, setting, memory)
+    user_prompt = _build_user_prompt(arc, start_chapter, setting, memory) + prompt_suffix
     resp, cost = router.call(
         agent_name="outline",
         system_prompt=OUTLINE_SYSTEM,
@@ -238,13 +239,15 @@ def _request_outline_batch(
     return tasks, cost
 
 
-def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> tuple[list, float]:
-    """拆解一弧为完整章节任务清单。
-
-    长弧按最多 10 章分批请求，避免单次输出 token 上限导致模型少返回任务。
-    每一批都执行严格数量契约：不足或超出时显式失败，禁止用 placeholder
-    补齐后继续写作。memory 为 L2 hot layer dict（或完整 memory）。
-    """
+def _run_outline_batches(
+    arc: dict,
+    start_chapter: int,
+    setting: dict,
+    memory: dict,
+    *,
+    prompt_suffix: str = "",
+) -> tuple[list, float]:
+    """按批生成完整章节任务，并执行严格数量与标准化契约。"""
     expected_count = max(1, int(arc.get("estimated_chapters", 1) or 1))
     print(f"📋 [Outline] 拆解弧{arc.get('arc_id', '?')}「{arc.get('arc_name','?')}」"
           f"（{expected_count}章，起始Ch{start_chapter}）")
@@ -261,7 +264,12 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
         batch_arc = dict(arc)
         batch_arc["estimated_chapters"] = batch_count
         batch_tasks, cost = _request_outline_batch(
-            router, batch_arc, batch_start, setting, memory,
+            router,
+            batch_arc,
+            batch_start,
+            setting,
+            memory,
+            prompt_suffix=prompt_suffix,
         )
         total_cost += cost
         if len(batch_tasks) != batch_count:
@@ -277,6 +285,16 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
     _standardize_tasks(tasks, start_chapter)
     print(f"  ✅ {len(tasks)}章任务，成本${total_cost:.4f}")
     return tasks, total_cost
+
+
+def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> tuple[list, float]:
+    """拆解一弧为完整章节任务清单。
+
+    长弧按最多 10 章分批请求，避免单次输出 token 上限导致模型少返回任务。
+    每一批都执行严格数量契约：不足或超出时显式失败，禁止用 placeholder
+    补齐后继续写作。memory 为 L2 hot layer dict（或完整 memory）。
+    """
+    return _run_outline_batches(arc, start_chapter, setting, memory)
 
 
 # ══════════════════════════════════════════
@@ -314,17 +332,13 @@ def run_outline_card(arc: dict, start_chapter: int, setting: dict,
     B/C 分支直接 reuse A 的 batch_tasks（同一个任务清单假装 3 个候选），
     导致前端用户选 B/C 拿到的内容跟 A 完全一样，看起来在跑实则静默假功能。
 
-    A 分支仍然复用 run_outline() 的 batch 任务（保证跟非抽卡模式一致），
-    B/C 分支走独立 LLM 调用，复用 OUTLINE_SYSTEM 但加一段 flavor 指导。
+    三个分支都复用相同的完整分批与数量契约；B/C 分支通过 prompt_suffix
+    在每个批次追加独立 flavor 指导。
     """
     # A = 完整 batch 的爽点密集版（与 run_outline 同源）
     batch_tasks, batch_cost = run_outline(arc, start_chapter, setting, memory)
 
-    router: LLMRouter | None = get_active_router()
-    if router is None:
-        router = LLMRouter()
-
-    # B/C 各自独立 prompt 走 LLM，每次拿独立 cost 累加
+    # B/C 各自走完整分批生成，每次拿独立 cost 累加
     candidates: list[dict] = [
         {"branch": "A", "flavor": "爽点密集", "tasks": batch_tasks},
     ]
@@ -340,26 +354,15 @@ def run_outline_card(arc: dict, start_chapter: int, setting: dict,
     ]
 
     for branch, flavor, flavor_directive in branch_definitions:
-        # 复用 OUTLINE_SYSTEM 但 user_prompt 末尾加 flavor 指导
-        flavored_user = (
-            _build_user_prompt(arc, start_chapter, setting, memory)
-            + f"\n\n【{flavor}专属约束】\n{flavor_directive}"
-        )
+        prompt_suffix = f"\n\n【{flavor}专属约束】\n{flavor_directive}"
         try:
-            resp, branch_cost = router.call(
-                agent_name="outline",
-                system_prompt=OUTLINE_SYSTEM,
-                user_prompt=flavored_user,
-                max_tokens=8000,
-                temperature=0.75,
+            branch_tasks, branch_cost = _run_outline_batches(
+                arc,
+                start_chapter,
+                setting,
+                memory,
+                prompt_suffix=prompt_suffix,
             )
-            resp = _extract_json_array(resp)
-            branch_tasks = json.loads(resp)
-            # 2026-07-26 审计修 Medium#4:B/C 分支也走 _standardize_tasks
-            # —— 老逻辑只 json.loads,跳过 stakes/emotion/章号契约等所有兜底,
-            # 选中 B/C 时下游拿到的 task 可能缺字段/章号不连续。
-            _mark_arc_climax(branch_tasks, arc)
-            _standardize_tasks(branch_tasks, start_chapter)
         except Exception:
             # 单个分支失败不应让整次抽卡崩掉 —— fallback 复用 A 任务，
             # log warning 让用户/审计能看到
