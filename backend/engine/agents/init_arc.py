@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 
 from ..config.paths import SETTING_PATH_STR, STATE_PATH_STR
-from ..orchestrator import _placeholder_task
 from ..state import create_initial_state, save_state
 
 
@@ -16,18 +15,12 @@ def build_state_from_setting(project_id: str, chapters_per_arc: int | None = Non
 
     chapters_per_arc: 覆盖原 estimated_chapters（可选）。
 
-    30 章真实 LLM 测试 (2026-07-20) 修复：
-    之前 init_arc 只生成 arc_plans，chapter_task_queue 留空。
-    真正填队列的是 node_load_arc_tasks → run_outline(LLM)。
-    但真实 LLM 在某些 prompt 下返的 task 数 < estimated_chapters，
-    导致 orchestrator 跑完 LLM 返的子集就停了，跑不到 full N 章。
-
-    现在 init_arc 直接按 arc_plans[i].estimated_chapters 预填 placeholder
-    task 队列——node_load_arc_tasks 检查到 queue 非空就跳过 outline，
-    走 placeholder 链路也能写出完整 N 章。
-    placeholder 字段足够 writer / normalizer / checker 消费（chapter_number,
-    chapter_role, chapter_goal, main_characters, target_length, audit_mode,
-    is_arc_climax 都有）。
+    init_arc 只负责建立弧级计划，章节任务必须由 node_load_arc_tasks 调用
+    Outline Agent 生成。曾经为规避模型少返回任务而预填 placeholder 队列，
+    会让 node_load_arc_tasks 直接短路，导致真实长篇没有 arc_*_tasks.json，
+    且 shuang_type / emotion_core / narrative_thread / foreshadowing_ops 从源头
+    全为空。现在数量契约由 Outline Agent 的分批生成与强校验负责；不足时
+    显式失败，不再以低信息占位任务换取表面的章节数量。
     """
     setting_path = Path(SETTING_PATH_STR)
     if not setting_path.exists():
@@ -75,34 +68,12 @@ def build_state_from_setting(project_id: str, chapters_per_arc: int | None = Non
     state["current_phase"] = "writing"
     state["current_chapter"] = 0
 
-    # 30 章真实 LLM 测试 (2026-07-20)：按 estimated_chapters 预填 placeholder
-    # task 队列，绕过 run_outline LLM 返数偏少的失败模式。node_load_arc_tasks
-    # 见 queue 非空会跳过 outline，直接进入 node_get_next_task。
-    # 占位 task 的 main_characters 从 setting.key_characters 取主角 + 关键配角，
-    # 这样 writer 反吞设定修复（engine/agents/writer.py:_build_world_block）能拿到
-    # 真正的角色名（林渊 / 苏晚栀 / 孟浩 / 顾青锋 等），不会写成纯\"主角\"。
-    setting_key_chars = setting.get("key_characters") or []
-    setting_protagonist = (setting.get("protagonist") or {}).get("name", "主角")
-    char_pool = [c.get("name") for c in setting_key_chars if c.get("name")] or [setting_protagonist]
-    char_pool.insert(0, setting_protagonist)  # 主角永远首位
-    char_pool = list(dict.fromkeys(char_pool))  # 去重保序
-    task_queue: list = []
-    for arc_idx, arc in enumerate(arc_plans):
-        arc_len = int(arc["estimated_chapters"])
-        for i in range(arc_len):
-            task = _placeholder_task(arc_idx, i, arc)
-            # 每 5 章轮换主要出场角色：1-5 林渊+苏晚栀，6-10 林渊+孟浩，...
-            # 简化：前 3 章引入不同配角，让前期埋下人物关系；后期扩充到 4-5 个
-            if i < 3:
-                task["main_characters"] = [setting_protagonist, char_pool[min(i+1, len(char_pool)-1)]]
-            elif i < 10:
-                task["main_characters"] = [setting_protagonist, char_pool[min(1 + (i // 3), len(char_pool)-1)]]
-            else:
-                # 后期章节尽量多带配角
-                task["main_characters"] = char_pool[:min(4, len(char_pool))]
-            task_queue.append(task)
-    state["chapter_task_queue"] = task_queue
-    state["total_chapters_planned"] = len(task_queue)
+    # 章节级任务保留为空，让 node_load_arc_tasks 调用 Outline Agent。
+    # total_chapters_planned 是弧级规划总数；加载每弧任务时不得再次累加。
+    state["chapter_task_queue"] = []
+    state["total_chapters_planned"] = sum(
+        int(arc.get("estimated_chapters", 0) or 0) for arc in arc_plans
+    )
     state["current_task"] = None
 
     save_state(state, STATE_PATH_STR)
@@ -118,7 +89,7 @@ def run_init_arc(args, output_dir: str) -> dict:
     print(f"✅ 已初始化 arc_plans: {len(state['arc_plans'])} 弧")
     for a in state["arc_plans"]:
         print(f"   弧 {a['arc_id']} 「{a['arc_name']}」: {a['estimated_chapters']} 章")
-    print(f"✅ 已预填 chapter_task_queue: {len(state['chapter_task_queue'])} 个 placeholder task")
+    print("✅ 章节任务队列待 Outline Agent 按弧生成")
     return state
 
 

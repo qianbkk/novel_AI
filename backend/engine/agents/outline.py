@@ -191,18 +191,18 @@ def _standardize_tasks(tasks: list, start_chapter: int) -> None:
             t["chapter_number"] = start_chapter + i
 
 
-def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> tuple[list, float]:
-    """拆解一弧为章节任务清单。
-    memory 为 L2 hot layer dict（或完整 memory，自动取 hot）。
-    """
-    print(f"📋 [Outline] 拆解弧{arc.get('arc_id', '?')}「{arc.get('arc_name','?')}」"
-          f"（{arc.get('estimated_chapters', '?')}章，起始Ch{start_chapter}）")
+OUTLINE_BATCH_SIZE = 10
 
+
+def _request_outline_batch(
+    router: LLMRouter,
+    arc: dict,
+    start_chapter: int,
+    setting: dict,
+    memory: dict,
+) -> tuple[list, float]:
+    """请求一批章节蓝图并解析 JSON；数量契约由调用方校验。"""
     user_prompt = _build_user_prompt(arc, start_chapter, setting, memory)
-
-    router: LLMRouter | None = get_active_router()
-    if router is None:
-        router = LLMRouter()
     resp, cost = router.call(
         agent_name="outline",
         system_prompt=OUTLINE_SYSTEM,
@@ -214,7 +214,6 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
     try:
         tasks = json.loads(resp)
     except json.JSONDecodeError:
-        # 先做零成本的常见尾逗号修复；仍失败才请求 LLM 重排格式。
         repaired = re.sub(r',\s*}', '}', resp)
         repaired = re.sub(r',\s*]', ']', repaired)
         try:
@@ -224,29 +223,60 @@ def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> t
                 f"上一次你的输出无法被解析为合法 JSON。原文：\n{resp[:2000]}\n\n"
                 "请重新审视并严格按 schema 输出纯 JSON 数组，不要任何解释/markdown fence。"
             )
-            try:
-                retry_resp, cost2 = router.call(
-                    agent_name="outline",
-                    system_prompt=OUTLINE_SYSTEM,
-                    user_prompt=retry_prompt,
-                    max_tokens=8000,
-                    temperature=0.0,
-                )
-                cost += cost2
-                tasks = json.loads(_extract_json_array(retry_resp))
-                print("  ✓ outline JSON 重试成功")
-            except Exception as e:
-                print(f"  ✗ outline JSON 解析失败: {e}")
-                raise
+            retry_resp, cost2 = router.call(
+                agent_name="outline",
+                system_prompt=OUTLINE_SYSTEM,
+                user_prompt=retry_prompt,
+                max_tokens=8000,
+                temperature=0.0,
+            )
+            cost += cost2
+            tasks = json.loads(_extract_json_array(retry_resp))
+            print("  ✓ outline JSON 重试成功")
+    if not isinstance(tasks, list):
+        raise ValueError("outline 输出必须是章节任务 JSON 数组")
+    return tasks, cost
+
+
+def run_outline(arc: dict, start_chapter: int, setting: dict, memory: dict) -> tuple[list, float]:
+    """拆解一弧为完整章节任务清单。
+
+    长弧按最多 10 章分批请求，避免单次输出 token 上限导致模型少返回任务。
+    每一批都执行严格数量契约：不足或超出时显式失败，禁止用 placeholder
+    补齐后继续写作。memory 为 L2 hot layer dict（或完整 memory）。
+    """
+    expected_count = max(1, int(arc.get("estimated_chapters", 1) or 1))
+    print(f"📋 [Outline] 拆解弧{arc.get('arc_id', '?')}「{arc.get('arc_name','?')}」"
+          f"（{expected_count}章，起始Ch{start_chapter}）")
+
+    router: LLMRouter | None = get_active_router()
+    if router is None:
+        router = LLMRouter()
+
+    tasks: list = []
+    total_cost = 0.0
+    while len(tasks) < expected_count:
+        batch_start = start_chapter + len(tasks)
+        batch_count = min(OUTLINE_BATCH_SIZE, expected_count - len(tasks))
+        batch_arc = dict(arc)
+        batch_arc["estimated_chapters"] = batch_count
+        batch_tasks, cost = _request_outline_batch(
+            router, batch_arc, batch_start, setting, memory,
+        )
+        total_cost += cost
+        if len(batch_tasks) != batch_count:
+            raise RuntimeError(
+                f"outline 数量契约失败：请求 Ch{batch_start}-"
+                f"Ch{batch_start + batch_count - 1} 共 {batch_count} 章，"
+                f"实际返回 {len(batch_tasks)} 章"
+            )
+        _standardize_tasks(batch_tasks, batch_start)
+        tasks.extend(batch_tasks)
 
     _mark_arc_climax(tasks, arc)
-
-    # 2026-07-26 审计修 Medium#4:抽出 _standardize_tasks helper,run_outline + run_outline_card
-    # B/C 分支共享同一套标准化(避免选中 B/C 时下游拿到的 task 缺字段/章号不连续)。
     _standardize_tasks(tasks, start_chapter)
-
-    print(f"  ✅ {len(tasks)}章任务，成本${cost:.4f}")
-    return tasks, cost
+    print(f"  ✅ {len(tasks)}章任务，成本${total_cost:.4f}")
+    return tasks, total_cost
 
 
 # ══════════════════════════════════════════

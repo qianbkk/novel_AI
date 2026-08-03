@@ -754,6 +754,39 @@ class TestOutlineCostNotDoubleCharged:
                 f"talk outline cost 应为 {FAKE_COST}，实际 {used}（双重计费）"
             )
 
+    def test_existing_total_chapters_is_not_double_counted(self, monkeypatch):
+        """init_arc 已记录总章数，加载弧任务时不得再次累加。"""
+        monkeypatch.setattr(
+            self.orch,
+            "run_outline",
+            lambda *_args: ([{
+                "chapter_number": 1,
+                "chapter_goal": "x",
+                "chapter_role": "发展",
+                "ending_hook_type": "悬念钩",
+                "is_arc_climax": False,
+            }], 0.0),
+        )
+        monkeypatch.setenv("NOVEL_OUTLINE_MODE", "batch")
+        self.orch.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+        (self.orch.OUTPUT_DIR / "setting_package.json").write_text("{}", encoding="utf-8")
+        state = {
+            "novel_id": "default",
+            "current_chapter": 0,
+            "current_arc": 0,
+            "budget_used_usd": 0.0,
+            "budget_limit_usd": 500.0,
+            "total_chapters_planned": 30,
+            "arc_plans": [{
+                "arc_id": 1, "arc_name": "test", "arc_goal": "x",
+                "estimated_chapters": 30, "is_final_arc": False,
+            }],
+            "error_log": [],
+        }
+
+        result = self.orch.node_load_arc_tasks(state)
+        assert result["total_chapters_planned"] == 30
+
     def test_outline_exception_no_cost_charged(self, monkeypatch):
         """outline 抛异常时不应计费（避免"失败还扣钱"误判）。"""
         def fake_run_outline_raises(arc, start, setting, memory):
@@ -1415,6 +1448,38 @@ class TestComplianceParseFailNotFakePass:
         # 最终 passed 必须 False（即便 keyword scan 没发现 hard_kw）
         assert result["passed"] is False, \
             f"run_compliance 必须把 LLM parse 失败的 passed=False 透传，实际 {result['passed']}"
+
+
+class TestInitArcRequiresRealOutlineTasks:
+    """init_arc 只建弧计划，禁止 placeholder 队列绕过 Outline Agent。"""
+
+    def test_init_arc_leaves_task_queue_empty(self, monkeypatch, tmp_path):
+        from engine.agents import init_arc as init_mod
+
+        setting = {
+            "title_candidates": ["测试书"],
+            "platform": "fanqie",
+            "genre": "都市",
+            "tagline": "测试",
+            "protagonist": {"name": "陈辙"},
+            "arc_outline": [{
+                "arc_id": 1,
+                "arc_name": "第一弧",
+                "arc_goal": "建立冲突",
+                "estimated_chapters": 30,
+            }],
+        }
+        setting_path = tmp_path / "setting_package.json"
+        state_path = tmp_path / "orchestrator_state.json"
+        setting_path.write_text(json.dumps(setting, ensure_ascii=False), encoding="utf-8")
+        monkeypatch.setattr(init_mod, "SETTING_PATH_STR", str(setting_path))
+        monkeypatch.setattr(init_mod, "STATE_PATH_STR", str(state_path))
+
+        state = init_mod.build_state_from_setting("project-x")
+
+        assert state["chapter_task_queue"] == []
+        assert state["total_chapters_planned"] == 30
+        assert state["arc_plans"][0]["estimated_chapters"] == 30
 
 
 class TestInitArcJsonDecodeHandling:

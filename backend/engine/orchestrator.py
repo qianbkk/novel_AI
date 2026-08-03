@@ -297,8 +297,13 @@ def node_load_arc_tasks(state: OrchestratorState) -> OrchestratorState:
     except Exception as e:
         _log.warning("plant_seeds_from_tasks failed (non-blocking): %s", e)
 
-    state["chapter_task_queue"]      = tasks
-    state["total_chapters_planned"]  = state.get("total_chapters_planned", 0) + len(tasks)
+    state["chapter_task_queue"] = tasks
+    # init_arc 已按 arc_plans 记录全书规划总章数。旧状态可能仍为 0，
+    # 此时才用弧计划总和回填；不得每加载一弧重复累加。
+    if not state.get("total_chapters_planned"):
+        state["total_chapters_planned"] = sum(
+            int(item.get("estimated_chapters", 0) or 0) for item in arc_plans
+        ) or len(tasks)
 
     # 草稿模式 override：NOVEL_AUDIT_MODE=draft 时把所有任务的 audit_mode 改成 "draft"。
     # 个人试错用：跳过 compliance + checker，每章只跑 writer → normalizer → tracker，

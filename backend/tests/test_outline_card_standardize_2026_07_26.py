@@ -163,6 +163,55 @@ def test_run_outline_card_standardizes_b_c_branches(monkeypatch):
     assert call_count["n"] == 2
 
 
+def test_run_outline_batches_long_arc_and_preserves_count(monkeypatch):
+    """30 章长弧必须分成 3 批，最终章号连续且数量完整。"""
+    calls = []
+
+    def fake_request(_router, arc, start_chapter, _setting, _memory):
+        count = arc["estimated_chapters"]
+        calls.append((start_chapter, count))
+        return ([{
+            "chapter_number": start_chapter + i,
+            "chapter_role": "发展",
+            "chapter_goal": f"推进 Ch{start_chapter + i}",
+            "ending_hook_type": "悬念钩",
+            "emotion_core": ["压抑", "震惊", "爽快"][i % 3],
+            "emotion_intensity": 3,
+        } for i in range(count)], 0.01)
+
+    monkeypatch.setattr(outline_mod, "_request_outline_batch", fake_request)
+    monkeypatch.setattr(outline_mod, "get_active_router", lambda: object())
+    tasks, cost = outline_mod.run_outline(
+        {"arc_id": 1, "arc_name": "长弧", "estimated_chapters": 30},
+        start_chapter=11,
+        setting={},
+        memory={},
+    )
+
+    assert calls == [(11, 10), (21, 10), (31, 10)]
+    assert len(tasks) == 30
+    assert [task["chapter_number"] for task in tasks] == list(range(11, 41))
+    assert cost == pytest.approx(0.03)
+
+
+def test_run_outline_rejects_short_batch_instead_of_padding(monkeypatch):
+    """模型少返回章节时必须显式失败，不能用 placeholder 静默补齐。"""
+    monkeypatch.setattr(outline_mod, "get_active_router", lambda: object())
+    monkeypatch.setattr(
+        outline_mod,
+        "_request_outline_batch",
+        lambda *_args, **_kwargs: ([{"chapter_number": 1}], 0.01),
+    )
+
+    with pytest.raises(RuntimeError, match="数量契约失败"):
+        outline_mod.run_outline(
+            {"arc_id": 1, "arc_name": "长弧", "estimated_chapters": 10},
+            start_chapter=1,
+            setting={},
+            memory={},
+        )
+
+
 def test_run_outline_card_bc_chapters_renumbered_when_start_not_one(monkeypatch):
     """start_chapter != 1 时,B/C 分支的章号也会从 start_chapter 开始连续。"""
     a_tasks = [{"chapter_number": 10, "chapter_role": "t", "chapter_goal": "t"}]
