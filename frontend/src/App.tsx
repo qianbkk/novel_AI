@@ -9,6 +9,7 @@ import RoleAssignments from "./pages/RoleAssignments";
 import BridgeConsole from "./pages/BridgeConsole";
 import RuleCenter from "./pages/RuleCenter";
 import CharacterCard from "./pages/CharacterCard";
+import CharacterList from "./pages/CharacterList";  // 2026-08-05：角色专属索引页（Dashboard 角色按钮目标）
 import Outline from "./pages/Outline";  // 弧级大纲管理
 import ChapterReader from "./pages/ChapterReader";  // 章节阅读器（独立页面）
 import NotFound from "./pages/NotFound";  // 2026-07-25: 404 兜底（之前无 path="*" → 白屏）
@@ -212,6 +213,8 @@ export default function App() {
           <Route path="/projects/:projectId/chapters" element={<Chapters />} />
           <Route path="/projects/:projectId/bridge" element={<BridgeConsole />} />
           <Route path="/projects/:projectId/rules" element={<RuleCenter />} />
+          {/* 角色列表（2026-08-05：Dashboard "👤 角色" 按钮目标） */}
+          <Route path="/projects/:projectId/characters" element={<CharacterList />} />
           {/* 角色卡详情页 */}
           <Route path="/projects/:projectId/characters/:characterId" element={<CharacterCard />} />
           {/* 弧级大纲管理 */}

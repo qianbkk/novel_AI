@@ -569,10 +569,10 @@ export default function Dashboard() {
                         style={{ marginLeft: 4, fontSize: 11.5, padding: "2px 8px" }}
                         onClick={(e) => {
                           e.stopPropagation();
-                          navigate(`/projects/${p.id}/worldbuild`);
+                          navigate(`/projects/${p.id}/characters`);
                         }}
-                        aria-label={`查看 ${p.title} 角色卡`}
-                        title="角色卡 8 段 + 关系图谱 + 势力阵营"
+                        aria-label={`查看 ${p.title} 角色列表`}
+                        title="角色列表 + 点击进 8 段详情"
                       >
                         👤 角色
                       </button>
