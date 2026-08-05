@@ -94,15 +94,42 @@ class TestOutlineCRUD:
         r = client.get(f"/projects/{test_project}/outlines/nonexistent")
         assert r.status_code == 404
 
-    def test_update_status(self, client, test_project):
+    def test_approval_requires_complete_tasks(self, client, test_project):
         c = client.post(f"/projects/{test_project}/outlines", json={
-            "arc_id": 1, "arc_name": "test"
+            "arc_id": 1, "arc_name": "test", "arc_estimated_chapters": 1
         }).json()
-        r = client.patch(f"/projects/{test_project}/outlines/{c['id']}", json={
+        missing = client.patch(f"/projects/{test_project}/outlines/{c['id']}", json={
             "status": "approved"
         })
-        assert r.status_code == 200
-        assert r.json()["status"] == "approved"
+        assert missing.status_code == 409
+
+        tasks = [{
+            "chapter_number": 1, "chapter_role": "铺垫",
+            "chapter_goal": "主角登场", "main_characters": ["主角"],
+            "target_length": "2000-2200",
+        }]
+        approved = client.patch(f"/projects/{test_project}/outlines/{c['id']}", json={
+            "outline_json": tasks, "status": "approved"
+        })
+        assert approved.status_code == 200
+        assert approved.json()["status"] == "approved"
+
+    def test_editing_approved_outline_returns_it_to_draft(self, client, test_project):
+        c = client.post(f"/projects/{test_project}/outlines", json={
+            "arc_id": 1, "arc_name": "test", "arc_estimated_chapters": 1,
+            "outline_json": [{"chapter_number": 1, "chapter_goal": "old"}],
+        }).json()
+        approved = client.patch(
+            f"/projects/{test_project}/outlines/{c['id']}",
+            json={"status": "approved"},
+        ).json()
+        assert approved["status"] == "approved"
+        edited = client.patch(
+            f"/projects/{test_project}/outlines/{c['id']}",
+            json={"arc_goal": "changed"},
+        )
+        assert edited.status_code == 200
+        assert edited.json()["status"] == "draft"
 
     def test_update_outline_json(self, client, test_project):
         c = client.post(f"/projects/{test_project}/outlines", json={

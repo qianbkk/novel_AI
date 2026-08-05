@@ -376,9 +376,10 @@ def run_graph_task(
                 with redirect_stdout(capture):
                     result = run_all_tests()
                 exit_code = 0 if result else 1
-            except ImportError:
-                log.warning("backend.engine.tools.system_test not yet ported (P3)")
-                exit_code = 0
+            except ImportError as exc:
+                log.error(f"system_test command unavailable: {exc}")
+                capture.write(f"system_test command unavailable: {exc}\n")
+                exit_code = 1
         elif command == "planner":
             try:
                 from .agents.planner import run_planner as _run_planner
@@ -391,9 +392,10 @@ def run_graph_task(
                 from .orchestrator import invalidate_setting_cache
                 invalidate_setting_cache()
                 exit_code = 0
-            except ImportError:
-                log.warning("planner agent not yet ported (P2)")
-                exit_code = 0
+            except ImportError as exc:
+                log.error(f"planner command unavailable: {exc}")
+                capture.write(f"planner command unavailable: {exc}\n")
+                exit_code = 1
         elif command == "bootstrap":
             try:
                 from .tools.bootstrap import run_bootstrap
@@ -444,8 +446,10 @@ def run_graph_task(
                     capture.write("状态未初始化\n")
             exit_code = 0
         elif command == "dashboard":
-            log.warning("dashboard command not yet ported (P3)")
-            exit_code = 0
+            message = "dashboard command is not implemented"
+            log.error(message)
+            capture.write(message + "\n")
+            exit_code = 1
         elif command == "budget":
             try:
                 from .tools.budget_manager import print_report

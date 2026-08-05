@@ -136,6 +136,7 @@ class OrchestratorState(TypedDict):
     # 大纲模式产物
     outline_candidates: List[Dict]   # card 模式：每弧 3 个候选分支
     talk_questions: List[Dict]       # talk 模式：每弧引导性问题
+    approved_outline_tasks: Dict[str, List[Dict]]  # DB 已审批大纲，按 arc_id 延迟采用
 
     # 瞬态失败标记（修订 2026-07-19）：LangGraph 按本 TypedDict 的字段
     # 合并节点返回值，未声明的键会被静默丢弃——node_load_arc_tasks 置的
@@ -192,6 +193,7 @@ def create_initial_state(
         tracker_pending=[],
         outline_candidates=[],
         talk_questions=[],
+        approved_outline_tasks={},
         style_samples=[],
         style_samples_source="external",
         last_p0_chapter=0,

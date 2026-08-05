@@ -13,6 +13,7 @@ type PanelData = BridgeStatus | BridgePendingItem[] | Record<string, unknown>[] 
 
 const RUN_COMMANDS = [
   { label: "生成设定包", command: "planner", args: [] },
+  { label: "初始化剧情弧", command: "init_arc", args: [] },
   { label: "黄金三章", command: "bootstrap", args: [] },
   { label: "写10章", command: "run", args: ["10"] },
   { label: "写10章 (草稿)", command: "run_draft", args: ["10"] },
@@ -26,9 +27,9 @@ const PLOT_WHEEL = ["欲望", "阻碍", "行动", "结果", "意外", "转折", 
 
 // 多模式大纲
 const OUTLINE_MODES = [
-  { key: "batch", label: "传统批量", desc: "线性序列生成，效率优先" },
-  { key: "card", label: "抽卡探索", desc: "多分支概率推理，提供 3-5 种走向" },
-  { key: "talk", label: "对话头脑风暴", desc: "实时人机协作推理，深度打磨" },
+  { key: "batch", label: "传统批量", desc: "仅影响正式写作加载新剧情弧；线性生成任务" },
+  { key: "card", label: "抽卡探索", desc: "仅影响正式写作加载新剧情弧；生成 3 个候选并默认采用第 1 个" },
+  { key: "talk", label: "对话头脑风暴", desc: "仅影响正式写作加载新剧情弧；记录讨论问题但不会暂停等待回答" },
 ];
 
 export default function BridgeConsole() {
@@ -217,8 +218,9 @@ export default function BridgeConsole() {
       // complete: 命令执行完毕（来自 _run_bridge_async 推的 {"event": "complete", "status": ...}）
       es.addEventListener("complete", (e) => {
         const payload: BridgeLogLine = JSON.parse((e as MessageEvent).data);
-        appendLogLine("complete", `status=${payload.status || "?"}`, "ok");
-        if (payload.status === "done") {
+        const succeeded = payload.status === "done";
+        appendLogLine("complete", `status=${payload.status || "?"}`, succeeded ? "ok" : "err");
+        if (succeeded) {
           // 之前 .catch(() => {}) — 章节列表刷新失败时静默吞掉，用户看到
           // 陈旧的章节数以为是 run 没成功。改为 toast.warn 留信号。
           api.listChapters(projectId!).then(setChapters).catch((e) => {
@@ -406,7 +408,11 @@ export default function BridgeConsole() {
       </div>
 
       {error && <div className="banner banner-danger">{error}</div>}
-      {exitCode !== null && <div className="banner banner-success">命令完成，exit code: {exitCode}</div>}
+      {exitCode !== null && (
+        <div className={`banner ${exitCode === 0 ? "banner-success" : "banner-danger"}`}>
+          {exitCode === 0 ? "命令与业务后处理完成" : "命令失败"}，exit code: {exitCode}
+        </div>
+      )}
 
       {/* ============ ① 三道记忆防线 + ② 多模式大纲 / 七要素概览（五期：默认折叠） ============ */}
       <details className="card mt-24">
@@ -533,7 +539,7 @@ export default function BridgeConsole() {
 
         {/* 多模式大纲 chip */}
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
-          <span className="text-muted" style={{ fontSize: 12, marginRight: 4 }}>大纲模式</span>
+          <span className="text-muted" style={{ fontSize: 12, marginRight: 4 }}>正式写作加载新弧时的大纲模式</span>
           {OUTLINE_MODES.map((m) => (
             <button
               key={m.key}

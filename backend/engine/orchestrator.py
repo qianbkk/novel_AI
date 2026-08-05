@@ -234,8 +234,18 @@ def node_load_arc_tasks(state: OrchestratorState) -> OrchestratorState:
     log(f"📋 拆解弧{arc.get('arc_id', arc_idx+1)}「{arc.get('arc_name','')}」[mode={outline_mode}]", state)
 
     tasks: list = []
+    approved_tasks = (state.get("approved_outline_tasks") or {}).get(
+        str(arc.get("arc_id", arc_idx + 1))
+    )
+    if approved_tasks:
+        tasks = [dict(task) for task in approved_tasks]
+        for offset, task in enumerate(tasks):
+            task["chapter_number"] = start + offset
+        log(f"  ✅ 采用数据库已审批大纲：{len(tasks)} 个章节任务", state)
     try:
-        if outline_mode == "card":
+        if approved_tasks:
+            cost = 0.0
+        elif outline_mode == "card":
             # card 模式：抽卡探索 — 生成 3 个候选分支让作者挑
             candidates, cost = run_outline_card(arc, start, setting, memory)
             _add_cost(state, cost)

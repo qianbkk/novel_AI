@@ -9,14 +9,16 @@
 """
 import json
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy.orm import Session
 
-from ..models import Chapter
-from ..rag.retrieval import add_chapter
+from shared.atomic_io import atomic_write_text
+
 from ..logging_setup import get_logger
-from datetime import datetime, timezone
+from ..models import Chapter, ChapterCharacter, Character, EmbeddingChunk
+from ..rag.retrieval import add_chapter, persist_chapter_chunks
 
 log = get_logger("novel_ai.chapter_import")
 
@@ -206,6 +208,66 @@ def _extract_title_from_content(content: str) -> str:
     return ""
 
 
+async def _replace_existing_chapter(
+    *,
+    existing: Chapter,
+    title: str,
+    content: str,
+    summary: str,
+    project_id: str,
+    novel_ai_dir: str,
+    db: Session,
+) -> dict:
+    """Replace a chapter from disk while rebuilding all derived database state."""
+    old_content = existing.content or ""
+    old_title = existing.title or ""
+    backup_dir = Path(novel_ai_dir) / "output" / "backups" / "reimports"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    backup_path = backup_dir / f"ch_{existing.chapter_no:04d}_{stamp}_{existing.id[:8]}.txt"
+    atomic_write_text(str(backup_path), old_content)
+
+    try:
+        existing.title = title
+        existing.content = content
+        existing.summary = summary
+        if not existing.created_at:
+            existing.created_at = datetime.now(timezone.utc)
+
+        db.query(ChapterCharacter).filter_by(chapter_id=existing.id).delete(
+            synchronize_session=False
+        )
+        db.query(EmbeddingChunk).filter_by(
+            project_id=project_id,
+            source_type="chapter",
+            source_id=existing.id,
+        ).delete(synchronize_session=False)
+        for character in db.query(Character).filter_by(project_id=project_id).all():
+            if character.name and character.name in content:
+                db.add(ChapterCharacter(chapter_id=existing.id, character_id=character.id))
+        chunks = await persist_chapter_chunks(
+            project_id=project_id,
+            chapter_id=existing.id,
+            chapter_no=existing.chapter_no,
+            content=content,
+            db=db,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        backup_path.unlink(missing_ok=True)
+        raise
+    return {
+        "chapter_id": existing.id,
+        "chapter_no": existing.chapter_no,
+        "title": title,
+        "mode": "overwrite",
+        "indexed_chunk_count": len(chunks),
+        "backup_path": str(backup_path.relative_to(Path(novel_ai_dir))),
+        "previous_title": old_title,
+    }
+
+
 def _build_summary(meta: dict, content: str) -> str:
     """从 meta 派生章节 summary。meta.chapter_goal 优先；缺则用 status/word_count 兜底；
     全无则用正文首句。绝不返回空字符串。"""
@@ -223,7 +285,13 @@ def _build_summary(meta: dict, content: str) -> str:
     return f"本章 {len(content or '')} 字，正文已生成。"
 
 
-async def import_chapters_from_novel_ai(project_id: str, novel_ai_dir: str, db: Session) -> list[dict]:
+async def import_chapters_from_novel_ai(
+    project_id: str,
+    novel_ai_dir: str,
+    db: Session,
+    chapter_numbers: set[int] | None = None,
+) -> list[dict]:
+    """Import formal chapter files, optionally restricted to explicit chapter numbers."""
     imported = []
     chapters_dir = Path(novel_ai_dir, "output", "chapters")
     if not chapters_dir.exists():
@@ -243,6 +311,8 @@ async def import_chapters_from_novel_ai(project_id: str, novel_ai_dir: str, db: 
                 if not _CANDIDATE_RE.match(txt_path.name):
                     log.warning("import-chapters: 跳过畸形文件名 %s", txt_path.name)
                 continue
+            if chapter_numbers is not None and n not in chapter_numbers:
+                continue
 
             content = txt_path.read_text(encoding="utf-8")
             # 一期修复（前端展示）：剥 [待修订] 前缀 + JSON 包装
@@ -259,37 +329,33 @@ async def import_chapters_from_novel_ai(project_id: str, novel_ai_dir: str, db: 
                 meta = {}
 
             existing = db.query(Chapter).filter_by(project_id=project_id, chapter_no=n).first()
-            if existing and not force:
-                continue  # 已经导入过，跳过——避免重复 embed 同一章
+            if existing and chapter_numbers is None and not force:
+                continue  # 手动普通导入保持幂等；自动链显式指定本次变更章时允许同步覆盖
 
             # 派生一个像样的标题，避免显示"【修改后正文】"
             derived_title = _derive_title(n, meta, content)
             derived_summary = _build_summary(meta, content)
 
             if existing:
-                # 覆盖：保留 id，更新内容 + 标题 + 摘要
-                existing.title = derived_title
-                existing.content = content
-                existing.summary = derived_summary
-                db.commit()
-                imported.append({
-                    "chapter_id": existing.id,
-                    "chapter_no": n,
-                    "title": derived_title,
-                    "novel_ai_score": meta.get("score"),
-                    "novel_ai_rewrite_count": meta.get("rewrite_count"),
-                    "mode": "overwrite",
-                })
-                continue
-
-            result = await add_chapter(project_id, n, derived_title, content, db)
+                result = await _replace_existing_chapter(
+                    existing=existing,
+                    title=derived_title,
+                    content=content,
+                    summary=derived_summary,
+                    project_id=project_id,
+                    novel_ai_dir=novel_ai_dir,
+                    db=db,
+                )
+            else:
+                result = await add_chapter(project_id, n, derived_title, content, db)
+                result.update({"chapter_no": n, "title": derived_title, "mode": "created"})
             result["novel_ai_score"] = meta.get("score")
             result["novel_ai_rewrite_count"] = meta.get("rewrite_count")
             imported.append(result)
         except Exception as e:
-            # 兜底：单文件 import 失败不能阻断整批
+            db.rollback()
             log.exception("import-chapters: %s 处理失败（%s）", txt_path.name, e)
-            continue
+            raise RuntimeError(f"failed to import {txt_path.name}: {e}") from e
 
     log.info("import-chapters project=%s, imported=%d, dir=%s",
              project_id, len(imported), chapters_dir)
@@ -328,19 +394,23 @@ async def _force_reimport(project_id: str, novel_ai_dir: str, db: Session) -> li
             derived_summary = _build_summary(meta, content)
             existing = db.query(Chapter).filter_by(project_id=project_id, chapter_no=n).first()
             if existing:
-                existing.title = derived_title
-                existing.content = content
-                existing.summary = derived_summary
-                if not existing.created_at:
-                    existing.created_at = datetime.now(timezone.utc)
-                db.commit()
-                updated.append({"chapter_no": n, "title": derived_title, "mode": "updated"})
+                result = await _replace_existing_chapter(
+                    existing=existing,
+                    title=derived_title,
+                    content=content,
+                    summary=derived_summary,
+                    project_id=project_id,
+                    novel_ai_dir=novel_ai_dir,
+                    db=db,
+                )
+                result["mode"] = "updated"
             else:
-                from ..rag.retrieval import add_chapter
-                await add_chapter(project_id, n, derived_title, content, db)
-                updated.append({"chapter_no": n, "title": derived_title, "mode": "created"})
+                result = await add_chapter(project_id, n, derived_title, content, db)
+                result.update({"chapter_no": n, "title": derived_title, "mode": "created"})
+            updated.append(result)
         except Exception as e:
+            db.rollback()
             log.exception("_force_reimport: %s 处理失败（%s）", txt_path.name, e)
-            continue
+            raise RuntimeError(f"failed to reimport {txt_path.name}: {e}") from e
     log.info("_force_reimport project=%s, updated=%d", project_id, len(updated))
     return updated

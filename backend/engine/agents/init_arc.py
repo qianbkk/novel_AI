@@ -6,23 +6,19 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ..config.paths import SETTING_PATH_STR, STATE_PATH_STR
+from ..config.paths import CHAPTERS_DIR_STR, SETTING_PATH_STR, STATE_PATH_STR
 from ..state import create_initial_state, save_state
 
 
-def build_state_from_setting(project_id: str, chapters_per_arc: int | None = None) -> dict:
-    """读 setting_package.json → 把每个 arc 转成 ArcPlan 字典，注入 state。
-
-    chapters_per_arc: 覆盖原 estimated_chapters（可选）。
-
-    init_arc 只负责建立弧级计划，章节任务必须由 node_load_arc_tasks 调用
-    Outline Agent 生成。曾经为规避模型少返回任务而预填 placeholder 队列，
-    会让 node_load_arc_tasks 直接短路，导致真实长篇没有 arc_*_tasks.json，
-    且 shuang_type / emotion_core / narrative_thread / foreshadowing_ops 从源头
-    全为空。现在数量契约由 Outline Agent 的分批生成与强校验负责；不足时
-    显式失败，不再以低信息占位任务换取表面的章节数量。
-    """
-    setting_path = Path(SETTING_PATH_STR)
+def build_state_from_paths(
+    project_id: str,
+    *,
+    setting_path: Path,
+    state_path: Path,
+    chapters_dir: Path,
+    chapters_per_arc: int | None = None,
+) -> dict:
+    """Build arc state from explicit project-scoped paths."""
     if not setting_path.exists():
         raise FileNotFoundError(f"setting_package.json 不存在：{setting_path}")
     # 迭代 #42: 之前直接 json.loads — 如果 setting_package.json 损坏
@@ -66,7 +62,14 @@ def build_state_from_setting(project_id: str, chapters_per_arc: int | None = Non
     state["arc_plans"] = arc_plans
     state["total_arcs_planned"] = len(arc_plans)
     state["current_phase"] = "writing"
-    state["current_chapter"] = 0
+
+    # Preserve the longest contiguous sequence of formal chapter files. Bootstrap
+    # may already have produced chapters 1-3; resetting to zero would make the
+    # orchestrator regenerate and overwrite them.
+    completed_chapter = 0
+    while (chapters_dir / f"ch_{completed_chapter + 1:04d}.txt").is_file():
+        completed_chapter += 1
+    state["current_chapter"] = completed_chapter
 
     # 章节级任务保留为空，让 node_load_arc_tasks 调用 Outline Agent。
     # total_chapters_planned 是弧级规划总数；加载每弧任务时不得再次累加。
@@ -76,8 +79,23 @@ def build_state_from_setting(project_id: str, chapters_per_arc: int | None = Non
     )
     state["current_task"] = None
 
-    save_state(state, STATE_PATH_STR)
+    save_state(state, str(state_path))
     return state
+
+
+def build_state_from_setting(project_id: str, chapters_per_arc: int | None = None) -> dict:
+    """Read the active setting package and initialize project arc plans.
+
+    Existing contiguous formal chapters are preserved so bootstrap output is not
+    regenerated. Chapter tasks remain empty until the Outline Agent loads an arc.
+    """
+    return build_state_from_paths(
+        project_id,
+        setting_path=Path(SETTING_PATH_STR),
+        state_path=Path(STATE_PATH_STR),
+        chapters_dir=Path(CHAPTERS_DIR_STR),
+        chapters_per_arc=chapters_per_arc,
+    )
 
 
 def run_init_arc(args, output_dir: str) -> dict:

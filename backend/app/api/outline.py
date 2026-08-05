@@ -49,6 +49,9 @@ class OutlineCreate(BaseModel):
     outline_json: list[dict[str, Any]] | None = None
 
 
+OUTLINE_STATUSES = {"draft", "approved", "in_progress", "done"}
+
+
 class OutlineUpdate(BaseModel):
     arc_name: str | None = None
     arc_goal: str | None = None
@@ -159,6 +162,31 @@ def update_outline(
     if not row:
         raise HTTPException(404, f"Outline {outline_id} not found")
     updates = payload.model_dump(exclude_unset=True)
+    requested_status = updates.get("status")
+    if requested_status is not None and requested_status not in OUTLINE_STATUSES:
+        raise HTTPException(422, f"unsupported outline status: {requested_status}")
+    if requested_status == "approved":
+        tasks = updates.get("outline_json", row.outline_json) or []
+        estimated = updates.get("arc_estimated_chapters", row.arc_estimated_chapters)
+        if not tasks:
+            raise HTTPException(409, "outline must contain chapter tasks before approval")
+        if len(tasks) != estimated:
+            raise HTTPException(
+                409,
+                f"outline has {len(tasks)} tasks but arc_estimated_chapters is {estimated}",
+            )
+    # Editing a locked-status outline falls back to draft only when the client
+    # did not also send an explicit status update (that would otherwise be
+    # silently dropped by the reset below). Without this guard a combined
+    # patch like {"status": "approved", "arc_goal": "x"} would validate as
+    # approval yet end up persisted as draft.
+    client_set_status = isinstance(updates.get("status"), str)
+    if (
+        row.status in {"approved", "in_progress", "done"}
+        and any(key != "status" for key in updates)
+        and not client_set_status
+    ):
+        updates["status"] = "draft"
     for k, v in updates.items():
         setattr(row, k, v)
     db.commit()

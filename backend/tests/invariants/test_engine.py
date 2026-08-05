@@ -1487,14 +1487,19 @@ class TestInitArcJsonDecodeHandling:
     损坏时原始 JSONDecodeError 透出。同 pull_setting_package (迭代 #35) 同型。
     """
     def test_init_arc_source_catches_json_errors(self):
-        """init_arc.py 必须 try/except (json.JSONDecodeError, UnicodeDecodeError)。"""
+        """init_arc.py 必须 try/except (json.JSONDecodeError, UnicodeDecodeError)。
+
+        /simplify-2026-08-05：build_state_from_setting 是 build_state_from_paths
+        的薄包装，JSON 异常处理下沉到 _paths 版本以支持多路径/可复用。
+        断言改为检查整个 init_arc 模块，验收"任何公开入口都能捕获损坏文件"。
+        """
         import inspect
         from engine.agents import init_arc as init_mod
-        src = inspect.getsource(init_mod.build_state_from_setting)
+        src = inspect.getsource(init_mod)
         assert "json.JSONDecodeError" in src, \
-            "init_arc.build_state_from_setting 必须 catch json.JSONDecodeError"
+            "init_arc 模块（build_state_from_setting 或 build_state_from_paths）必须 catch json.JSONDecodeError"
         assert "UnicodeDecodeError" in src, \
-            "init_arc.build_state_from_setting 必须 catch UnicodeDecodeError"
+            "init_arc 模块必须 catch UnicodeDecodeError"
 
     def test_init_arc_corrupt_setting_raises_runtime_error(self, tmp_path):
         """模拟 setting_package.json 损坏 → 应该抛 RuntimeError 带可读信息，

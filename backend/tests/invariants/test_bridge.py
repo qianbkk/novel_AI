@@ -929,3 +929,68 @@ class TestBridgeEndpointsWorldbuildGuard:
                 db.rollback()
             finally:
                 db.close()
+
+
+class TestBridgeBusinessCompletion:
+    def test_run_draft_requires_worldbuild(self):
+        from app.api.bridge import WRITE_COMMANDS
+
+        assert "run_draft" in WRITE_COMMANDS
+
+    def test_binding_validation_initializes_expected_layout(self, tmp_path):
+        from app.api.bridge import _validate_binding_dir
+
+        target = tmp_path / "project-engine"
+        normalized = Path(_validate_binding_dir(str(target)))
+        assert normalized == target.resolve()
+        assert all((normalized / name).is_dir() for name in ("config", "output", "memory", "logs"))
+        assert not list(normalized.glob(".bridge-write-probe-*"))
+
+    def test_binding_validation_rejects_file(self, tmp_path):
+        from fastapi import HTTPException
+        from app.api.bridge import _validate_binding_dir
+
+        file_path = tmp_path / "not-a-directory"
+        file_path.write_text("x", encoding="utf-8")
+        with pytest.raises(HTTPException, match="must be a directory"):
+            _validate_binding_dir(str(file_path))
+
+    @pytest.mark.asyncio
+    async def test_run_without_changed_chapter_is_business_failure(self, tmp_path):
+        from queue import Queue
+        from app.api.bridge import _run_success_postprocessing
+
+        with pytest.raises(RuntimeError, match="produced no new or updated"):
+            await _run_success_postprocessing(
+                "project-1", "run", str(tmp_path), Queue(), {}, object()
+            )
+
+    @pytest.mark.asyncio
+    async def test_changed_chapter_is_imported_and_emits_events(self, tmp_path, monkeypatch):
+        from queue import Empty, Queue
+        from app.api import bridge as bridge_mod
+
+        chapters_dir = tmp_path / "output" / "chapters"
+        chapters_dir.mkdir(parents=True)
+        chapter = chapters_dir / "ch_0007.txt"
+        chapter.write_text("new chapter", encoding="utf-8")
+
+        async def fake_import(project_id, novel_ai_dir, db, chapter_numbers=None):
+            assert project_id == "project-1"
+            assert Path(novel_ai_dir) == tmp_path
+            assert chapter_numbers == {7}
+            return [{"chapter_id": "chapter-7", "chapter_no": 7, "mode": "created"}]
+
+        monkeypatch.setattr(bridge_mod, "import_chapters_from_novel_ai", fake_import)
+        queue = Queue()
+        result = await bridge_mod._run_success_postprocessing(
+            "project-1", "run", str(tmp_path), queue, {}, object()
+        )
+        assert result == {"imported": 1, "chapter_numbers": [7]}
+        events = []
+        while True:
+            try:
+                events.append(queue.get_nowait()["event"])
+            except Empty:
+                break
+        assert events == ["auto_import_chapters_start", "auto_import_chapters_done"]

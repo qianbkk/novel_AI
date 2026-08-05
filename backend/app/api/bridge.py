@@ -1,8 +1,10 @@
 import asyncio
 import json
 import os
+import re
 import subprocess
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from queue import Queue
@@ -22,7 +24,7 @@ from ..bridge.reports import (
 from ..bridge.setting_sync import pull_setting_package, push_setting_concept
 from ..database import SessionLocal, get_db
 from ..logging_setup import get_logger
-from ..models import BridgeRun, GenerationJob, NovelAIBinding, Project
+from ..models import BridgeRun, GenerationJob, NovelAIBinding, Outline, Project
 from ..schemas import BridgeRunOut, BridgeRunRequest, NovelAIBindingOut, NovelAIBindingUpsert, ReviewRequest
 
 
@@ -72,7 +74,142 @@ _STDOUT_TEXT_MAX = 1_000_000
 #   → 给 false sense of security。
 #   真实保护是 DB 层 BridgeRun.status='running' 检查 + lifespan 启动时
 #   _recover_orphan_bridge_runs（清理崩溃遗留的 running 行）。
-WRITE_COMMANDS = {"planner", "bootstrap", "run", "resume", "init_arc"}
+WRITE_COMMANDS = {"planner", "bootstrap", "run", "run_draft", "resume", "init_arc"}
+AUTO_IMPORT_COMMANDS = {"bootstrap", "run", "run_draft", "resume"}
+_EXPECTED_BINDING_DIRS = ("config", "output", "memory", "logs")
+
+
+def _validate_binding_dir(raw_path: str) -> str:
+    """Validate and initialize a project-scoped engine data directory."""
+    value = (raw_path or "").strip()
+    if not value or "\x00" in value:
+        raise HTTPException(400, "novel_ai_dir must be a non-empty filesystem path")
+
+    path = Path(value).expanduser()
+    try:
+        path = path.resolve(strict=False)
+    except OSError as exc:
+        raise HTTPException(400, f"invalid novel_ai_dir: {exc}") from exc
+
+    if path.exists() and not path.is_dir():
+        raise HTTPException(400, "novel_ai_dir must be a directory, not a file")
+
+    existing_parent = path
+    while not existing_parent.exists() and existing_parent != existing_parent.parent:
+        existing_parent = existing_parent.parent
+    if not existing_parent.exists() or not existing_parent.is_dir():
+        raise HTTPException(400, "novel_ai_dir has no usable parent directory")
+    if not os.access(existing_parent, os.R_OK | os.W_OK):
+        raise HTTPException(400, "novel_ai_dir parent directory is not readable and writable")
+
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        for dirname in _EXPECTED_BINDING_DIRS:
+            (path / dirname).mkdir(exist_ok=True)
+        probe = path / f".bridge-write-probe-{uuid.uuid4().hex}"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError as exc:
+        raise HTTPException(400, f"novel_ai_dir is not usable: {exc}") from exc
+
+    return str(path)
+
+
+def _chapter_snapshot(novel_ai_dir: str) -> dict[str, tuple[int, int]]:
+    """Capture formal chapter files and their size/mtime for result validation."""
+    chapters_dir = Path(novel_ai_dir) / "output" / "chapters"
+    if not chapters_dir.is_dir():
+        return {}
+    snapshot: dict[str, tuple[int, int]] = {}
+    for path in chapters_dir.glob("ch_*.txt"):
+        if not re.fullmatch(r"ch_\d+\.txt", path.name):
+            continue
+        try:
+            stat = path.stat()
+            snapshot[path.name] = (stat.st_size, stat.st_mtime_ns)
+        except OSError:
+            continue
+    return snapshot
+
+
+def _sync_approved_outlines(project_id: str, novel_ai_dir: str, db: Session) -> dict:
+    """Copy approved DB outlines into engine state for deterministic later adoption."""
+    approved = (
+        db.query(Outline)
+        .filter(
+            Outline.project_id == project_id,
+            Outline.status.in_(["approved", "in_progress"]),
+        )
+        .order_by(Outline.arc_id.asc())
+        .all()
+    )
+    mapping: dict[str, list[dict]] = {}
+    for row in approved:
+        tasks = row.outline_json or []
+        if not tasks or len(tasks) != row.arc_estimated_chapters:
+            raise RuntimeError(
+                f"approved outline arc {row.arc_id} has {len(tasks)} tasks; "
+                f"expected {row.arc_estimated_chapters}"
+            )
+        mapping[str(row.arc_id)] = [dict(task) for task in tasks]
+
+    state_path = Path(novel_ai_dir) / "config" / "orchestrator_state.json"
+    if not state_path.is_file():
+        raise RuntimeError("init_arc completed but orchestrator_state.json is missing")
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["approved_outline_tasks"] = mapping
+    from engine.utils import atomic_write_json
+    atomic_write_json(str(state_path), state)
+    return {"approved_arcs": sorted(int(key) for key in mapping), "task_count": sum(map(len, mapping.values()))}
+
+
+async def _run_success_postprocessing(
+    project_id: str,
+    command: str,
+    novel_ai_dir: str,
+    queue: Queue,
+    chapter_snapshot_before: dict[str, tuple[int, int]],
+    db: Session,
+) -> dict:
+    """Complete the business transaction after an engine subprocess succeeds."""
+    if command == "planner":
+        queue.put({"event": "auto_pull_setting_start", "data": {"project_id": project_id}})
+        result = await pull_setting_package(project_id, novel_ai_dir, db)
+        queue.put({"event": "auto_pull_setting_done", "data": result})
+        return {"setting_pulled": True}
+
+    if command == "init_arc":
+        result = _sync_approved_outlines(project_id, novel_ai_dir, db)
+        queue.put({"event": "approved_outlines_synced", "data": result})
+        return result
+
+    if command in AUTO_IMPORT_COMMANDS:
+        chapter_snapshot_after = _chapter_snapshot(novel_ai_dir)
+        changed_files = sorted(
+            name for name, fingerprint in chapter_snapshot_after.items()
+            if chapter_snapshot_before.get(name) != fingerprint
+        )
+        if not changed_files:
+            raise RuntimeError(
+                f"{command} exited successfully but produced no new or updated formal chapter files; "
+                "run init_arc first and verify pending arc tasks"
+            )
+        queue.put({"event": "auto_import_chapters_start", "data": {"files": changed_files}})
+        imported = await import_chapters_from_novel_ai(
+            project_id,
+            novel_ai_dir,
+            db,
+            chapter_numbers={int(name[3:-4]) for name in changed_files},
+        )
+        imported_numbers = {int(item["chapter_no"]) for item in imported}
+        expected_numbers = {int(name[3:-4]) for name in changed_files}
+        if imported_numbers != expected_numbers:
+            missing = sorted(expected_numbers - imported_numbers)
+            raise RuntimeError(f"chapter auto-import incomplete; missing chapters: {missing}")
+        queue.put({"event": "auto_import_chapters_done", "imported": imported})
+        return {"imported": len(imported), "chapter_numbers": sorted(imported_numbers)}
+
+    return {}
 
 
 def get_run_queue(run_id: str) -> Queue:
@@ -129,12 +266,13 @@ def upsert_binding(project_id: str, payload: NovelAIBindingUpsert, request: Requ
     current_user = _current_user_or_401(request)
     project = require_owned_project(db, project_id, current_user)
     binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
-    novel_id = payload.novel_id or project.id
+    novel_id = (payload.novel_id or project.id).strip()
+    novel_ai_dir = _validate_binding_dir(payload.novel_ai_dir)
     if binding:
-        binding.novel_ai_dir = payload.novel_ai_dir
+        binding.novel_ai_dir = novel_ai_dir
         binding.novel_id = novel_id
     else:
-        binding = NovelAIBinding(project_id=project_id, novel_ai_dir=payload.novel_ai_dir, novel_id=novel_id)
+        binding = NovelAIBinding(project_id=project_id, novel_ai_dir=novel_ai_dir, novel_id=novel_id)
         db.add(binding)
     db.commit()
     return {
@@ -248,6 +386,8 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
     db = SessionLocal()
     try:
         binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
+        novel_ai_dir = binding.novel_ai_dir if binding else os.environ.get("NOVEL_AI_DIR", "")
+        chapter_snapshot_before = _chapter_snapshot(novel_ai_dir)
         # 从 Project 表读 per-project audit_mode（去全局化迭代 — 取代 os.environ）
         # 多项目共用一个 backend 时，A 设 draft 不会污染 B 的 run。
         project = db.get(Project, project_id)
@@ -275,9 +415,7 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
         #   - NOVEL_ENGINE_MOCK 缺失 → LLMRouter 不走 mock，真去调 API 报
         #     "MINIMAX_API_KEY 未设置" ValueError
         # binding.novel_ai_dir 优先；父进程 env 兜底（兼容 binding 缺失 / 测试场景）
-        env["NOVEL_AI_DIR"] = (
-            binding.novel_ai_dir if binding else os.environ.get("NOVEL_AI_DIR", "")
-        )
+        env["NOVEL_AI_DIR"] = novel_ai_dir
         env["NOVEL_ENGINE_MOCK"] = os.environ.get("NOVEL_ENGINE_MOCK", "0")
     finally:
         db.close()
@@ -398,23 +536,49 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                             )
                             db.commit()
                             stdout_chunks = []
-                    # 进程结束
+                    # 进程结束。exit_code=0 只是引擎层成功；Bridge 还必须完成
+                    # setting 回流 / 章节导入和产物验收，才算业务成功。
                     exit_code = proc.wait()
                     if stdout_chunks:
                         bridge_run.stdout_text = _append_stdout(
                             bridge_run.stdout_text, stdout_chunks
                         )
-                    bridge_run.exit_code = exit_code
-                    bridge_run.finished_at = datetime.now(timezone.utc)
-                    # security-2026-07-13 #3: 看门狗 SIGTERM/-KILL 终止 → 标 failed(timeout)
                     if _activity["killed_by_watchdog"]:
+                        exit_code = exit_code or -1
                         bridge_run.status = "failed"
                         timeout_msg = f"engine subprocess killed by watchdog after {timeout_min_for_msg}min idle"
                         bridge_run.stdout_text = _append_stdout(
                             bridge_run.stdout_text, [f"\n[error] {timeout_msg}\n"]
                         )
+                    elif exit_code != 0:
+                        bridge_run.status = "failed"
                     else:
-                        bridge_run.status = "done" if exit_code == 0 else "failed"
+                        try:
+                            post_result = asyncio.run(_run_success_postprocessing(
+                                project_id,
+                                command,
+                                novel_ai_dir,
+                                queue,
+                                chapter_snapshot_before,
+                                db,
+                            ))
+                            bridge_run.status = "done"
+                            if post_result:
+                                queue.put({"event": "business_result", "data": post_result})
+                        except Exception as post_exc:
+                            log.exception("bridge postprocessing failed run_id=%s command=%s", run_id, command)
+                            db.rollback()
+                            bridge_run = db.get(BridgeRun, run_id)
+                            exit_code = 1
+                            bridge_run.status = "failed"
+                            safe_msg = (str(post_exc) or "postprocessing failed")[:300]
+                            bridge_run.stdout_text = _append_stdout(
+                                bridge_run.stdout_text,
+                                [f"\n[error] bridge business postprocessing failed: {safe_msg}\n"],
+                            )
+                            queue.put({"event": "auto_chain_error", "message": safe_msg})
+                    bridge_run.exit_code = exit_code
+                    bridge_run.finished_at = datetime.now(timezone.utc)
                     db.commit()
                     queue.put({"event": "complete", "status": bridge_run.status,
                                "exit_code": exit_code})
@@ -438,7 +602,9 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                     safe_msg = (str(loop_exc) or "loop error")[:200]
                     queue.put({"event": "error", "message": f"内部错误：{safe_msg}"})
             finally:
-                queue.put({"event": "done", "exit_code": proc.returncode})
+                final_run = db.get(BridgeRun, run_id)
+                final_exit_code = final_run.exit_code if final_run and final_run.exit_code is not None else proc.returncode
+                queue.put({"event": "done", "exit_code": final_exit_code})
                 db.close()
         threading.Thread(target=_drain_stdout, daemon=True).start()
         threading.Thread(target=_watchdog, daemon=True).start()

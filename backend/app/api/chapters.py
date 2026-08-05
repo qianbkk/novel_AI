@@ -561,4 +561,29 @@ async def accept_chapter_candidate(
         )
     except ChapterEditNotFoundError as e:
         raise HTTPException(404, str(e))
+
+    # Bootstrap A/B/C candidates require additional engine state side effects.
+    # Detect them from the chapter meta instead of the label alone because later
+    # rewrites may also use A-C explicitly.
+    meta_path = path.with_name(f"ch_{chapter_no:04d}_meta.json")
+    is_bootstrap = False
+    if chapter_no in (1, 2, 3) and label in {"A", "B", "C"} and meta_path.is_file():
+        try:
+            import json
+            is_bootstrap = bool(json.loads(meta_path.read_text(encoding="utf-8")).get("bootstrap"))
+        except (OSError, ValueError):
+            is_bootstrap = False
+    if is_bootstrap:
+        from ..chapter_rewrite import _resolve_engine_paths
+        from engine.tools.bootstrap import _finalize_selection
+
+        dirs = _resolve_engine_paths(project_id, db)
+        _finalize_selection(
+            chapter_no,
+            label,
+            project_id,
+            manually_selected=True,
+            novel_ai_dir=str(dirs["novel_ai_dir"]),
+        )
+        result["bootstrap_state_finalized"] = True
     return result

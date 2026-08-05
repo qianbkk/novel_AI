@@ -84,7 +84,12 @@ export default function Outline() {
     if (!projectId) return;
     try {
       await api.updateOutline(projectId, outline.id, { status });
-      toast.success("状态已更新", `${outline.arc_name} → ${status}`);
+      const detail = status === "approved"
+        ? "已审批；下次运行「初始化剧情弧」后会同步到写作引擎"
+        : status === "in_progress"
+          ? "已记录为写作中；此操作不会启动引擎"
+          : `${outline.arc_name} → ${status}`;
+      toast.success("状态已更新", detail);
       await refresh();
     } catch (e) {
       toast.error("更新失败", String(e));
@@ -93,7 +98,7 @@ export default function Outline() {
 
   async function handleDelete(outline: OutlineOut) {
     if (!projectId) return;
-    if (!confirm(`删除弧「${outline.arc_name}」？章节任务单也会一起删（不会影响已写的章节）。`)) return;
+    if (!confirm(`删除弧「${outline.arc_name}」？这会删除数据库任务单，但不会回滚已同步的引擎状态或已写章节；重新运行「初始化剧情弧」才会刷新同步结果。`)) return;
     try {
       await api.deleteOutline(projectId, outline.id);
       toast.success("已删除", outline.arc_name);
@@ -313,7 +318,7 @@ function OutlineCard({
                 style={{ fontSize: 12 }}
                 onClick={(e) => { e.stopPropagation(); onStatus("in_progress"); }}
               >
-                ✍️ 标记写作中
+                ✍️ 记录为写作中
               </button>
             )}
             <button

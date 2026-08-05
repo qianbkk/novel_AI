@@ -121,12 +121,12 @@ export default function Chapters() {
     navigate(`/projects/${projectId}/chapter/${chapterNo}`);
   }
 
-  // 重新导入章节：从 output/chapters 重新派生 title/summary（用于修旧标题）
-  // 用户报告「300 章标题还是错的」 — 这个按钮让用户手动触发从输出目录重派生
+  // 强制从 output/chapters 覆盖数据库章节，并重建标题、摘要、人物边和 RAG 索引。
+  // 后端会先把数据库旧正文备份到 output/backups/reimports。
   const [reimporting, setReimporting] = useState(false);
   async function handleReimport() {
     if (!projectId) return;
-    if (!confirm("重新导入所有章节的标题？从输出目录重新派生（基于内容首句），不会动章节正文。")) return;
+    if (!confirm("这会从输出目录覆盖数据库中的章节正文、标题和摘要，并重建人物关系与 RAG 索引。已有数据库正文会先备份到 output/backups/reimports。确认继续？")) return;
     setReimporting(true);
     try {
       const updated = await api.reimportChapters(projectId);
