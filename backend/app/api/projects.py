@@ -7,6 +7,7 @@ from ..auth_scope import is_production_mode, owner_filter_clause, require_owned_
 from ..database import get_db
 from ..models import Character, Project
 from ..schemas import ProjectCreate, ProjectOut
+import logging
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -18,7 +19,7 @@ def _get_current_user(request: Request) -> User | None:
 
 
 @router.post("", response_model=ProjectOut, status_code=201)
-def create_project(
+async def create_project(
     payload: ProjectCreate,
     request: Request,
     db: Session = Depends(get_db),
@@ -28,10 +29,28 @@ def create_project(
     ─── Phase 4: stamp owner_id ───
     如果当前请求带 token（已登录 user），把 owner_id 写为 user.id；
     否则 owner_id 留 NULL（表示"未认领"，dev 模式可访问）。
+
+    ─── 2026-08-05 清单 P05 ───
+    payload.title 为空时调 LLM 基于 genre / main_conflict 自动取名，
+    满足前端 NewProject.tsx "留空则 AI 自动取名" placeholder 的承诺。
+    LLM 失败 / mock 模式 fallback 到 f"未命名项目-{uuid4().hex[:6]}" 不留空串。
     """
     current_user = _get_current_user(request)
+    title = (payload.title or "").strip()
+    if not title:
+        try:
+            title = await _ai_auto_name(payload)
+            title = (title or "").strip()
+        except Exception as _exc:
+            log = logging.getLogger("novel_ai.api.projects")
+            log.warning("project auto-name LLM call failed: %s", _exc)
+            title = ""
+        if not title:
+            import uuid as _uuid
+            title = f"未命名项目-{_uuid.uuid4().hex[:6]}"
+
     project = Project(
-        title=payload.title,
+        title=title,
         genre=payload.genre,
         audience=payload.audience,
         config_json=payload.config_json,
@@ -41,6 +60,35 @@ def create_project(
     db.commit()
     db.refresh(project)
     return project
+
+
+async def _ai_auto_name(payload: ProjectCreate) -> str:
+    """缺 title 时调 LLM 真取名；走 app 侧 llm_client 与 create_project 同步流程解耦。
+
+    输入：genre + main_conflict + tropes（payload.config_json 子字段）。
+    输出：4-12 字的小说名，不要「《》」号、不要"第N本"前缀、不要具体角色名。
+    """
+    from .llm_client import LLMError, call_llm_json
+    cfg = payload.config_json or {}
+    conflicts = (cfg.get("main_conflict") or "").strip()
+    tropes = "、".join(cfg.get("tropes") or []) if isinstance(cfg.get("tropes"), list) else ""
+    user_prompt = (
+        f"【题材】{payload.genre or '未指定'}\n"
+        f"【标签】{tropes or '无'}\n"
+        f"【主要冲突】{conflicts or '无'}\n"
+        f"受众：{payload.audience or '未指定'}\n"
+    )
+    return await call_llm_json(
+        role="creative_detail",
+        system_prompt=(
+            "你是网文取名编辑。任务：基于下面的题材/标签/主要冲突，"
+            "起一个 4-12 字的网文书名（不要「《》」书名号、不要「第N本」编号、"
+            "不要具体角色名、不要文艺腔）。只返回 JSON："
+            '{"title":"起好的名字"}。只返回这一项，不要任何额外文字。'
+        ),
+        user_prompt=user_prompt,
+        mock_payload={"title": ""},
+    ).get("title", "")
 
 
 @router.get("/{project_id}", response_model=ProjectOut)
