@@ -118,10 +118,16 @@ def first_pass_replace(text: str) -> tuple[str, int]:
     count = 0
     for bad, goods in AI_WORDS.items():
         if bad in text:
-            good = random.choice([g for g in goods if g] or [""])
+            good = _rng.choice([g for g in goods if g] or [""])
             text = text.replace(bad, good)
             count += 1
     return text, count
+
+
+# 2026-08-05 修复（清单衍生）：原 random.choice 用全局 random，重复跑 normalizer
+# 输出不可重现。用 module-level Random 实例替代 — 序列基于定种子确定，
+# 可被测试 / 调试场景 seed 后稳定输出。生产场景种子默认 None（行为==旧默认）。
+_rng = random.Random()
 
 
 def second_pass_llm(text: str) -> tuple[str, float]:
@@ -179,25 +185,23 @@ def run_normalizer(raw_text: str, task: dict) -> tuple[str, list, float]:
             f"对话癌强制替换(dialogue_pollution={dialogue_count}≥{DIALOGUE_FORCE_THRESHOLD}):"
             f"满篇'某某说/道',需走 LLM 二遍通用 4 种替换规则(动作卡位/神态/情境/语感)"
         )
-        # 触发 LLM 替换(已 second_pass 跑过则不再二次;若 first_pass_count<=3 走这里)
-        if not needs_llm:
-            # 2026-07-26 审计修 Medium#1: 原本 .format(cnt=) 叠加在含 {污染样本} 的
-            # f-string 上,污染样本若含裸 { 或 }(JSON 字面量 / 代码片段 / 引号包内容)
-            # 会让 str.format 抛 KeyError/ValueError,使整章 normalizer 崩溃。
-            # 修法:全部用 f-string 插值,杜绝在不可信文本上调 .format()。
-            dialogue_replace_prompt = (
-                NORMALIZER_SYSTEM
-                + f"\n\n【对话癌专项】本章存在满篇对话提示词污染(count={dialogue_count}),"
-                + "必须用以下 4 种方法之一替换:\n"
-                + f"1. 动作卡位:{DIALOGUE_REPLACE_HINTS['动作卡位']}\n"
-                + f"2. 神态神韵:{DIALOGUE_REPLACE_HINTS['神态神韵']}\n"
-                + f"3. 情境穿插:{DIALOGUE_REPLACE_HINTS['情境穿插']}\n"
-                + f"4. 语感辨识:{DIALOGUE_REPLACE_HINTS['语感辨识']}\n\n"
-                + f"污染样本:{dialogue_samples[:5]}\n\n"
-                + "直接输出改写后正文,不加任何说明。"
-            )
-            text, cost = router_call_for_dialogue(text, dialogue_replace_prompt)
-            total_cost += cost
+        # 2026-08-05 修复（清单衍生）：原 `if not needs_llm:` 守门逻辑
+        # 会让 first_pass 已经走过 LLM、但对话癌仍 ≥50 时跳过专项修复
+        # —— 因为 needs_llm=True 阻断 path。改为：对话癌是独立维度，
+        # 触发后必须再调一次 LLM（允许替换次数 ≥ 2），让对话污染有机会消除。
+        dialogue_replace_prompt = (
+            NORMALIZER_SYSTEM
+            + f"\n\n【对话癌专项】本章存在满篇对话提示词污染(count={dialogue_count}),"
+            + "必须用以下 4 种方法之一替换:\n"
+            + f"1. 动作卡位:{DIALOGUE_REPLACE_HINTS['动作卡位']}\n"
+            + f"2. 神态神韵:{DIALOGUE_REPLACE_HINTS['神态神韵']}\n"
+            + f"3. 情境穿插:{DIALOGUE_REPLACE_HINTS['情境穿插']}\n"
+            + f"4. 语感辨识:{DIALOGUE_REPLACE_HINTS['语感辨识']}\n\n"
+            + f"污染样本:{dialogue_samples[:5]}\n\n"
+            + "直接输出改写后正文,不加任何说明。"
+        )
+        text, cost = router_call_for_dialogue(text, dialogue_replace_prompt)
+        total_cost += cost
     elif dialogue_count >= DIALOGUE_WARNING_THRESHOLD:
         issues.append(
             f"对话癌预警(dialogue_pollution={dialogue_count}≥{DIALOGUE_WARNING_THRESHOLD}):"
