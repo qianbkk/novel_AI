@@ -11,6 +11,7 @@ import re
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
 from ..config.prompt_templates import HOOK_TYPES, SHUANG_TYPES, EMOTION_CORES
+from ..utils import parse_llm_json_response
 
 
 HOOK_LIST       = " | ".join(HOOK_TYPES.keys())
@@ -546,4 +547,93 @@ def run_outline_talk(arc: dict, start_chapter: int, setting: dict,
             "context": "损失越具体，反击越有共鸣；避免笼统的'挫折'。",
         },
     ]
+    # 2026-08-05 修复（清单 P15）：原来 stub 直接返 hardcoded 三个问题，
+    # 跟项目真数据无关。改为调 LLM 真生成 3-5 个分歧点 + parse 失败 fallback。
+    questions: list = []
+    router: LLMRouter | None = get_active_router()
+    if router is not None:
+        try:
+            mc = (setting.get("protagonist") or {}).get("name") or "主角"
+            power = (setting.get("power_system") or {}).get("name") or ""
+            world = (setting.get("world_setting") or {}).get("surface_world_name") or (
+                setting.get("world_setting") or {}
+            ).get("hidden_world_name") or ""
+            user_prompt = (
+                f"【弧】 id={arc.get('arc_id')} 名称={arc.get('arc_name','')}\n"
+                f"【弧目标】{arc.get('arc_goal','')}\n"
+                f"【主角】{mc} | 核心能力={power} | 世界={world}\n"
+                f"【已生成任务数】{len(tasks)} 章 (chapter {start_chapter}-{start_chapter+len(tasks)-1})\n"
+            )
+            text, qcost = router.call(
+                agent_name="outline",
+                system_prompt=(
+                    "你是网文策划，刚为某条弧生成了章节任务列表。请就该弧方向提出 3-5 个"
+                    "最值得让作者先回答的分歧点（不是任务列表里的章目标题，而是会影响后续"
+                    "章节走向的开放问题）。每个问题必须真实依赖 arc_name / arc_goal / 主角"
+                    "定位 / 世界观关键词，不能套用其他项目。产出严格 JSON："
+                    '{"questions":[{"qid":"q1","question":"...","context":"..."}]}。'
+                    "不要任何额外文字。"
+                ),
+                user_prompt=user_prompt,
+                max_tokens=800,
+                temperature=0.5,
+            )
+            cost += qcost
+            parsed = None
+            try:
+                # 直接 json.loads：parse_llm_json_response 严格要求 dict 形态，
+                # 而 talk schema 同时支持 {"questions": [...]} 和裸 [...],
+                # 用底层 json + 形态分发比绕 helper 更直接。
+                loaded = json.loads(text)
+                if isinstance(loaded, dict):
+                    parsed = loaded
+                elif isinstance(loaded, list):
+                    # 把 list 形态绑到 {"questions": ...}，让下游分支统一处理
+                    parsed = {"questions": loaded}
+            except Exception:
+                parsed = None
+            raw_qs = []
+            if isinstance(parsed, dict) and isinstance(parsed.get("questions"), list):
+                raw_qs = parsed["questions"]
+            for idx, q in enumerate(raw_qs[:5], start=1):
+                if not isinstance(q, dict):
+                    continue
+                qtext = str(q.get("question") or "").strip()
+                if not qtext:
+                    continue
+                qid = str(q.get("qid") or f"talk_{arc.get('arc_id','?')}_q{idx}")
+                questions.append({
+                    "qid": qid,
+                    "question": qtext[:200],
+                    "context": str(q.get("context") or "")[:200],
+                })
+        except Exception:
+            # 真 provider 抛错时走 fallback（不让 talk 模式成为 run 失败的元凶）
+            pass
+
+    if not questions:
+        # arc-data-driven fallback —— 保留"问题真的依赖本弧"这一性质，
+        # 不再用原 hardcoded 模板（独立验证报告 P15 标记为 stub）。
+        arc_id = arc.get("arc_id", "?")
+        arc_name = arc.get("arc_name") or "本弧"
+        arc_goal = arc.get("arc_goal") or "本弧目标"
+        mc = (setting.get("protagonist") or {}).get("name") or "主角"
+        questions = [
+            {
+                "qid": f"talk_{arc_id}_q1",
+                "question": f"「{arc_name}」里{mc}的目标「{arc_goal[:30]}」在弧末要兑现到什么程度？",
+                "context": "弧目标来自 setting.arc_outline",
+            },
+            {
+                "qid": f"talk_{arc_id}_q2",
+                "question": f"「{arc_name}」的核心冲突如果落空，主角的损失是什么？",
+                "context": "损失越具体反噬越狠",
+            },
+            {
+                "qid": f"talk_{arc_id}_q3",
+                "question": f"「{arc_name}」是否引入新角色或新能力？引入时机？",
+                "context": "新增太密集会冲淡前弧伏笔",
+            },
+        ]
+
     return {"tasks": tasks, "questions": questions}, cost
