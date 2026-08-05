@@ -202,3 +202,46 @@ def test_foreshadow_due_soon_uses_chapter_number():
     assert any("弧4伏笔" in s for s in ctx["foreshadowing_due_soon"]), (
         f"应在 due_soon 里，实际={ctx['foreshadowing_due_soon']}"
     )
+
+
+# ────────────────────────────────────────────────────────────
+# 5. 清单 issue #5/#6：character_states 不再按 main_characters 子集过滤
+# ────────────────────────────────────────────────────────────
+
+def test_character_states_passed_full_not_filtered_by_main_characters():
+    """2026-08-05 清单 issue #5：原代码按 task.main_characters 子集过滤
+    hot.character_states。outline 漏列任何"本章要变化"的角色时，writer
+    拿不到该角色记忆 —— 与 checklist issue #6（checker.consistency 依赖
+    同一份被过滤的上下文）串联。改为全量传，与 inventory 同等待遇。
+    """
+    from engine.memory.manager import get_chapter_relevant_context
+
+    memory = {
+        "hot": {
+            "character_states": {
+                "陆承":   "刚触发能力觉醒",
+                "贺苗":   "首次登场",
+                "章廷":   "暗中盯梢主角",
+                "神秘人": "尚未现身（伏笔）",
+            },
+            "inventory": ["老旧铜怀表"],
+        },
+        "cold": {"compressed_history": ""},
+        "constraints": {"foreshadowing_planted": []},
+        "meta": {"total_chapters_tracked": 0},
+    }
+    # main_characters 只列了主角，预期其它三个角色状态都必须出现
+    task = {"chapter_number": 2, "main_characters": ["陆承"]}
+
+    ctx = get_chapter_relevant_context(memory, task)
+
+    states = ctx["character_states"]
+    # 全量传——主角之外的贺苗/章廷/神秘人都在
+    assert "陆承" in states
+    assert "贺苗" in states, "清单 #5：按 main_characters 子集过滤会丢配角"
+    assert "章廷" in states, "清单 #5：fuzzy-match 也不能恢复非本场角色"
+    assert "神秘人" in states, "清单 #5：fuzzy-match 也可能丢前缀/后缀非字符"
+    assert len(states) == 4
+
+    # inventory 仍为全量（对照组）
+    assert ctx["inventory"] == ["老旧铜怀表"]

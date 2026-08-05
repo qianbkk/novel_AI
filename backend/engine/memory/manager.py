@@ -463,13 +463,20 @@ def get_chapter_relevant_context(memory: dict, task: dict) -> dict:
     """Filter hot/cold/constraints down to only what's relevant to the current task.
 
     Returns a ~1500-token context object the Writer prompt expects.
+
+    2026-08-05 清单 issue #5：原代码用 task.main_characters 子集过滤
+    hot.character_states，导致 outline 漏列任何"本章要发生状态变化"的配角
+    时，writer 拿不到该角色记忆 —— checklist issue #6 里
+    checker.consistency 的输入与这道过滤串联，最后一道防线被削弱。
+    改为全量传 character_states（与 inventory 同等待遇）。30+ 角色时
+    token 占用 <500，仍在 1500-token 预算内。
     """
     hot = memory.get("hot", {})
     constraints = memory.get("constraints", {})
     main_chars = set(task.get("main_characters", []) or [])
     all_states = hot.get("character_states", {})
-    rel_states = {k: v for k, v in all_states.items()
-                  if any(k in c or c in k for c in main_chars) or k in main_chars}
+    # 全量传 character_states；不再按 main_characters 子集过滤。
+    rel_states = dict(all_states)
     recent = hot.get("recent_summaries", [])[-5:]
     recent_events = _format_recent_events(recent)
     ch_num = task.get("chapter_number", 0)

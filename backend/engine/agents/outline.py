@@ -177,6 +177,17 @@ def _standardize_tasks(tasks: list, start_chapter: int) -> None:
         else:
             t["emotion_intensity"] = 3
 
+    # 2026-08-05 清单 issue #7：shuang_type 与 emotion_core / ending_hook_type
+    # 同型 —— LLM 偶尔返非合法值，旧代码直接放行。beat_checker /
+    # acceptance_tests AC-10/11（扮猪吃虎三阶段、升级循环）的匹配表是固定
+    # 集合（SHUANG_TYPES.keys()，当前 7 类），非匹配值让节拍检测静默失效。
+    # 兜底为 None（schema 允许），与 shuang_description 空串保持一致，
+    # beat_checker 会跳过 None 章而非误匹配。
+    for t in tasks:
+        shuang_raw = t.get("shuang_type")
+        if not (isinstance(shuang_raw, str) and shuang_raw in SHUANG_TYPES):
+            t["shuang_type"] = None
+
     # foreshadowing_ops 标准化
     from .foreshadow_helper import normalize_foreshadow_ops
     for t in tasks:

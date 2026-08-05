@@ -87,6 +87,30 @@ def test_standardize_tasks_handles_missing_fields_gracefully():
     assert t["anchor_to"] is None
     assert t["emotion_core"] == "压抑"
     assert t["emotion_intensity"] == 3
+    # 清单 issue #7：shuang_type 缺值/非法值兜底为 None，保留合法值原样
+    assert t["shuang_type"] is None
+
+
+def test_standardize_tasks_shuang_type_validates():
+    """2026-08-05 清单 issue #7：shuang_type 必须与 SHUANG_TYPES 集合对齐，
+    非法值兜底为 None，合法值原样保留。beat_checker 三阶段节拍匹配表
+    只认 SHUANG_TYPES.keys()，非法值会让 AC-10/11 静默失效。
+    """
+    tasks = [
+        {"shuang_type": "打脸"},        # 合法 — 保留
+        {"shuang_type": "碾压"},        # 合法 — 保留
+        {"shuang_type": "竞猜"},        # 非法 — 兜底 None
+        {"shuang_type": ""},            # 空串 — 兜底 None
+        {"shuang_type": None},          # 本就 None — 保留
+        {"shuang_type": 123},           # 非字符串 — 兜底 None
+    ]
+    outline_mod._standardize_tasks(tasks, start_chapter=10)
+    assert tasks[0]["shuang_type"] == "打脸"
+    assert tasks[1]["shuang_type"] == "碾压"
+    assert tasks[2]["shuang_type"] is None
+    assert tasks[3]["shuang_type"] is None
+    assert tasks[4]["shuang_type"] is None
+    assert tasks[5]["shuang_type"] is None
 
 
 # ─── 2. run_outline_card B/C 分支走同一 helper ─────────────────────────
