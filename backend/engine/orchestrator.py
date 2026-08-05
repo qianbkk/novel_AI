@@ -74,11 +74,14 @@ PASS_SCORE   = 6.5
 # 拉长），过早硬停会打断用户正常 50 章流程。100%-150% 区间只会
 # 标 budget_paused + 弹 human_pending，不强制 abort。
 #
-# 想要严格 100% 停 → 改 BUDGET_HARD = 1.00 即可，但建议先跑完一轮
-# 50 章看实际预算消耗分布，再调严。生产部署若已明确成本上限，
-# 在 .env 设 NOVEL_BUDGET_HARD_OVERRIDE=1.0 覆盖（patch #201 TODO）。
+# 2026-08-05：实现 NOVEL_BUDGET_HARD_OVERRIDE（之前 patch #201 文档承诺
+# 但代码未读 env var）。生产部署可在 .env 设 NOVEL_BUDGET_HARD_OVERRIDE=1.0
+# 让硬停在 100% 生效；值必须是 0.5~5.0 浮点，非法值 fallback 到默认 1.50。
+# 想要严格 100% 停也可直接改常量 BUDGET_HARD = 1.00，但建议先跑完一轮
+# 50 章看实际预算消耗分布，再调严。
 BUDGET_WARN  = 1.00   # 100% warning
 BUDGET_HARD  = 1.50   # 150% hard stop (MVP-relaxed per patches/2026-06-28)
+_BUDGET_HARD_OVERRIDE_ENV = "NOVEL_BUDGET_HARD_OVERRIDE"
 
 # Module-level cache (avoid re-reading setting per chapter)
 _setting_cache: dict | None = None
@@ -191,9 +194,52 @@ class WriterFailedError(Exception):
 
 
 def _budget_ok(state: OrchestratorState) -> bool:
+    """2026-08-05: 实现 NOVEL_BUDGET_HARD_OVERRIDE env var。
+
+    Module-level 缓存避免每章重复读 env（解析仅在 import / 显式 reset 时跑一次）。
+    """
+    global _BUDGET_HARD_EFFECTIVE
+    if _BUDGET_HARD_EFFECTIVE is None:
+        raw = os.environ.get(_BUDGET_HARD_OVERRIDE_ENV, "").strip()
+        if raw:
+            try:
+                val = float(raw)
+                if 0.5 <= val <= 5.0:
+                    _BUDGET_HARD_EFFECTIVE = val
+                    _log.info(
+                        "NOVEL_BUDGET_HARD_OVERRIDE=%.2f 覆盖默认 BUDGET_HARD=%.2f",
+                        val, BUDGET_HARD,
+                    )
+                else:
+                    _log.warning(
+                        "%s=%r 超出 [0.5, 5.0] 范围，忽略，沿用默认 %.2f",
+                        _BUDGET_HARD_OVERRIDE_ENV, raw, BUDGET_HARD,
+                    )
+                    _BUDGET_HARD_EFFECTIVE = BUDGET_HARD
+            except ValueError:
+                _log.warning(
+                    "%s=%r 非浮点，忽略，沿用默认 %.2f",
+                    _BUDGET_HARD_OVERRIDE_ENV, raw, BUDGET_HARD,
+                )
+                _BUDGET_HARD_EFFECTIVE = BUDGET_HARD
+        else:
+            _BUDGET_HARD_EFFECTIVE = BUDGET_HARD
     used  = state.get("budget_used_usd", 0.0)
     limit = state.get("budget_limit_usd", 500.0)
-    return used < limit * BUDGET_HARD
+    return used < limit * _BUDGET_HARD_EFFECTIVE
+
+
+_BUDGET_HARD_EFFECTIVE: float | None = None
+
+
+def reset_budget_override() -> None:
+    """清掉缓存的 BUDGET_HARD override（测试 / settings hot-reload 用）。
+
+    设计成显式 reset 而非每次重读 env：1) 测试可以控制时序，2) 不让热 reload
+    突然改变已运行长跑的预算阈值。
+    """
+    global _BUDGET_HARD_EFFECTIVE
+    _BUDGET_HARD_EFFECTIVE = None
 
 
 # ══════════════════════════════════════════
@@ -851,7 +897,30 @@ def node_save_and_track(state: OrchestratorState) -> OrchestratorState:
         log(f"🏁 弧{arc_idx+1}完成，触发Summarizer", state)
         if arc_idx < len(arc_plans):
             try:
-                _, cost = run_summarizer("arc_end", arc_plans[arc_idx], updated_mem, state.get("novel_id", "default"))
+                # 2026-08-05 修复（清单衍生）：原 `_, cost = ...` 把 run_summarizer
+                # 返回的 plan_vs_actual / arc_summary / compressed 全丢掉。审计 P4
+                # 钩子（弧计划 vs 实际覆盖率）的设计意图是把信号送到测试 / 报告，
+                # 调用方不解构 dict 等于这一整块失效。改为解构 + 写回 state，
+                # 下次 save_state 落盘；前端读 /bridge/memory 时可直接看到。
+                summary_result, cost = run_summarizer(
+                    "arc_end", arc_plans[arc_idx], updated_mem,
+                    state.get("novel_id", "default"),
+                )
+                if isinstance(summary_result, dict):
+                    # 不直接覆盖主字段；放嵌套命名空间便于 frontend 取
+                    metrics = dict(state.get("summarizer_metrics") or {})
+                    arc_id = arc_plans[arc_idx].get("arc_id", arc_idx + 1)
+                    metrics[str(arc_id)] = summary_result
+                    state["summarizer_metrics"] = metrics
+                    if "plan_vs_actual" in summary_result:
+                        pva = summary_result["plan_vs_actual"]
+                        arc_plans[arc_idx]["_plan_vs_actual"] = pva
+                        coverage = pva.get("coverage_ratio")
+                        if coverage is not None and coverage < 0.5:
+                            log(f"  ⚠ 弧{arc_id} 计划覆盖率低：{coverage:.0%}", state)
+                            state["error_log"] = (state.get("error_log", []) + [
+                                f"arc{arc_id} plan coverage {coverage:.0%} < 50%",
+                            ])
             except Exception as e:
                 # 迭代 #60: 跟 #58 同型 — 之前 silent fallback cost=0.0
                 # 没有 _summarizer_failed 标记，下一弧还是基于老 L5 接着跑。

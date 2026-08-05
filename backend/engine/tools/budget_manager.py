@@ -29,10 +29,17 @@ os.makedirs(REPORT_DIR, exist_ok=True)
 
 def log_cost(chapter: int, agent: str, model: str,
              input_tokens: int, output_tokens: int, cost_usd: float,
-             arc: int = 0) -> None:
-    """Append a cost record to the JSONL log. Called by router after each LLM call."""
+             arc: int = 0, *, novel_id: str = "") -> None:
+    """Append a cost record to the JSONL log. Called by router after each LLM call.
+
+    2026-08-05 修复（清单衍生）：加 novel_id 字段。理论上 bridge 子进程 +
+    NOVEL_AI_DIR 路径隔离让多项目不会混 budget log，但保留 novel_id 让未来
+    analyze_jsonl 工具可以按项目聚合（同一路径上有 N 个项目时不丢失信息），
+    也让 future bug「ENOENT / 路径冲突」可被精准定位哪个项目。
+    """
     record = {
         "ts": datetime.now().isoformat(),
+        "novel_id": novel_id,
         "chapter": chapter,
         "arc": arc,
         "agent": agent,
