@@ -133,7 +133,11 @@ export default function WorldBuild() {
     setError(null);
     setBuilding(true);
     setProgress(0);
+    // 清空上一轮 stageStatus：之前只设第一项为 active，老的 done / failure
+    // 标志残留 → 用户看到上一轮失败的 stage 仍带"已 done"加勾。
+    // （迭代 #54 时有 job_failed 路径不清空，那之后又被绕过了；这里补回)
     setStageStatus({ [firstStage.key]: "active" });
+    setResult(null);  // 防止上一轮的 result 在新 build 没完成前仍显示
 
     const job = await api.startWorldbuild(projectId);
     const es = new EventSource(api.worldbuildStreamUrl(projectId, job.id));
