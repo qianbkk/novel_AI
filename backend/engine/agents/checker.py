@@ -231,12 +231,16 @@ def calculate_weighted_score(dimensions: dict) -> float:
     return round(total, 2)
 
 
-def run_checker(text: str, task: dict, audit_mode: str = "full") -> tuple[dict, float]:
+def run_checker(text: str, task: dict, audit_mode: str = "full",
+               *, evidence: Optional[Evidence] = None) -> tuple[dict, float]:
     """运行质检
     audit_mode:
       full       = 三模型评审（正常章节）
       lite       = 单模型评审（批量生产模式）
       bootstrap  = 仅主评（黄金三章阶段）
+
+    evidence: 跨章上下文（setting_text / last_chapter_ending / recent_events /
+      foreshadowing_to_resolve）。不传或 None → 走"无前文可比对"降级路径。
 
     返回：(result_dict, total_cost)
     result_dict: {score, individual_scores, dimensions, verdict, rewrite_level,
@@ -246,7 +250,7 @@ def run_checker(text: str, task: dict, audit_mode: str = "full") -> tuple[dict, 
     scores = []
 
     # 主评
-    r1, c1 = score_chapter(text, task, agent_name="checker_main")
+    r1, c1 = score_chapter(text, task, evidence=evidence, agent_name="checker_main")
     total_cost += c1
     s1 = calculate_weighted_score(r1.get("dimensions", {}))
     scores.append(s1)
@@ -254,13 +258,13 @@ def run_checker(text: str, task: dict, audit_mode: str = "full") -> tuple[dict, 
 
     if audit_mode == "full":
         # 交叉评 1
-        r2, c2 = score_chapter(text, task, agent_name="checker_cross1")
+        r2, c2 = score_chapter(text, task, evidence=evidence, agent_name="checker_cross1")
         total_cost += c2
         s2 = calculate_weighted_score(r2.get("dimensions", {}))
         scores.append(s2)
 
         # 交叉评 2
-        r3, c3 = score_chapter(text, task, agent_name="checker_cross2")
+        r3, c3 = score_chapter(text, task, evidence=evidence, agent_name="checker_cross2")
         total_cost += c3
         s3 = calculate_weighted_score(r3.get("dimensions", {}))
         scores.append(s3)

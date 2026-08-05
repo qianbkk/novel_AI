@@ -617,7 +617,29 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
 
     log(f"  🔍 质检（{audit_mode}）...", state)
     try:
-        checker_result, cost = run_checker(clean_text, task, audit_mode)
+        # 2026-08-05 修复（清单 issue #6 + 工程未接通）：把 evidence 真正拼进
+        # checker prompt。之前 run_checker 不接 evidence，等同 consistency 维度
+        # 永远"无前文可比对"。这一步把 setting 命中 / 上章结尾 / 近 N 章摘要 /
+        # 本章应回收伏笔 4 块证据送进 3 路交叉评。
+        from .agents.checker import Evidence as _CheckerEvidence
+        _hot = state.get("hot", {}) or {}
+        _recent = _format_recent_events(_hot.get("recent_summaries", [])[-5:])
+        _memory_blob = get_l2(state.get("novel_id", "default"))
+        _planted = (_memory_blob.get("constraints", {}) or {}).get("foreshadowing_planted", []) or []
+        _due_soon = [
+            (item.get("desc") if isinstance(item, dict) else str(item))
+            for item in _planted
+            if isinstance(item, dict)
+            and item.get("status") != "resolved"
+            and int(item.get("target_chapter") or 0) <= task["chapter_number"] + 2
+        ]
+        _ev = _CheckerEvidence(
+            setting_text=_setting().get("tagline", "") or str(_setting().get("title_candidates", [""])[0]),
+            last_chapter_ending=_hot.get("last_chapter_ending", ""),
+            recent_events=_hot.get("recent_summaries", [])[-5:],
+            foreshadowing_to_resolve=_due_soon,
+        )
+        checker_result, cost = run_checker(clean_text, task, audit_mode, evidence=_ev)
         _add_cost(state, cost)
     except Exception as e:
         # 之前：兜底 score=7.0 / verdict=PASS——任何 checker 失败都假 PASS。
@@ -711,7 +733,27 @@ def node_rewrite(state: OrchestratorState) -> OrchestratorState:
         log("  ⏭  跳过重写后合规检查（personal 平台）", state)
 
     try:
-        cr2, cost = run_checker(clean_text, task, "lite")
+        # 2026-08-05：与 node_write_pipeline 同源拼 evidence，让重写后质检与
+        # 首次质检在"看到同样的前文"上一致，避免"重写前 4 分、重写后还是 4 分"
+        # 这种循环不收敛现象被 evidence 隐藏。
+        from .agents.checker import Evidence as _CheckerEvidence2
+        _hot2 = state.get("hot", {}) or {}
+        _memory2 = get_l2(state.get("novel_id", "default"))
+        _planted2 = (_memory2.get("constraints", {}) or {}).get("foreshadowing_planted", []) or []
+        _due_soon2 = [
+            (item.get("desc") if isinstance(item, dict) else str(item))
+            for item in _planted2
+            if isinstance(item, dict)
+            and item.get("status") != "resolved"
+            and int(item.get("target_chapter") or 0) <= task["chapter_number"] + 2
+        ]
+        _ev2 = _CheckerEvidence2(
+            setting_text=_setting().get("tagline", "") or str(_setting().get("title_candidates", [""])[0]),
+            last_chapter_ending=_hot2.get("last_chapter_ending", ""),
+            recent_events=_hot2.get("recent_summaries", [])[-5:],
+            foreshadowing_to_resolve=_due_soon2,
+        )
+        cr2, cost = run_checker(clean_text, task, "lite", evidence=_ev2)
         _add_cost(state, cost)
     except Exception as e:
         # 之前：cr2 = cr（用上次 checker 结果当这次结果——重写后没真的评分，
