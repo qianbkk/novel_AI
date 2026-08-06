@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
@@ -146,10 +146,16 @@ async def update_chapter(
     chapter_id: str,
     payload: ChapterUpdateRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _user=Depends(_owner_check),
 ):
-    """人工编辑章节；用 revision hash 防止覆盖并发更新。"""
+    """人工编辑章节；用 revision hash 防止覆盖并发更新。
+
+    2026-08-06 修复（核查清单 #4）：commit 成功后挂一次 tracker resync，
+    让 L2 memory（character_states / inventory / last_chapter_ending）反映
+    人工编辑后的真实事实，避免后续章节按"跳过了这一章"写。
+    """
     try:
         return await update_chapter_content(
             project_id=project_id,
@@ -158,6 +164,7 @@ async def update_chapter(
             content=payload.content,
             expected_revision_hash=payload.expected_revision_hash,
             db=db,
+            background_tasks=background_tasks,
         )
     except ChapterEditNotFoundError as e:
         raise HTTPException(404, str(e))
@@ -517,10 +524,15 @@ async def accept_chapter_candidate(
     version: str,
     payload: CandidateAcceptRequest,
     request: Request,
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     _user=Depends(_owner_check),
 ):
-    """显式采纳候选；原章或候选在预览后变化都会拒绝。"""
+    """显式采纳候选；原章或候选在预览后变化都会拒绝。
+
+    2026-08-06 修复（核查清单 #4）：采纳后走 update_chapter_content，
+    自动挂一次 BackgroundTasks 让 tracker resync（L2 记忆跟随新内容）。
+    """
     import hashlib
 
     chapter = db.query(Chapter).filter_by(
@@ -549,6 +561,7 @@ async def accept_chapter_candidate(
             expected_revision_hash=payload.expected_revision_hash,
             db=db,
             source=f"candidate_v{label}",
+            background_tasks=background_tasks,
         )
     except ChapterEditConflictError as e:
         raise HTTPException(
