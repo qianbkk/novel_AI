@@ -938,6 +938,33 @@ def node_save_and_track(state: OrchestratorState) -> OrchestratorState:
     if used >= limit * BUDGET_WARN and int(used / (limit * 0.01)) % 5 == 0:
         log(f"  💰 预算已用{used/limit:.0%}（${used:.2f}/${limit:.0f}）", state)
 
+    # 2026-08-06 修复（核查清单 #2）：
+    # beat_checker 是离线校验网文关键节拍（扮猪吃虎/打脸三阶段 / 升级循环 /
+    # 情绪多样性 / 章末钩子）的工具，之前只在 CI 离线跑 + system_test 手动调。
+    # 接入点：每章 save_and_track 末尾跑一次，节拍红线进 error_log，让长跑
+    # 里写满 N 章后运维能立即看到"节拍漂了"的报告 —— 而不是 N 章后才离线发现。
+    #
+    # 失败要响亮：beat_checker 自己不抛，但 report 里有 RED 项 → 写 error_log。
+    # run_all_checks 本身抛异常时（chapters/ 不存在等）→ 静默吞 + 注释
+    # （跟 tracker/summarizer 同型：链路不阻塞主流程，但失败要 log）。
+    try:
+        from .tools.beat_checker import run_all_checks, save_report
+        novel_ai_dir = str(STATE_PATH.parent.parent)
+        beat_report = run_all_checks(novel_ai_dir, window=10)
+        save_report(beat_report, output_dir=str(STATE_PATH.parent))
+        if beat_report.get("overall_status") == "RED":
+            red_checks = [
+                f"{name}: {c['status']} — {c['reason']}"
+                for name, c in beat_report.get("checks", {}).items()
+                if c.get("status") == "RED"
+            ]
+            log(f"  ⚠ 节拍校验 RED：{len(red_checks)} 项不达标", state)
+            state["error_log"] = (state.get("error_log", []) + [
+                f"beat_checker RED ch{task['chapter_number']}: " + "; ".join(red_checks)
+            ])
+    except Exception as e:
+        log(f"  ⚠ beat_checker 失败（不阻塞主流程）：{e}", state)
+
     save_state(state, str(STATE_PATH))
     return state
 

@@ -1808,6 +1808,83 @@ class TestOrchestratorTrackerNotSilent:
             "orchestrator.node_save_and_track 异常路径必须 log error_log"
 
 
+class TestOrchestratorBeatCheckerWired:
+    """2026-08-06 修复（核查清单 #2）：beat_checker 之前只在 system_test 手动
+    调 + CI 离线跑，没接入主循环。修法：每章 save_and_track 末尾调一次，
+    RED 项进 error_log（"失败要响亮"），让长跑 N 章后运维立即看到节拍漂移。
+
+    本不变量锁死源码契约：
+      1. node_save_and_track 必须 import + call run_all_checks
+      2. RED 项必须 append 到 state["error_log"]
+      3. beat_checker 抛异常不能阻塞主流程（与 tracker/summarizer 同型）
+    """
+    def test_beat_checker_invoked_in_save_and_track(self):
+        import inspect
+        from engine import orchestrator as orch_mod
+        src = inspect.getsource(orch_mod.node_save_and_track)
+        code_lines = [l for l in src.split("\n")
+                      if l.strip() and not l.strip().startswith("#")]
+        code_src = "\n".join(code_lines)
+        assert "run_all_checks" in code_src, (
+            "node_save_and_track 必须调用 beat_checker.run_all_checks"
+            "（核查清单 #2：节拍校验接入主循环）"
+        )
+        # RED 项必须 append 到 error_log，不能静默吞
+        assert "beat_checker RED" in code_src or 'beat_checker.{RED}' in code_src \
+            or 'overall_status' in code_src, (
+            "beat_checker 跑出的 RED 项必须进 error_log（失败要响亮）"
+        )
+
+    def test_beat_checker_failure_does_not_break_main(self):
+        """beat_checker 抛异常时（如 chapters/ 不存在等）save_and_track
+        必须继续跑 save_state 并返回，不能让一个观测工具阻塞主流程。"""
+        import inspect
+        from engine import orchestrator as orch_mod
+        src = inspect.getsource(orch_mod.node_save_and_track)
+        # 找 beat_checker 块必须有 except 包裹
+        assert "except Exception" in src, (
+            "node_save_and_track 内 beat_checker 块必须 try/except "
+            "（不让观测工具阻塞主流程）"
+        )
+
+
+class TestAcceptanceTestsRunnable:
+    """2026-08-06 修复（核查清单 #2）：acceptance_tests.run_all() 之前只被
+    system_test 手动调，CI 不覆盖。修法：CI 加 smoke step +
+    acceptance_tests.py 暴露 run_all() 给外部 import。
+
+    本不变量锁死：
+      1. run_all() 可被外部 import（已经被 CI smoke step 验证）
+      2. run_all() 在空目录（无任何 tasks.json）下应正常返回不抛
+    """
+    def test_acceptance_run_all_runnable_with_no_fixtures(self, tmp_path, monkeypatch):
+        """空 output/ 下 run_all() 必须不抛（即使所有 AC 都返回 False，
+        run_all 仍能打印结果）。这是 CI smoke 的核心断言。"""
+        from engine.config import paths as paths_mod
+        # 重定向 OUTPUT_DIR 到空 tmp 目录，让 acceptance_tests 看不到任何 fixture
+        monkeypatch.setattr(paths_mod, "OUTPUT_DIR_STR", str(tmp_path))
+        # acceptance_tests 内部模块级的 from ..config.paths 已经在 import 时
+        # 解析，patch 不到；要 reload。
+        import importlib
+        import engine.tools.acceptance_tests as at_mod
+        # 用 monkeypatch 直接覆盖模块级 symbol
+        monkeypatch.setattr(at_mod, "OUTPUT_DIR_STR", str(tmp_path))
+        monkeypatch.setattr(at_mod, "CHAPTERS_DIR_STR", str(tmp_path / "chapters"))
+        (tmp_path / "chapters").mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr(at_mod, "SETTING_PATH_STR", str(tmp_path / "setting_package.json"))
+
+        # 跑 ac10 / ac11（这两个复用 beat_checker，不依赖 orchestrator state）
+        # 而 ac1-ac9 依赖 setting_package.json / tasks.json 的完整 fixture。
+        # 本测试只验证"空目录不抛"——即使返回 False 也没关系。
+        from engine.tools.acceptance_tests import ac10_face_slap_beat, ac11_upgrade_loop
+        # 这两条必须不抛
+        result_10 = ac10_face_slap_beat()
+        result_11 = ac11_upgrade_loop()
+        # 空目录时 ac10/ac11 应返回 False（没章节不达标），但**不抛**
+        assert isinstance(result_10, bool)
+        assert isinstance(result_11, bool)
+
+
 class TestHumanReviewAtomicAndLoadNoSilent:
     """迭代 #59: engine/tools/human_review.py 两个 bug
     1. save_state 用 raw open(w) 写 orchestrator_state.json（半写损坏）

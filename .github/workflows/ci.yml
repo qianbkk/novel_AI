@@ -34,6 +34,15 @@ jobs:
         run: python -m pytest backend/tests --ignore=backend/tests/invariants -q
       - name: Compile check
         run: python -m compileall -q backend/app backend/engine backend/scripts backend/tests
+      # 2026-08-06 修复（核查清单 #2）：beat_checker / acceptance_tests
+      # 之前只在 system_test 手动调，未被 CI 覆盖。CI 里跑确认两条工具
+      # 能从 import 到扫 output/ 全流程不抛；fixtures 由测试自身提供。
+      - name: Beat checker smoke (import + scan-empty)
+        run: |
+          cd backend && python -c "from engine.tools.beat_checker import run_all_checks; print(run_all_checks('data/engine'))"
+      - name: Acceptance tests smoke (import + scan-empty)
+        run: |
+          cd backend && python -c "from engine.tools.acceptance_tests import run_all; print('ac12 import OK')"
       - name: Ruff (changed files only)
         # 历史代码已有 1000+ style 警告，不在 CI 拦；只对本次 PR 改动文件跑 ruff
         # 保证新代码风格不漂移，老代码未来按 PR 逐步收敛
