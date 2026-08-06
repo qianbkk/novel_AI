@@ -130,15 +130,45 @@ export function WorldviewTab({ result }: { result: WorldBuildResult }) {
             卷级骨架
             <span className="module-heading__sub">{ws.plot_skeleton_json.length} 卷</span>
           </h3>
-          {ws.plot_skeleton_json.map((v, i) => (
-            <div className="entity-card" key={i}>
-              <div className="entity-card__name">
-                <span className="last-chapter-line__no" style={{ marginRight: 8 }}>卷 {i + 1}</span>
-                {v.title}
+          {ws.plot_skeleton_json.map((v, i) => {
+            // 2026-08-06 修复（核查清单 #3）：
+            // plot_skeleton_json 在 3 个写盘点会用两种形态写入：
+            //   arc 形态（arc_id / arc_name / arc_goal / arc_climax_description / ...）
+            //     —— bridge/setting_sync.py 反向回灌 setting_package 时用此形态
+            //   卷形态（title / summary）
+            //     —— worldbuild/stages.py stage_plot_skeleton 用此形态
+            // engine/agents/planner.py 已是"arc 优先 + 卷形态 fallback"；
+            // 前端显示必须与引擎链路口径一致，否则 arc 数据落地后这里全空白。
+            const name = v.arc_name || v.title || `卷 ${i + 1}`;
+            const summary = v.arc_goal || v.summary || "";
+            const climax = v.arc_climax_description;
+            const ending = v.arc_ending_state;
+            const est = v.estimated_chapters;
+            return (
+              <div className="entity-card" key={i}>
+                <div className="entity-card__name">
+                  <span className="last-chapter-line__no" style={{ marginRight: 8 }}>卷 {i + 1}</span>
+                  {name}
+                  {typeof est === "number" && (
+                    <span style={{ marginLeft: 8, fontSize: 11, color: "var(--color-text-muted)" }}>
+                      约 {est} 章
+                    </span>
+                  )}
+                </div>
+                {summary && <div className="entity-card__desc">{summary}</div>}
+                {climax && (
+                  <div style={{ marginTop: 6, fontSize: 12, color: "var(--color-text-muted)" }}>
+                    <strong>高潮：</strong>{climax}
+                  </div>
+                )}
+                {ending && ending !== summary && (
+                  <div style={{ marginTop: 4, fontSize: 12, color: "var(--color-text-muted)" }}>
+                    <strong>收束：</strong>{ending}
+                  </div>
+                )}
               </div>
-              <div className="entity-card__desc">{v.summary}</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

@@ -85,10 +85,34 @@ export interface Currency {
   detail_json: Record<string, unknown> | null;
 }
 
+/**
+ * plot_skeleton_json 每条记录：数据来自 3 个写盘点，schema 不一致
+ *   - worldbuild/stages.py stage_plot_skeleton → {title, summary}
+ *   - bridge/setting_sync.py → {arc_id, arc_name, arc_goal, ...}
+ *   - novel_extract.py → LLM 反推的形态（不固定）
+ *
+ * 引擎 planner (engine/agents/planner.py:417-422) 已是"两种都认 + arc 优先"，
+ * 前端也必须按 arc 优先读，否则 arc 数据落地后 WorldviewTab 全显示空字段。
+ * 历史：2026-08-06 核查清单 #3 修复。
+ */
+export interface PlotSkeletonVolume {
+  title?: string;
+  summary?: string;
+  arc_id?: number;
+  arc_name?: string;
+  arc_goal?: string;
+  estimated_chapters?: number;
+  arc_climax_description?: string;
+  emotion_curve?: string;
+  new_characters_introduced?: string[];
+  arc_ending_state?: string;
+  is_final_arc?: boolean;
+}
+
 export interface WorldSetting {
   world_view: string | null;
   story_core: string | null;
-  plot_skeleton_json: { title: string; summary: string }[] | null;
+  plot_skeleton_json: PlotSkeletonVolume[] | null;
   special_settings_json: Record<string, unknown> | null;
 }
 
