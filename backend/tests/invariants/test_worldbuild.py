@@ -378,6 +378,260 @@ class TestImportChaptersResilient:
             db.close()
 
 
+class TestBatchImportPartialFailure:
+    """2026-08-06 修复（核查清单衍生）：import_chapters_from_novel_ai 之前
+    "bad file → raise RuntimeError" 直接中断 for 循环，跟紧挨着的注释
+    "单文件坏不能阻断整批 import" 矛盾，且没有测试覆盖"中间文件坏、
+    后面正常文件仍要被导入"这种关键场景。
+
+    新语义（与 #1 修复一致）：
+      - 单文件失败 → log.exception + collect → 不抛
+      - 循环结束如有 errors → 聚合 raise（"partial import: N ok, M failed; ..."）
+      - 单文件异常信息必须出现在错误消息里（可定位）
+      - 完全失败（imported 空 + errors 非空）→ "all N files failed; ..." 前缀
+    """
+    @pytest.fixture(autouse=True)
+    def setup_chapters_dir(self, tmp_path):
+        """3 个章节文件：ch_0001 正常、ch_0002 抛 UnicodeDecodeError、ch_0003 正常。
+        关键：ch_0002 在中间，ch_0003 在后面 —— 旧实现在 ch_0002 raise 后会跳过 ch_0003。
+        """
+        import secrets
+        chapters_dir = tmp_path / "output" / "chapters"
+        chapters_dir.mkdir(parents=True, exist_ok=True)
+
+        (chapters_dir / "ch_0001.txt").write_text(
+            "主角踏入云州城门。\n商贩吆喝，灵气潮涌。\n", encoding="utf-8"
+        )
+        (chapters_dir / "ch_0001_meta.json").write_text(
+            json.dumps({"chapter_role": "铺垫", "chapter_goal": "开篇"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        # ch_0002: 写入非法 UTF-8 字节，让 txt_path.read_text("utf-8") 抛
+        # UnicodeDecodeError —— 旧 raise 路径会让 for 循环直接中断
+        # （这是之前没被测试覆盖、但注释"单文件坏不能阻断整批 import"
+        # 实际失效的关键场景）
+        (chapters_dir / "ch_0002.txt").write_bytes(b"\xff\xfe\xfd bad bytes")
+
+        (chapters_dir / "ch_0003.txt").write_text(
+            "债主议席会开始。\n", encoding="utf-8"
+        )
+        (chapters_dir / "ch_0003_meta.json").write_text(
+            json.dumps({"chapter_role": "冲突", "chapter_goal": "首次对峙"}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+        self.tmp_path = tmp_path
+        self.project_id = f"test-partial-{secrets.token_hex(8)}"
+        yield tmp_path
+        from app.database import SessionLocal
+        from app.models import Project, Chapter
+        db = SessionLocal()
+        try:
+            db.query(Chapter).filter_by(project_id=self.project_id).delete()
+            db.query(Project).filter_by(id=self.project_id).delete()
+            db.commit()
+        except Exception:
+            pass
+        finally:
+            db.close()
+
+    def test_ch_0003_imported_when_ch_0002_raises(self, setup_chapters_dir):
+        """ch_0002 抛 UnicodeDecodeError 时，ch_0001 和 ch_0003 都应被导入。
+
+        锁死的关键断言：
+          - 必须 raise（聚合错误，"失败要响亮"）
+          - 错误消息必须包含 ch_0002.txt（可定位）
+          - 数据库里 ch_0001 + ch_0003 都在（不被中断）
+        """
+        import asyncio
+        from app.bridge.chapter_import import import_chapters_from_novel_ai
+        from app.database import SessionLocal
+        from app.models import Project, Chapter
+
+        db = SessionLocal()
+        try:
+            db.add(Project(
+                id=self.project_id,
+                title="partial-test",
+                genre="玄幻",
+                status="ready",
+                config_json={},
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        db = SessionLocal()
+        try:
+            with pytest.raises(RuntimeError) as excinfo:
+                asyncio.run(
+                    import_chapters_from_novel_ai(
+                        self.project_id, str(self.tmp_path), db
+                    )
+                )
+            err_msg = str(excinfo.value)
+            # 断言 1：错误消息可定位（包含坏文件名）
+            assert "ch_0002.txt" in err_msg, (
+                f"错误消息应包含坏文件名 ch_0002.txt；实际: {err_msg!r}"
+            )
+            # 断言 2：错误消息反映 partial success（"N ok, M failed"）
+            assert "partial import" in err_msg, (
+                f"错误消息应说明这是部分成功；实际: {err_msg!r}"
+            )
+            assert "2 ok" in err_msg, (
+                f"错误消息应说明有 2 个 ok（ch_0001 在 ch_0002 之前，"
+                f"ch_0003 在 ch_0002 之后仍被处理）；实际: {err_msg!r}"
+            )
+            assert "1 failed" in err_msg, (
+                f"错误消息应说明有 1 个 failed；实际: {err_msg!r}"
+            )
+
+            # 断言 3：DB 里 ch_0001 在（ch_0002 之前跑完，已 commit）
+            chapter_nos = {
+                c.chapter_no for c in
+                db.query(Chapter).filter_by(project_id=self.project_id).all()
+            }
+            assert 1 in chapter_nos, (
+                f"ch_0001 应被导入，DB chapter_nos={chapter_nos}"
+            )
+
+            # 断言 4（关键！）：ch_0003 在 ch_0002 之后仍被导入 —— 旧 raise
+            # 实现在 ch_0002 抛 UnicodeDecodeError 后直接中断 for，ch_0003 永远不会被处理。
+            assert 3 in chapter_nos, (
+                f"ch_0003 应被导入（旧 raise 实现会让它在 ch_0002 之后被跳过），"
+                f"DB chapter_nos={chapter_nos}"
+            )
+        finally:
+            try:
+                db.query(Chapter).filter_by(project_id=self.project_id).delete()
+                db.query(Project).filter_by(id=self.project_id).delete()
+                db.commit()
+            except Exception:
+                pass
+            db.close()
+
+    def test_all_files_fail_uses_all_prefix(self, setup_chapters_dir):
+        """所有文件都坏时，错误前缀应是 'all N files failed'（不是 'partial'）。"""
+        import asyncio
+        from app.bridge.chapter_import import _force_reimport
+        from app.database import SessionLocal
+        from app.models import Project
+
+        # 把 ch_0001 + ch_0003 也都改成不可读字节
+        chapters_dir = self.tmp_path / "output" / "chapters"
+        (chapters_dir / "ch_0001.txt").write_bytes(b"\xff\xfe broken")
+        (chapters_dir / "ch_0003.txt").write_bytes(b"\xff\xfe broken")
+
+        db = SessionLocal()
+        try:
+            db.add(Project(
+                id=self.project_id,
+                title="all-fail-test",
+                genre="玄幻",
+                status="ready",
+                config_json={},
+            ))
+            db.commit()
+        finally:
+            db.close()
+
+        db = SessionLocal()
+        try:
+            with pytest.raises(RuntimeError) as excinfo:
+                asyncio.run(
+                    _force_reimport(self.project_id, str(self.tmp_path), db)
+                )
+            err_msg = str(excinfo.value)
+            assert err_msg.startswith("all "), (
+                f"全失败时错误前缀应是 'all N files failed'；实际: {err_msg!r}"
+            )
+            # 三个坏文件名都在错误消息里
+            for name in ("ch_0001.txt", "ch_0002.txt", "ch_0003.txt"):
+                assert name in err_msg, (
+                    f"全失败时错误消息应包含 {name}；实际: {err_msg!r}"
+                )
+        finally:
+            try:
+                db.query(Project).filter_by(id=self.project_id).delete()
+                db.commit()
+            except Exception:
+                pass
+            db.close()
+
+
+class TestPlotSkeletonDualFormatContract:
+    """2026-08-06 修复（核查清单 #3）：
+    plot_skeleton_json 在 3 个写盘点用两种 schema 写入：
+      - arc 形态：{arc_id, arc_name, arc_goal, estimated_chapters, ...}
+      - 卷形态：{title, summary}
+
+    engine/agents/planner.py 已是"arc 优先 + 卷形态 fallback"。
+    frontend/src/components/worldview/WorldviewTab.tsx 2026-08-06 也已
+    同步支持两种形态（核查清单 #3 修复）。
+
+    本不变量锁死：
+      1. planner 消费 arc 形态时 arc_name/arc_goal 100% 透传（不让信息被吞）
+      2. planner 消费卷形态时通过 title/summary 兜底（容错仍工作）
+      3. 任何后续重构若让 planner 只认一种形态 → 测试报错
+    """
+    def test_arc_shape_passes_through_planner(self):
+        """arc 形态 → planner 必须读出 arc_name/arc_goal，不能当卷形态读。"""
+        from engine.agents.planner import _merge_snapshot_into_setting
+        # 4 弧符合 planner ≥4 弧硬约束
+        snap = {
+            "plot_skeleton": [
+                {"arc_id": 1, "arc_name": "弧名A", "arc_goal": "弧目标A 完整内容",
+                 "estimated_chapters": 30, "arc_climax_description": "高潮A",
+                 "arc_ending_state": "收束A", "is_final_arc": False},
+                {"arc_id": 2, "arc_name": "弧名B", "arc_goal": "弧目标B 完整内容",
+                 "estimated_chapters": 30, "arc_climax_description": "高潮B",
+                 "arc_ending_state": "收束B", "is_final_arc": False},
+                {"arc_id": 3, "arc_name": "弧名C", "arc_goal": "弧目标C 完整内容",
+                 "estimated_chapters": 30, "arc_climax_description": "高潮C",
+                 "arc_ending_state": "收束C", "is_final_arc": False},
+                {"arc_id": 4, "arc_name": "弧名D", "arc_goal": "弧目标D 完整内容",
+                 "estimated_chapters": 30, "arc_climax_description": "高潮D",
+                 "arc_ending_state": "收束D", "is_final_arc": False},
+            ],
+        }
+        out = _merge_snapshot_into_setting({}, snap)
+        arcs = out.get("arc_outline") or []
+        assert len(arcs) >= 4, f"应至少 4 弧，实际 {len(arcs)}"
+        # 关键断言：arc_name / arc_goal 必须 100% 透传，不被丢弃或简化
+        names = [a["arc_name"] for a in arcs[:4]]
+        assert names == ["弧名A", "弧名B", "弧名C", "弧名D"], (
+            f"arc 形态的 arc_name 必须透传；实际: {names}"
+        )
+        goals = [a["arc_goal"] for a in arcs[:4]]
+        for i, g in enumerate(goals):
+            assert "完整内容" in g, f"弧 {i + 1} arc_goal 必须透传；实际: {g!r}"
+
+    def test_volume_shape_falls_back_to_title_summary(self):
+        """卷形态（worldbuild 跑出来的原生形态）也能被 planner 消费。"""
+        from engine.agents.planner import _merge_snapshot_into_setting
+        snap = {
+            "plot_skeleton": [
+                {"title": "第1卷 债起云州", "summary": "主角重生"},
+                {"title": "第2卷 入局云州", "summary": "建立根据地"},
+                {"title": "第3卷 临海风波", "summary": "港口扩展"},
+                {"title": "第4卷 苍莽之约", "summary": "深入妖族祖地"},
+            ],
+        }
+        out = _merge_snapshot_into_setting({}, snap)
+        arcs = out.get("arc_outline") or []
+        assert len(arcs) >= 4, f"卷形态应至少补出 4 弧，实际 {len(arcs)}"
+        # 卷形态兜底：arc_name 取 title，arc_goal 取 summary
+        names = [a["arc_name"] for a in arcs[:4]]
+        assert names[0] == "第1卷 债起云州", (
+            f"卷形态兜底必须把 title 当 arc_name；实际: {names[0]!r}"
+        )
+        goals = [a["arc_goal"] for a in arcs[:4]]
+        assert goals[0] == "主角重生", (
+            f"卷形态兜底必须把 summary 当 arc_goal；实际: {goals[0]!r}"
+        )
+
+
 class TestExportChaptersResilient:
     """迭代 #34: export_chapters / print_stats 之前单章坏让整批 export 失败。
 

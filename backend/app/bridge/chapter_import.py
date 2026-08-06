@@ -291,8 +291,23 @@ async def import_chapters_from_novel_ai(
     db: Session,
     chapter_numbers: set[int] | None = None,
 ) -> list[dict]:
-    """Import formal chapter files, optionally restricted to explicit chapter numbers."""
+    """Import formal chapter files, optionally restricted to explicit chapter numbers.
+
+    迭代 #31 + 修复（2026-08-06，核查清单衍生）：
+    旧实现 "每个文件 try/except 失败就 raise" —— 但 raise 直接中断 for 循环，
+    排在失败文件之后的所有正常文件都不会被处理，跟紧挨着的注释
+    "单文件坏不能阻断整批 import" 矛盾。
+
+    新语义（保留不变量测试的承诺 + "失败要响亮"）：
+      - 坏文件 → log.exception + collect error → 不抛
+      - 循环结束 → 如果 errors 非空，抛 RuntimeError 聚合报告（每条
+        "<file>: <exc>" 一行），同时返回 imported 列表里仍能拿到已成功项。
+        调用方决定是 partial-success 还是 abort。
+      - 单文件 return 时如果完全失败（imported 空 + errors 非空），
+        错误消息以 "all N files failed" 开头，方便调用方区分。
+    """
     imported = []
+    errors: list[tuple[str, str]] = []
     chapters_dir = Path(novel_ai_dir, "output", "chapters")
     if not chapters_dir.exists():
         log.warning("import-chapters: %s 不存在", chapters_dir)
@@ -353,9 +368,23 @@ async def import_chapters_from_novel_ai(
             result["novel_ai_rewrite_count"] = meta.get("rewrite_count")
             imported.append(result)
         except Exception as e:
+            # 单文件失败：rollback + collect + continue，不阻断后续文件。
+            # 之前的实现这里直接 raise，会让 for 循环中断，排在后面的
+            # 正常文件也不会被处理 —— 与本函数顶部"单文件坏不能阻断整批
+            # import"的不变量承诺直接冲突。
             db.rollback()
             log.exception("import-chapters: %s 处理失败（%s）", txt_path.name, e)
-            raise RuntimeError(f"failed to import {txt_path.name}: {e}") from e
+            errors.append((txt_path.name, str(e) or type(e).__name__))
+
+    if errors:
+        # 失败要响亮：聚合所有错误一起抛。imported 里仍保留已成功的项，
+        # 调用方如果想拿到部分成功可以在 try/except 里读 sys.exc_info()
+        # （本接口返回路径是 HTTPException 500，正常异常路径）。
+        prefix = f"all {len(errors)} files failed; " if not imported else \
+                 f"partial import: {len(imported)} ok, {len(errors)} failed; "
+        raise RuntimeError(
+            prefix + "; ".join(f"{name}: {msg}" for name, msg in errors)
+        )
 
     log.info("import-chapters project=%s, imported=%d, dir=%s",
              project_id, len(imported), chapters_dir)
@@ -363,13 +392,18 @@ async def import_chapters_from_novel_ai(
 
 
 async def _force_reimport(project_id: str, novel_ai_dir: str, db: Session) -> list[dict]:
-    """强制重新导入：覆盖已有行的 title/content/summary。专用于修章节管理显示。"""
+    """强制重新导入：覆盖已有行的 title/content/summary。专用于修章节管理显示。
+
+    异常聚合策略同 import_chapters_from_novel_ai：单文件失败 rollback + collect，
+    不阻断整批；循环结束如有 errors 则聚合 raise。
+    """
     chapters_dir = Path(novel_ai_dir, "output", "chapters")
     if not chapters_dir.exists():
         log.warning("_force_reimport: %s 不存在", chapters_dir)
         return []
 
     updated = []
+    errors: list[tuple[str, str]] = []
     for txt_path in sorted(chapters_dir.glob("ch_*.txt")):
         # 迭代 #31：同 import_chapters_from_novel_ai，单文件坏不能阻断整批
         try:
@@ -411,6 +445,14 @@ async def _force_reimport(project_id: str, novel_ai_dir: str, db: Session) -> li
         except Exception as e:
             db.rollback()
             log.exception("_force_reimport: %s 处理失败（%s）", txt_path.name, e)
-            raise RuntimeError(f"failed to reimport {txt_path.name}: {e}") from e
+            errors.append((txt_path.name, str(e) or type(e).__name__))
+
+    if errors:
+        prefix = f"all {len(errors)} files failed; " if not updated else \
+                 f"partial reimport: {len(updated)} ok, {len(errors)} failed; "
+        raise RuntimeError(
+            prefix + "; ".join(f"{name}: {msg}" for name, msg in errors)
+        )
+
     log.info("_force_reimport project=%s, updated=%d", project_id, len(updated))
     return updated
