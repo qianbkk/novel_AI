@@ -57,6 +57,11 @@ class Project(Base):
     # 完整模式 = 'full'（默认）：全质检链路。
     # 之前用 os.environ["NOVEL_AUDIT_MODE"] 是进程全局状态——多项目共用时 A 设了 draft 会污染 B 的 run。
     audit_mode = Column(String, default="full")         # full | lite | draft
+    # 2026-08-08 用户需求（任务 #12）：Dashboard 项目列表置顶 / 多选删除。
+    # pinned + pin_order 由 list_projects 排前面：pinned DESC, pin_order DESC, created_at DESC。
+    # 老数据默认 0/False，行为与之前完全一致（无置顶 = 全部按 created_at desc 排）。
+    pinned = Column(Boolean, default=False, nullable=False)
+    pin_order = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=_utcnow)
 
     world_setting = relationship("WorldSetting", back_populates="project", uselist=False)

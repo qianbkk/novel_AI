@@ -69,6 +69,12 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     # 替换原 os.environ["NOVEL_AUDIT_MODE"] 进程全局状态，避免多项目串扰。
     # 默认 'full' 兼容所有已有项目的预期行为。
     ("projects", "audit_mode", "VARCHAR"),
+    # 2026-08-08 用户需求（任务 #12）：Dashboard 项目列表置顶 / 多选删除。
+    # pinned BOOLEAN DEFAULT 0：是否置顶，list_projects 用 ORDER BY pinned DESC 排前面。
+    # pin_order INTEGER DEFAULT 0：同 pinned 内的手动排序，值大者排前（解决多个置顶谁更靠前）。
+    # 两条都 idempotent，老项目默认 0/False，行为与之前完全一致。
+    ("projects", "pinned", "BOOLEAN"),
+    ("projects", "pin_order", "INTEGER"),
     # Provider 表：api_key → api_key_encrypted + api_key_suffix（commit 历史 bug 修复）
     ("providers", "api_key_encrypted", "TEXT"),
     ("providers", "api_key_suffix", "VARCHAR(8)"),

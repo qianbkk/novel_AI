@@ -30,6 +30,10 @@ class ProjectOut(BaseModel):
     active_run_status: Optional[str] = None  # pending | running
     active_run_id: Optional[str] = None
     active_run_started_at: Optional[datetime] = None
+    # 2026-08-08 用户需求（任务 #12）：Dashboard 项目列表置顶 / 多选删除。
+    # pinned = True 时该行排到列表最前；pin_order 决定多个置顶项目之间的相对顺序。
+    pinned: bool = False
+    pin_order: int = 0
 
     model_config = ConfigDict(from_attributes=True)
 

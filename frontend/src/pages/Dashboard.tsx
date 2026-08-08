@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, withConcurrency } from "../api/client";
 import type { ChapterListItem, Project } from "../types";
 import { useReveal } from "../hooks/useReveal";
+import { useToast } from "../components/Toast";
 
 // 2026-07-25 抽离（修 P1-2 短板 inline style 收编）：
 // chipStyle(active) JS 函数生成 CSSProperties 模式改用 CSS class ——
@@ -184,9 +185,15 @@ export default function Dashboard() {
   const [searchParams, setSearchParams] = useSearchParams();
   const [q, setQ] = useState(searchParams.get("q") || "");
   const [genre, setGenre] = useState(searchParams.get("genre") || "");
+  // 2026-08-08 任务 #12：多选 + 删除 + 置顶。
+  // selectedIds: 当前多选中的项目 id。selectedCount > 0 时 toolbar 显示"已选 N 项"+ 操作按钮。
+  // bulkBusy: 批量删除进行中（防双击重复发请求）。
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   const navigate = useNavigate();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const mountedRef = useRef(true);
+  const toast = useToast();
 
   useEffect(() => {
     mountedRef.current = true;
@@ -253,6 +260,63 @@ export default function Dashboard() {
     () => Object.values(chapterMap).flat().reduce((a, c) => a + c.word_count, 0),
     [chapterMap],
   );
+
+  // 2026-08-08 任务 #12 — 选中切换（复选框回调，阻止冒泡到卡片导航）
+  // 用 Set 而不是数组：toggle O(1)，selectedIds.size 算已选数量 O(1)。
+  function toggleSelect(id: string) {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function bulkDeleteSelected() {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`确认删除已选 ${selectedIds.size} 个项目？此操作不可撤销。`)) return;
+    setBulkBusy(true);
+    try {
+      const res = await api.bulkDeleteProjects(Array.from(selectedIds));
+      toast.success(`已删除 ${res.deleted.length} 个项目${res.skipped.length ? `（${res.skipped.length} 个无权跳过）` : ""}`);
+      setSelectedIds(new Set());
+      await loadAll();
+    } catch (e) {
+      toast.error("批量删除失败", String(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function pinSelected(pinned: boolean) {
+    if (selectedIds.size === 0) return;
+    setBulkBusy(true);
+    try {
+      // 顺序 POST：每个项目单独 PUT /pin（后端无 batch 接口）。
+      // 失败用 Promise.allSettled 收集，不让一条失败 abort 全部。
+      const results = await Promise.allSettled(
+        Array.from(selectedIds).map((id) => api.pinProject(id, { pinned })),
+      );
+      const ok = results.filter((r) => r.status === "fulfilled").length;
+      toast.success(`${pinned ? "置顶" : "取消置顶"} ${ok}/${selectedIds.size} 个项目`);
+      setSelectedIds(new Set());
+      await loadAll();
+    } catch (e) {
+      toast.error("置顶操作失败", String(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  async function togglePinOne(p: Project, e: React.MouseEvent) {
+    e.stopPropagation();  // 不触发卡片 onClick 导航
+    try {
+      await api.pinProject(p.id, { pinned: !p.pinned, pin_order: (p.pin_order || 0) + 1 });
+      await loadAll();
+    } catch (err) {
+      toast.error("置顶切换失败", String(err));
+    }
+  }
 
   return (
     <div ref={rootRef}>
@@ -321,6 +385,68 @@ export default function Dashboard() {
           ))}
         </div>
       </div>
+
+      {/* 2026-08-08 任务 #12：选中条（多选 + 批量操作）。
+          selectedIds 非空时才显示，避免每页都有一条空 toolbar 干扰视觉。
+          设计：放工具栏右侧（不影响搜索输入框），半透明背景 + 边框提示"现在是批量模式"。 */}
+      {selectedIds.size > 0 && (
+        <div
+          className="bulk-toolbar"
+          role="region"
+          aria-label="批量操作栏"
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "8px 14px",
+            margin: "8px 0 16px",
+            background: "var(--surface-soft, #f5f1ea)",
+            border: "1px solid var(--accent, #6B8AFD)",
+            borderRadius: 10,
+          }}
+        >
+          <span style={{ fontSize: 13, color: "var(--ink, #2b2b2b)" }}>
+            已选 <strong>{selectedIds.size}</strong> 项
+          </span>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => setSelectedIds(new Set())}
+            disabled={bulkBusy}
+            aria-label="取消多选"
+          >
+            取消选择
+          </button>
+          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            className="btn"
+            onClick={() => pinSelected(true)}
+            disabled={bulkBusy}
+            aria-label="置顶选中项"
+          >
+            📌 置顶选中
+          </button>
+          <button
+            type="button"
+            className="btn"
+            onClick={() => pinSelected(false)}
+            disabled={bulkBusy}
+            aria-label="取消置顶选中项"
+          >
+            📍 取消置顶
+          </button>
+          <button
+            type="button"
+            className="btn btn-danger"
+            onClick={bulkDeleteSelected}
+            disabled={bulkBusy}
+            aria-label="删除选中项"
+          >
+            🗑 删除选中
+          </button>
+        </div>
+      )}
 
       {/* 五期：罗盘折叠为可选装饰，主体项目列表上移到首屏 */}
       {projects && projects.length > 0 && (
@@ -405,6 +531,48 @@ export default function Dashboard() {
                   )
                 }
               >
+                {/* 2026-08-08 任务 #12：复选框 + 置顶状态指示。
+                    两者放左上角同一区域，避免和右上 runningBadge 冲突。
+                    复选框 stopPropagation 不触发卡片导航。
+                    置顶图标点击切换置顶，pinned=true 时高亮。 */}
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 10,
+                    left: 10,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    zIndex: 2,
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(p.id)}
+                    onChange={() => toggleSelect(p.id)}
+                    onClick={(e) => e.stopPropagation()}
+                    aria-label={`选中项目 ${p.title || p.id.slice(0, 8)}`}
+                    style={{ width: 18, height: 18, cursor: "pointer" }}
+                  />
+                  <button
+                    type="button"
+                    onClick={(e) => togglePinOne(p, e)}
+                    title={p.pinned ? "取消置顶" : "置顶"}
+                    aria-label={p.pinned ? `取消置顶 ${p.title || p.id.slice(0, 8)}` : `置顶 ${p.title || p.id.slice(0, 8)}`}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      padding: 2,
+                      cursor: "pointer",
+                      fontSize: 18,
+                      lineHeight: 1,
+                      color: p.pinned ? "var(--accent, #6B8AFD)" : "var(--ink-soft, #b0a89a)",
+                    }}
+                  >
+                    {p.pinned ? "📌" : "📍"}
+                  </button>
+                </div>
+
                 {/* 卡片装饰羽毛笔 SVG */}
                 <svg className="ink-splash-corner" viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M50 8c-7 0-17 5-26 14-7 7-12 17-12 24l12-12c10-10 14-19 14-26z" stroke="var(--accent-strong)" />

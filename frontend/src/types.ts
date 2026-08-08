@@ -16,6 +16,10 @@ export interface Project {
   active_run_status?: "pending" | "running" | null;
   active_run_id?: string | null;
   active_run_started_at?: string | null;
+  // 2026-08-08 用户需求（任务 #12）：Dashboard 列表置顶 + 多选删除。
+  // pinned=true 的项目由后端 list_projects 按 pinned DESC, pin_order DESC 排前面。
+  pinned?: boolean;
+  pin_order?: number;
 }
 
 export interface JobStatus {

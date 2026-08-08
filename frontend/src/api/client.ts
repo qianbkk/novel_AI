@@ -241,6 +241,22 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
+  // 2026-08-08 任务 #12：Dashboard 列表置顶 / 单个删除 / 批量删除。
+  pinProject: (id: string, payload: { pinned: boolean; pin_order?: number }) =>
+    request<Project>(`/projects/${id}/pin`, {
+      method: "PUT",
+      body: JSON.stringify({ pin_order: 0, ...payload }),
+    }),
+
+  deleteProject: (id: string) =>
+    request<void>(`/projects/${id}`, { method: "DELETE" }),
+
+  bulkDeleteProjects: (ids: string[]) =>
+    request<{ deleted: string[]; skipped: string[] }>(`/projects/bulk-delete`, {
+      method: "POST",
+      body: JSON.stringify({ ids }),
+    }),
+
   startWorldbuild: (projectId: string) =>
     request<JobStatus>(`/projects/${projectId}/worldbuild/start`, { method: "POST" }),
 
