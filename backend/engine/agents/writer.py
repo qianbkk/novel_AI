@@ -24,6 +24,7 @@ from ..memory.manager import get_writer_context, maybe_update_style_samples
 from ..config.prompt_templates import (
     get_genre_instruction, get_hook_guidance,
     get_character_voice_reminder, get_methodology_instruction,
+    get_early_chapter_style_guide,
     POV_LOCK_INSTRUCTION, get_pov_lock_instruction,
     UNIVERSAL_WRITING_RULES, EMOTION_CORES,
 )
@@ -198,6 +199,67 @@ def _build_world_block(task: dict, setting: dict) -> str:
 # 连输出格式都不守）。世界书只补「本章真正会用到的那几条设定原文」。
 LOREBOOK_BUDGET_CHARS = 900
 
+# 任务 task-01：RAG 检索注入预算（与 lorebook 同一量级）。
+# orchestrator 写到 task["_rag_context"] 的每条 block 单独截断到这个字符上限，
+# 整块总长再受 RAG_BUDGET_CHARS 控制——双层预算防御 prompt 膨胀。
+RAG_BLOCK_BUDGET_CHARS = 300   # 单块最长渲染字符
+RAG_TOTAL_BUDGET_CHARS = 900   # 整块总长（与 LOREBOOK_BUDGET_CHARS 对齐）
+
+
+def _build_rag_block(task: dict) -> str:
+    """把 orchestrator 写到 task["_rag_context"] 的 RAG 命中块渲染成 prompt 段。
+
+    设计要点（任务 task-01）：
+    - 受 RAG_TOTAL_BUDGET_CHARS 总预算 + RAG_BLOCK_BUDGET_CHARS 单块预算双层控制，
+      防 prompt 膨胀（writer prompt 已经够长，长尾会让 LLM 连输出格式都不守）。
+    - 没有命中（task 没有 _rag_context / 是空 list / 全空 text）→ 返回空串，
+      跟 lorebook 一致：增强项缺失不阻断、不留空标题。
+    - 每条块都标 chapter_no + 相似度，让 LLM 知道"哪一章的什么剧情相关"——
+      直接套章节号就足以避免"凭空发明的旧剧情"被误认作既成事实。
+    - 不复述 RAG 文本里的专名（prompt 是 setting 渲染的，文本本身可能含专名），
+      这是 RAG 的固有特性：检索结果是历史章节原文，必然带项目专名。这是按用途
+      注入的，不算跨项目污染（CLAUDE.md 红线是"prompt 模板里写死专名"，
+      不是"运行时检索出来的内容里有专名"）。
+    """
+    rag_chunks = (task.get("_rag_context") or []) if isinstance(task, dict) else []
+    if not rag_chunks:
+        return ""
+    lines: list[str] = []
+    used = 0
+    for c in rag_chunks:
+        if not isinstance(c, dict):
+            continue
+        text = (c.get("text") or "").strip()
+        if not text:
+            continue
+        # 单块硬截（防单 chunk 自身过长把整块预算吃光）
+        if len(text) > RAG_BLOCK_BUDGET_CHARS:
+            text = text[:RAG_BLOCK_BUDGET_CHARS].rstrip() + "…"
+        ch_no = c.get("chapter_no", "?")
+        sim = c.get("similarity", 0.0)
+        try:
+            sim_label = f"{float(sim):.2f}"
+        except (TypeError, ValueError):
+            sim_label = "n/a"
+        line = f"  · [第{ch_no}章 | 相似度{sim_label}] {text}"
+        # 整块总预算：到顶就停（不强行塞）
+        if used + len(line) > RAG_TOTAL_BUDGET_CHARS:
+            if not lines:
+                # 第一块就超：硬截到剩余预算，避免 0 命中
+                tail_budget = max(0, RAG_TOTAL_BUDGET_CHARS - used)
+                if tail_budget > 0:
+                    line = line[:tail_budget].rstrip() + "…"
+                    lines.append(line)
+            break
+        lines.append(line)
+        used += len(line)
+    if not lines:
+        return ""
+    return (
+        "\n【相关历史剧情（按相似度命中，仅参考语感和事件关联，禁止直抄）】\n"
+        + "\n".join(lines) + "\n"
+    )
+
 
 def _build_lorebook_block(task: dict, context: dict, setting: dict) -> str:
     """按本章实际内容触发的设定原文注入。
@@ -256,6 +318,10 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
     world_block = _build_world_block(task, setting)
     # 世界书按需检索（2026-07-26 接线）：世界观速览给总貌，世界书给本章要用到的原文
     lorebook_block = _build_lorebook_block(task, context, setting)
+    # RAG 向量检索（任务 task-01）：命中"过去章节里与本章相关的剧情块"。
+    # 渲染在 lorebook 之后、主角状态之前——先给"过去剧情里有什么"，再给
+    # "现在的状态是什么"，避免 LLM 看到状态后忽略历史参照。
+    rag_block = _build_rag_block(task)
 
     genre_instr    = _genre_instruction(genre)
     if task.get("is_final_chapter"):
@@ -448,7 +514,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 是否弧高潮：{'是（全力以赴）' if task.get('is_arc_climax') else '否'}
 {stakes_block}{dilemma_block}{thread_block}{info_block}{anchor_block}{emotion_block}
 
-{world_block}{lorebook_block}【主角状态】
+{world_block}{lorebook_block}{rag_block}【主角状态】
 姓名：{mc_name} ｜ 等级：{context.get('protagonist_level','凡人')} ｜ 点数：{context.get('protagonist_points',0)}
 道具：{', '.join(context.get('inventory', []) or []) or '无'}
 场景：{context.get('scene_location','未指定')} ｜ 时间：{context.get('time_context','未指定')}

@@ -88,6 +88,49 @@ _setting_cache: dict | None = None
 _setting_mtime: float | None = None  # 迭代 #65: 用 mtime 检测文件变化自动 invalidate
 _log = logging.getLogger("novel_ai.engine.orchestrator")  # 迭代 #70: stat 失败可观测性
 
+# 任务 task-01 RAG 接入（2026-08-08）：
+# orchestrator 在 node_write_pipeline 中跑一次 RAG 检索，结果写到
+# task["_rag_context"]。引擎是 backend subprocess，继承父进程的 DATABASE_URL
+# （run_bridge_subprocess.py:38-58 已经读 backend/.env 灌进 os.environ），
+# app.database.SessionLocal 同样可用。失败 non-blocking（增强项，不阻断写作）。
+RAG_TOP_K            = 3
+RAG_BUDGET_CHARS     = 900   # 与 LOREBOOK_BUDGET_CHARS 同量级
+RAG_MAX_PROJECT_PROBES = 5   # 单章最多尝试 resolve 几次（避免 NovelAIBinding 抖动）
+
+
+def _resolve_project_id_for_novel(novel_id: str) -> str | None:
+    """从 NovelAIBinding 把 novel_id 翻译成 project_id。
+
+    任务 task-01：app/rag.retrieval.retrieve_relevant_chunks 需要 project_id；
+    而 engine state 只持有 novel_id。NovelAIBinding 是项目与 novel_id 的
+    1:1 映射（models.py:323），因此走这条表做反查。
+
+    失败语义（与 lorebook / style_manager 一致）：
+    - novel_id 为空 / "default" → 直接返回 None（default 项目无项目级 RAG）
+    - DB 不可用 / 表缺失 / 异常 → 返回 None（外层 non-blocking 兜底）
+    - binding 不存在 → 返回 None（项目未通过 frontend 创建设正常开发不会到这里）
+
+    设计动机：subprocess 已经持有 DATABASE_URL，这里只是短生命周期 query，
+    不缓存。NovelAIBinding 表行极少（每项目至多 1 行），无性能顾虑。
+    """
+    if not novel_id or novel_id == "default":
+        return None
+    try:
+        from app.database import SessionLocal
+        from app.models import NovelAIBinding
+        db = SessionLocal()
+        try:
+            binding = db.query(NovelAIBinding).filter_by(novel_id=novel_id).first()
+            return binding.project_id if binding else None
+        finally:
+            db.close()
+    except Exception as exc:
+        _log.warning(
+            "RAG resolve project_id failed (non-blocking, novel=%s): %s",
+            novel_id, exc,
+        )
+        return None
+
 
 def _setting() -> dict:
     """读 setting_package.json。mtime 变了自动 invalidate cache（同一进程里
@@ -536,6 +579,77 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
         return state
     setting = _setting()
     setting = {**setting, "novel_id": state.get("novel_id", "default")}
+
+    # 任务 task-01：RAG 检索注入 writer 上下文（增强项，失败 non-blocking）。
+    # 这里只把检索结果存进 task["_rag_context"]，writer 拿到后由它自己渲染。
+    # 检索维度按"本章要写什么 + 上文冲突"拼成 query，与 lorebook / writer
+    # 当前的 query 口径一致。命中条数 / 预算对齐 LOREBOOK_BUDGET_CHARS。
+    try:
+        import asyncio as _asyncio
+        from app.rag.retrieval import retrieve_relevant_chunks as _rag_search
+
+        _novel_id = state.get("novel_id", "default")
+        _project_id = _resolve_project_id_for_novel(_novel_id)
+        if _project_id:
+            _query_parts = [
+                str(task.get("chapter_goal", "") or ""),
+                str(task.get("core_conflict", "") or ""),
+                str(task.get("plot_progression", "") or ""),
+                str(task.get("shuang_description", "") or ""),
+                " ".join(str(x) for x in (task.get("main_characters") or [])),
+            ]
+            _query = " ".join(p for p in _query_parts if p).strip()
+            if _query:
+                # 注意：DB session 必须在主进程内创建 + 关闭。
+                # engine 是 subprocess，DATABASE_URL 已经通过父进程 env 注入，
+                # 这里跟 app/rag.retrieval 共享同一条 sqlite / pgsql 连接。
+                from app.database import SessionLocal as _RagSessionLocal
+                _rag_db = _RagSessionLocal()
+                try:
+                    _rag_chunks = _asyncio.run(_rag_search(
+                        project_id=_project_id,
+                        query=_query,
+                        db=_rag_db,
+                        top_k=RAG_TOP_K,
+                        budget_chars=RAG_BUDGET_CHARS,
+                    ))
+                finally:
+                    _rag_db.close()
+                # writer 期望的形态：list[{chapter_no, text, similarity}]
+                # 与 retrieval.py:333 字段一致 —— 减少 writer 端的字段名分支。
+                task["_rag_context"] = [
+                    {
+                        "chapter_no": int(c.get("chapter_no", 0)),
+                        "text": str(c.get("text", "") or ""),
+                        "similarity": float(c.get("similarity", 0.0)),
+                    }
+                    for c in (_rag_chunks or [])
+                    if c.get("text")
+                ]
+                if task["_rag_context"]:
+                    log(
+                        f"  📚 RAG 命中 {len(task['_rag_context'])} 块（project={_project_id[:8]}…，budget={RAG_BUDGET_CHARS}）",
+                        state,
+                    )
+                else:
+                    # 库里没命中不算失败，但要让日志有信号（不然真排查时像"检索没跑过"）
+                    task["_rag_context"] = []
+                    log("  📚 RAG 0 命中（库内无相关剧情，跳过）", state)
+            else:
+                task["_rag_context"] = []
+        else:
+            # 无 binding / novel_id=default / DB 不可用 → 不阻断，降级空块
+            task["_rag_context"] = []
+    except Exception as exc:
+        # 与 lorebook / rule_checker / tracker 同模式：吞掉异常，记日志，不阻断主流程。
+        # 检索是增强项，坏了不能让 LLM 误以为"没有相关剧情"。
+        _log.warning(
+            "RAG retrieval failed (non-blocking, novel=%s, ch=%s): %s",
+            state.get("novel_id", "default"),
+            task.get("chapter_number", "?"),
+            exc,
+        )
+        task["_rag_context"] = []
 
     log("  ✍️  Writer生成中...", state)
     try:
