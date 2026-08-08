@@ -650,8 +650,21 @@ class TestMasterKeyStableAcrossCalls:
                "if _dev_master_key is not None" in func_src, \
             "get_master_key 必须有 cache hit/miss 分支（#72）"
 
-    def test_reset_master_key_cache_public_api(self):
-        """reset_master_key_cache() 必须存在并是公开 API（运维 / 测试可调）。"""
+    def test_reset_master_key_cache_public_api(self, monkeypatch, tmp_path):
+        """reset_master_key_cache() 必须存在并是公开 API（运维 / 测试可调）。
+
+        2026-08-08 修复（e2e 暴露的破坏性 bug）：
+        之前这个 test 直接调 reset_master_key_cache() 而不 monkeypatch 路径，
+        会把 backend/data/.dev_master_key（用户真实 key 文件）删掉 —— pytest
+        每跑一次就让用户的 provider 全部解密失败。这个 test 必须先把路径
+        重定向到 tmp_path 再调，否则在用户开发机上跑测试 = 删真实数据。
+        """
+        from app import security
+        test_path = tmp_path / ".dev_master_key"
+        monkeypatch.setattr(security, "_DEV_MASTER_KEY_PATH", test_path)
+        # 写一个 placeholder 让 unlink() 有目标
+        test_path.write_text("placeholder-key-value", encoding="utf-8")
+
         from app.security import reset_master_key_cache
         # 必须能调用且不抛
         reset_master_key_cache()

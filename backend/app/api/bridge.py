@@ -153,7 +153,13 @@ def _sync_approved_outlines(project_id: str, novel_ai_dir: str, db: Session) -> 
             )
         mapping[str(row.arc_id)] = [dict(task) for task in tasks]
 
-    state_path = Path(novel_ai_dir) / "config" / "orchestrator_state.json"
+    # 2026-08-08 修复（e2e 真实 LLM 暴露）：state 在 output/ 而不是 config/。
+    # engine.agents.init_arc.build_state_from_setting 调 save_state(STATE_PATH_STR)，
+    # paths.py STATE_PATH_STR = ENGINE_DATA_DIR / "output" / "orchestrator_state.json"。
+    # 之前路径硬编码 config/，init_arc 实际写到 output/ → 这里永远报
+    # 'init_arc completed but orchestrator_state.json is missing'，
+    # run 后续命令前就被后处理拦死。
+    state_path = Path(novel_ai_dir) / "output" / "orchestrator_state.json"
     if not state_path.is_file():
         raise RuntimeError("init_arc completed but orchestrator_state.json is missing")
     state = json.loads(state_path.read_text(encoding="utf-8"))

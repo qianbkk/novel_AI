@@ -825,6 +825,72 @@ class TestOutlineCostNotDoubleCharged:
             )
 
 
+class TestOutlineOverSupplyTruncates:
+    """2026-08-08 修复（e2e 真实 MiniMax-M3 暴露）：_run_outline_batches
+    之前用严格 1:1 契约（`if len(batch_tasks) != batch_count: raise`），
+    LLM 偶发多返回 1 章（10→11 / 5→6 等批量边界漂移）就直接 RuntimeError，
+    整批 30 章 run 中断 0 章产出。
+
+    修法：超出 batch_count → log.warning + 截断到 batch_count，让 run 继续；
+    不足 batch_count → 仍 raise（fatal，schema 缺失不能继续往下写 placeholder）。
+
+    本不变量锁死这两种行为，避免回退到严格契约或宽松补齐 placeholder。
+    """
+    def test_outline_oversupply_truncates_with_warning(self, monkeypatch, caplog):
+        """LLM 多返回 1 章（10→11）→ run 应截断到 10 + log warning + 继续。"""
+        import logging
+        from unittest.mock import patch, MagicMock
+        from engine.agents import outline as outline_mod
+
+        mock_router = MagicMock()
+        # batch=10，LLM 返 11 个 task
+        mock_router.call.return_value = (
+            json.dumps([{"chapter_number": i + 1} for i in range(11)]),
+            0.001,
+        )
+        monkeypatch.setattr(outline_mod, "get_active_router", lambda: mock_router)
+        monkeypatch.setattr(outline_mod, "_standardize_tasks", lambda tasks, start: None)
+
+        # 用真实的 _run_outline_batches
+        arc = {"arc_id": 1, "arc_name": "t", "arc_goal": "g",
+               "estimated_chapters": 10, "is_final_arc": False}
+        with caplog.at_level(logging.WARNING, logger="novel_ai.engine.outline"):
+            tasks, cost = outline_mod._run_outline_batches(
+                arc, start_chapter=4, setting={}, memory={}, prompt_suffix=""
+            )
+        # 必须截断到 10
+        assert len(tasks) == 10, (
+            f"超出 batch_count 必须截断到 batch_count=10，实际 {len(tasks)}"
+        )
+        # 必须有 warning 留下信号
+        warnings = [r for r in caplog.records
+                    if r.levelno >= logging.WARNING and "novel_ai.engine.outline" in r.name]
+        assert any("截断" in r.getMessage() or "超出" in r.getMessage() for r in warnings), (
+            f"oversupply 必须 log warning（失败要响亮），实际: "
+            f"{[r.getMessage() for r in warnings]}"
+        )
+
+    def test_outline_undersupply_still_raises(self, monkeypatch):
+        """LLM 少返回（10→9）→ 仍必须 raise RuntimeError（不能静默补 placeholder）。"""
+        from unittest.mock import MagicMock
+        from engine.agents import outline as outline_mod
+        import pytest
+
+        mock_router = MagicMock()
+        mock_router.call.return_value = (
+            json.dumps([{"chapter_number": i + 1} for i in range(9)]),
+            0.001,
+        )
+        monkeypatch.setattr(outline_mod, "get_active_router", lambda: mock_router)
+
+        arc = {"arc_id": 1, "arc_name": "t", "arc_goal": "g",
+               "estimated_chapters": 10, "is_final_arc": False}
+        with pytest.raises(RuntimeError, match="outline 数量契约失败"):
+            outline_mod._run_outline_batches(
+                arc, start_chapter=4, setting={}, memory={}, prompt_suffix=""
+            )
+
+
 class TestSSEQueueCleanup:
     """迭代 #33: _run_queues (bridge.py) 和 _job_queues (worldbuild/orchestrator.py)
     之前只创建不清理 → 生产长期跑 N 个 run 后 dict 里堆 N 个 Queue，
@@ -1515,6 +1581,127 @@ class TestInitArcJsonDecodeHandling:
         with patch.object(init_mod, "SETTING_PATH_STR", str(corrupt)):
             with pytest.raises(RuntimeError, match="setting_package.json 损坏"):
                 init_mod.build_state_from_setting("test_proj")
+
+
+class TestSyncApprovedOutlinesStatePath:
+    """2026-08-08 修复（e2e 真实 LLM 暴露）：_sync_approved_outlines 之前
+    读 Path(novel_ai_dir)/"config"/"orchestrator_state.json"，但
+    engine.agents.init_arc 实际写到 Path(novel_ai_dir)/"output"/"orchestrator_state.json"
+    （per paths.STATE_PATH_STR）。init_arc 成功 + approved_outlines
+    同步这一步 100% 抛 RuntimeError，run 后续命令被 bridge postprocess
+    拦死。
+
+    本不变量锁死路径来源：必须跟 paths.STATE_PATH_STR 同一来源。
+    """
+    def test_sync_approved_outlines_reads_output_dir(self):
+        """_sync_approved_outlines 必须读 output/ 下的 state，不能读 config/。"""
+        import inspect
+        from app.api import bridge as bridge_mod
+        src = inspect.getsource(bridge_mod._sync_approved_outlines)
+        assert 'output" / "orchestrator_state.json"' in src or \
+               '/ "output" / "orchestrator_state.json"' in src, (
+            "_sync_approved_outlines 必须读 output/orchestrator_state.json"
+            "（跟 paths.STATE_PATH_STR 一致）"
+        )
+        # 旧硬编码 config/ 必须不再出现
+        assert 'config" / "orchestrator_state.json"' not in src, (
+            "_sync_approved_outlines 不能再读 config/orchestrator_state.json"
+            "（与 init_arc 写盘路径不匹配，2026-08-08 e2e 实测确认）"
+        )
+
+    def test_sync_approved_outlines_writes_output_dir(self):
+        """_sync_approved_outlines 写盘路径也必须是 output/，否则前面读了
+        output/ 但写 config/ 会导致 read-modify-write 错位（state 实际
+        还是 init_arc 写的旧版，没有 approved_outline_tasks）。
+
+        本测试不依赖 atomic_write_json 的具体入参表达式（state_path 是变量，
+        拼装顺序可能不同），改为强校验：读 / 写必须用同一个 state_path 变量
+        —— 这保证 read-modify-write 在同一路径（也就锁死了 output/ 因为
+        test_sync_approved_outlines_reads_output_dir 已经固定 state_path
+        拼装里的 'output' 字符串）。
+        """
+        import re
+        import inspect
+        from app.api import bridge as bridge_mod
+        src = inspect.getsource(bridge_mod._sync_approved_outlines)
+        # 必须有 atomic_write_json 调用 + 必须传入变量 str(state_path)
+        assert "atomic_write_json" in src, (
+            "_sync_approved_outlines 必须有 atomic_write_json 调用"
+        )
+        assert "atomic_write_json(str(state_path)" in src, (
+            "atomic_write_json 必须用 state_path 变量（与读盘同一对象），"
+            "避免读 output/ 写 config/ 错位"
+        )
+
+    def test_sync_approved_outlines_reads_correct_path(self, tmp_path):
+        """行为测试：_sync_approved_outlines 必须能读到 init_arc 写在
+        output/ 下的 state，且能 round-trip approved_outline_tasks 字段。
+        """
+        import json
+        from pathlib import Path
+        from app.api import bridge as bridge_mod
+        from app.database import SessionLocal
+        from app.models import Outline, Project
+
+        # 准备最小项目（init_arc 写到 output/）
+        novel_ai_dir = tmp_path / "binding"
+        (novel_ai_dir / "output").mkdir(parents=True)
+        state_path = novel_ai_dir / "output" / "orchestrator_state.json"
+        state_path.write_text(
+            json.dumps({"novel_id": "test", "current_chapter": 0}),
+            encoding="utf-8",
+        )
+
+        # 准备 DB：创建 project + 1 个 approved outline
+        db = SessionLocal()
+        try:
+            # 用最小 unique project_id 避免与其他测试冲突
+            from uuid import uuid4
+            project_id = f"sync-test-{uuid4().hex[:8]}"
+            proj = Project(
+                id=project_id,
+                title="sync test",
+                genre="都市",
+                audience="男频·青年向",
+                status="ready",
+                config_json={},
+            )
+            db.add(proj)
+            db.flush()
+            # 没有 approved outline 时 _sync_approved_outlines 应直接 return
+            # （mapping 空）；我们这里测路径正确性，确保能走到 state 读写
+            # 不报"missing"。为测写入路径，加 1 个 approved outline。
+            # 但需要 arc_estimated_chapters 与 outline_json length 一致——
+            # 简化：加 1 个空 outline，模拟该字段一致性，避开 1:1 校验。
+            outline = Outline(
+                project_id=project_id,
+                arc_id=1,
+                arc_name="test arc",
+                arc_goal="test",
+                status="approved",
+                arc_estimated_chapters=1,
+                outline_json=[{}],
+            )
+            db.add(outline)
+            db.commit()
+            try:
+                result = bridge_mod._sync_approved_outlines(
+                    project_id, str(novel_ai_dir), db
+                )
+                # 函数应返回 mapping + 1 个 arc
+                assert result["approved_arcs"] == [1]
+                # 写盘后 state 必须含 approved_outline_tasks
+                after = json.loads(state_path.read_text(encoding="utf-8"))
+                assert "approved_outline_tasks" in after, (
+                    f"state 写盘后必须有 approved_outline_tasks 字段，实际: {after}"
+                )
+            finally:
+                # cleanup
+                db.query(Outline).filter_by(project_id=project_id).delete()
+                db.query(Project).filter_by(id=project_id).delete()
+                db.commit()
+        finally:
+            db.close()
 
 
 class TestCallWithBudgetDedupe:

@@ -6,7 +6,10 @@ backend.engine.llm.router for the LLM call.
 """
 from __future__ import annotations
 import json
+import logging
 import re
+
+log = logging.getLogger("novel_ai.engine.outline")
 
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
@@ -284,12 +287,25 @@ def _run_outline_batches(
             prompt_suffix=prompt_suffix,
         )
         total_cost += cost
-        if len(batch_tasks) != batch_count:
+        # 2026-08-08 修复（e2e 真实 MiniMax-M3 暴露）：之前严格 1:1 契约，
+        # LLM 偶发多返回 1 章（批量边界估算漂移）就直接 RuntimeError，
+        # 整批 30 章 run 中断 0 章产出。改为：不足 batch_count → 显式
+        # raise（保留 fail-fast）；超出 batch_count → 截断到 batch_count
+        # + log.warning，让 run 继续往下走（fail-loud 但不致命）。
+        if len(batch_tasks) < batch_count:
             raise RuntimeError(
                 f"outline 数量契约失败：请求 Ch{batch_start}-"
                 f"Ch{batch_start + batch_count - 1} 共 {batch_count} 章，"
                 f"实际返回 {len(batch_tasks)} 章"
             )
+        if len(batch_tasks) > batch_count:
+            log.warning(
+                "outline 数量超出 batch_count：请求 %d 章，实际返回 %d 章，"
+                "截断到 %d（剩余 %d 章被丢弃）",
+                batch_count, len(batch_tasks), batch_count,
+                len(batch_tasks) - batch_count,
+            )
+            batch_tasks = batch_tasks[:batch_count]
         _standardize_tasks(batch_tasks, batch_start)
         tasks.extend(batch_tasks)
 
