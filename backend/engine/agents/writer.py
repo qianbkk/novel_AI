@@ -199,6 +199,47 @@ def _build_world_block(task: dict, setting: dict) -> str:
 # 连输出格式都不守）。世界书只补「本章真正会用到的那几条设定原文」。
 LOREBOOK_BUDGET_CHARS = 900
 
+# 任务 task-02：早期章节风格锚点激活阈值与黄金章节阈值
+#   - 前 5 章：项目样本为空时 style_block 不会注入，但还有【黄金章节写作要点】（结构向）
+#   - 第 6-20 章：项目样本仍为空时，注入题材惯例指南（题材惯例向）
+#   - 第 21 章起：style_manager 已启用内部样本，正常走 style_block 路径
+EARLY_STYLE_BLOCK_MAX_CHAPTER = 20
+
+
+def _build_early_style_block(task: dict, setting: dict) -> str:
+    """当 chapter <= 20 且 style_samples 为空时，注入题材惯例指南。
+
+    任务 task-02：style_manager 在 chapter >= 20 之前不启用内部高分样本，
+    style_samples 主要来自外部 .txt 或 bootstrap 锚点。如果项目尚未提供
+    外部样本 / bootstrap 也还没跑（绝大多数新项目第一次启动），style_samples
+    是空 → writer 完全靠默认模板，没有任何"这一类网文应该长什么样"的具体指导。
+
+    这里的早期风格指南按 platform/genre 差异化，给一段通用但具体的题材惯例。
+    约束（CLAUDE.md）：模板不能含任何项目专名。{ch} 占位由 caller 渲染成具体章号。
+    """
+    if not isinstance(task, dict):
+        return ""
+    ch_num = task.get("chapter_number", 999)
+    if not isinstance(ch_num, int) or ch_num > EARLY_STYLE_BLOCK_MAX_CHAPTER:
+        return ""
+
+    # 第 1-5 章已经由【黄金章节写作要点】覆盖结构向指导（保留旧契约）。
+    # 第 6-20 章补题材惯例（不重复【黄金章节写作要点】的内容，避免 prompt 膨胀）。
+    if ch_num <= 5:
+        return ""
+
+    platform = setting.get("platform", "fanqie") if isinstance(setting, dict) else "fanqie"
+    genre    = setting.get("genre", "都市") if isinstance(setting, dict) else "都市"
+    guide = get_early_chapter_style_guide(platform, genre)
+    if not guide:
+        return ""
+    # {ch} 占位渲染成具体章号
+    try:
+        return guide.format(ch=ch_num)
+    except (KeyError, IndexError):
+        # 占位拼错兜底：去掉占位符直接给原文
+        return guide.replace("{ch}", str(ch_num))
+
 # 任务 task-01：RAG 检索注入预算（与 lorebook 同一量级）。
 # orchestrator 写到 task["_rag_context"] 的每条 block 单独截断到这个字符上限，
 # 整块总长再受 RAG_BUDGET_CHARS 控制——双层预算防御 prompt 膨胀。
@@ -567,6 +608,15 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 - title 不要写「第N章」前缀
 - body 直接写正文，不要任何"以下是..."等元描述
 - 若 LLM 忘了 JSON 格式，我会从你的文本里兜底提取，所以内容质量优先"""
+
+    # 任务 task-02：早期章节风格锚点（第 6-20 章 + 项目风格样本为空时）。
+    # 与黄金三章的结构向指南互补，这里给题材惯例。
+    # 没注入场景：style_samples 非空 → style_block 已经接管；ch > 20 → style_manager
+    # 启用内部样本；两者都不是 → 这里填这段题材惯例。
+    _style_samples_empty = not (context.get("style_samples") or [])
+    _early_style_block = _build_early_style_block(task, setting)
+    if _early_style_block and _style_samples_empty:
+        user_prompt += "\n" + _early_style_block
 
     return system_dynamic, user_prompt
 

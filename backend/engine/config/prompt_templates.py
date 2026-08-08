@@ -414,3 +414,85 @@ def get_genre_instruction(genre: str) -> str:
         if key in genre:
             return instruction
     return GENRE_WRITING_INSTRUCTIONS["都市"]  # 默认都市
+
+
+# ═════════════════════════════════════════════════════
+# 早期章节风格指南（任务 task-02）
+#
+# style_manager 在 chapter ≥ 20 之前不读取内部高分样本。
+# 黄金三章（前 5 章）已有专属结构要点（writer.py 内的【黄金章节写作要点】）。
+# 这里补第 6-20 章的题材惯例：还没积累项目风格样本时，按 platform/genre
+# 给一段通用但具体的写作指南，避免纯默认模板的"无指导感"。
+#
+# 占位 `{ch}` 在 writer._build_early_style_block 里渲染成具体章号，
+# 引导 LLM 知道"这是第 N 章的前期提示"而非通用模板。
+#
+# 约束（CLAUDE.md）：不含具体项目的角色名 / 地名 / 世界名。
+# 这是模板常量，必须项目无关；如需项目特定指导，走 style_samples。
+# ═════════════════════════════════════════════════════
+EARLY_CHAPTER_STYLE_GUIDE = {
+    "fanqie": {
+        "都市": """\
+【早期章节风格指南（第 {ch} 章，项目风格样本尚未积累）】
+
+题材惯例：都市爽文（番茄平台）
+- 开篇前 200 字内建立明确冲突 / 悬念 / 目标，禁止大段环境铺垫
+- 对话占比 ≥ 35%（字数比）；对话后跟 1-2 句人物内心反应或动作
+- 章末必须留钩子：信息钩（揭示新情况）/ 情感钩（人物状态变化）/ 危机钩（直接威胁）
+- 节奏：每 1000 字至少一个小冲突或反转，不允许连续 3 段平铺
+- 禁止：长篇回忆、说教式独白、超过 3 行的内心独白、AI 腔套话（"心中一动""眼眸"等）
+- 系统流题材（若有）：系统提示每章出现 2-4 次，不超过 15 字 / 条
+""",
+        "玄幻": """\
+【早期章节风格指南（第 {ch} 章，项目风格样本尚未积累）】
+
+题材惯例：玄幻修仙（番茄平台）
+- 开篇 200 字内建立主角"要什么"——目标清晰，读者立刻知道主线
+- 力量体系的展示要在冲突中自然呈现（实战 + 内心评估），不要教科书式说明
+- 章末钩子：力量突破预告 / 强敌出现 / 秘密揭示 / 身份反转
+- 节奏：每 800 字一个小高潮或反转；战斗结束后必须有"代价"（受伤 / 暴露 / 消耗）
+- 境界对比要有画面感（蜡烛对太阳、蚂蚁对大象）
+- 禁止：纯环境铺陈、力量体系说明书式段落、超过 3 行的修炼感悟
+""",
+    },
+    "default": """\
+【早期章节风格指南（第 {ch} 章，项目风格样本尚未积累）】
+
+通用惯例（题材 / 平台未明确指定时）：
+- 开篇 200 字内建立人物 + 冲突 + 目标，禁止纯环境铺陈
+- 每章末尾设置明确钩子（信息 / 情感 / 危机），让读者翻页
+- 对话推动剧情，减少叙述性铺垫；对话后跟 1-2 句人物反应
+- 节奏：每 800-1000 字一个小冲突或反转，避免连续平铺
+- 禁止：长篇回忆、说教式独白、AI 腔套话（"心中一动""眼眸"等）
+""",
+}
+
+
+def get_early_chapter_style_guide(platform: str, genre: str) -> str:
+    """取对应 platform/genre 的早期章节风格指南；缺失时降级为 default。
+
+    任务 task-02：风格样本在 ch<20 时为空，给 LLM 一段题材惯例指导。
+    这里只做平台 × 题材查表；查不到（既不是 fanqie 也不命中 genre）→ default。
+
+    两种"default"语义：
+      1) EARLY_CHAPTER_STYLE_GUIDE["default"] — 平台未命中时的全局兜底（字符串）
+      2) 平台内某题材未命中时，用该平台 dict 的 "default" 字符串
+         （fanqie 没"修仙"具体指南时退到 fanqie 自己的 default）
+    """
+    by_platform = EARLY_CHAPTER_STYLE_GUIDE.get((platform or "").strip())
+    if by_platform is None:
+        return EARLY_CHAPTER_STYLE_GUIDE["default"]
+    if isinstance(by_platform, str):
+        # 平台直接命中 default（防御性 — 现在 EARLY_CHAPTER_STYLE_GUIDE["default"]
+        # 是字符串而不是 dict，避免误用）
+        return by_platform
+    # 题材做模糊匹配（"都市言情" 含 "都市" 也能命中）
+    for key, guide in by_platform.items():
+        if key == "default":
+            continue
+        if isinstance(guide, str) and key in (genre or ""):
+            return guide
+    fallback = by_platform.get("default")
+    if isinstance(fallback, str):
+        return fallback
+    return EARLY_CHAPTER_STYLE_GUIDE["default"]
