@@ -65,6 +65,12 @@ CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 MAX_REWRITE  = 3
 PASS_SCORE   = 6.5
+# 黄金三章（chapter_number ≤ GOLDEN_CHAPTER_COUNT）使用更高门槛
+# PASS_SCORE_GOLDEN，避免前几章"AI 味"侥幸 PASS；非黄金章 / draft 模式仍走 PASS_SCORE。
+# 任务 P0-1（2026-08-17）：本常量修复 _effective_pass_score NameError，
+# 否则 orchestrator.route_after_pipeline 对所有非 draft 章 NameError 崩溃。
+PASS_SCORE_GOLDEN     = 7.5
+GOLDEN_CHAPTER_COUNT  = 3
 # 迭代 #201: 文档化预算硬停阈值的 MVP 放宽
 # 用户审计报告 (2026-07-05) 标记"界面预算上限 vs 实际硬停阈值不一致"——
 # 期望填 $500 → 实际 $750 才硬停。这里给后来者留个明确说明。
@@ -486,6 +492,20 @@ def _decide_adaptive_audit_mode(
     return None
 
 
+def _effective_pass_score(task: dict | None) -> float:
+    """当前章节实际使用的通过分数线。
+
+    黄金三章（chapter_number ≤ GOLDEN_CHAPTER_COUNT）且非草稿模式时使用更高阈值；
+    其余章节及草稿模式使用标准 PASS_SCORE。
+    """
+    if not task:
+        return PASS_SCORE
+    if task.get("audit_mode") == "draft":
+        return PASS_SCORE  # draft 模式不适用黄金门槛
+    ch = task.get("chapter_number", 999)
+    return PASS_SCORE_GOLDEN if ch <= GOLDEN_CHAPTER_COUNT else PASS_SCORE
+
+
 def _placeholder_task(arc_idx: int, i: int, arc: dict) -> dict:
     """Minimal ChapterTask used when outline agent is a stub.
 
@@ -814,6 +834,9 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
 
     score = checker_result.get("score", 0)
     log(f"  📊 {score:.1f}分 | {checker_result.get('verdict','')}", state)
+    _eff = _effective_pass_score(task)
+    if _eff > PASS_SCORE:
+        log(f"  🥇 黄金三章（ch{task.get('chapter_number',0)}）：通过线 {_eff}（标准 {PASS_SCORE}）", state)
 
     task["_draft_text"]        = clean_text
     task["_draft_title"]       = draft_title  # 修订 2026-07-16：保存 title 给 save_and_track
@@ -1186,7 +1209,7 @@ def route_after_pipeline(state) -> Literal["save", "rewrite", "escalate", "budge
     rw = state.get("rewrite_count_current", 0)
     if task.get("_compliance_failed"):
         return "escalate" if rw >= MAX_REWRITE else "rewrite"
-    if score >= PASS_SCORE:
+    if score >= _effective_pass_score(task):
         return "save"
     return "escalate" if rw >= MAX_REWRITE else "rewrite"
 
@@ -1205,7 +1228,7 @@ def route_after_rewrite(state) -> Literal["save", "rewrite", "escalate"]:
         return "escalate"
     score = task.get("_checker_result", {}).get("score", 0) if task.get("_checker_result") else 0
     rw    = state.get("rewrite_count_current", 0)
-    if score >= PASS_SCORE:
+    if score >= _effective_pass_score(task):
         return "save"
     return "escalate" if rw >= MAX_REWRITE else "rewrite"
 
