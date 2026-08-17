@@ -213,6 +213,161 @@ WRITER_PROMPT_BUDGET_CHARS = 6000
 EARLY_STYLE_BLOCK_MAX_CHAPTER = 20
 
 
+# ═══════════════════════════════════════════════════════
+# v1.0 Stage F: writer prompt v2 — 4 个新 block
+# ═══════════════════════════════════════════════════════
+# 设计动机（docs/drafts/v1-quality-first-design.md § Stage 3）：
+# 把 v1.0 前期工程的所有输出（genre_profile / theme_spine / macro_spine /
+# expectation_ledger）落到 writer prompt 中，让 LLM 知道：
+#   1. 写给谁（题材读者画像）
+#   2. 写什么主题（恒久共性）
+#   3. 本章在期待感推进中的位置（当前 arc）
+#   4. 上一章/上几章留下的 show-item 必须接力（连续性）
+# 不破坏 v0.5 调用方式（无 v1_* 字段时正常生成 prompt）。
+
+
+def _build_genre_block(genre_profile: dict | None) -> str:
+    """v1.0 Stage F Block 1：题材读者画像 block。
+
+    含 reader_persona.primary + tone_preference + show_item_examples +
+    taboo。设计师给的：'读者喜欢看的调调 / 读者会为自己脑海中的幻想买单'。
+    """
+    if not genre_profile:
+        return ""
+
+    parts: list[str] = ["【v1.0 题材读者画像】"]
+    parts.append(f"题材：{genre_profile.get('genre', '未指定')}")
+
+    persona = genre_profile.get("reader_persona") or {}
+    if persona.get("primary"):
+        parts.append(f"核心读者：{persona['primary']}")
+    if persona.get("core_fantasy"):
+        parts.append(f"读者幻想：{persona['core_fantasy']}")
+
+    if genre_profile.get("tone_preference"):
+        parts.append(f"调调：{genre_profile['tone_preference']}")
+
+    examples = genre_profile.get("show_item_examples") or []
+    if examples:
+        parts.append("show-item 参考：" + " / ".join(str(e) for e in examples[:3]))
+
+    taboo = genre_profile.get("taboo") or []
+    if taboo:
+        parts.append("禁忌：" + " | ".join(str(t) for t in taboo[:2]))
+
+    return "\n".join(parts) + "\n"
+
+
+def _build_theme_block(theme_spine: dict | None) -> str:
+    """v1.0 Stage F Block 2：共性主题 block。
+
+    含 theme_statement + resonance_anchors + expectation_arc.description。
+    用户指导核心：'恒久的共性主题，能引起读者共鸣'。
+    """
+    if not theme_spine:
+        return ""
+
+    parts: list[str] = ["【v1.0 共性主题】"]
+    if theme_spine.get("theme_statement"):
+        parts.append(f"本书主题：{theme_spine['theme_statement']}")
+
+    anchors = theme_spine.get("resonance_anchors") or []
+    if anchors:
+        parts.append("共鸣维度：" + " / ".join(str(a) for a in anchors))
+
+    arc = theme_spine.get("expectation_arc") or {}
+    if arc.get("description"):
+        parts.append(f"期待感弧：{arc['description']}")
+
+    return "\n".join(parts) + "\n"
+
+
+def _build_expectation_block(macro_spine: dict | None, *, chapter_number: int) -> str:
+    """v1.0 Stage F Block 3：期待感推进 block。
+
+    按 chapter_number 找所属 arc，渲染 arc.name + theme_focus +
+    expectation_progress。让 writer 知道'本章在期待感推进中的位置'。
+    """
+    if not macro_spine:
+        return ""
+
+    arcs = macro_spine.get("arcs") or []
+    current = None
+    for a in arcs:
+        try:
+            start = int(a.get("start_chapter", 0))
+            end = int(a.get("end_chapter", 0))
+        except (TypeError, ValueError):
+            continue
+        if start <= chapter_number <= end:
+            current = a
+            break
+
+    parts: list[str] = ["【v1.0 当前期待感位置】"]
+    if current:
+        parts.append(
+            f"本章属于 arc{current.get('arc_id', '?')} "
+            f"「{current.get('name', '未命名')}」"
+            f"（第 {current.get('start_chapter')} - {current.get('end_chapter')} 章）"
+        )
+        if current.get("theme_focus"):
+            parts.append(f"弧主题焦点：{current['theme_focus']}")
+        if current.get("expectation_progress"):
+            parts.append(f"期待感推进：{current['expectation_progress']}")
+        if current.get("main_conflict"):
+            parts.append(f"本弧核心冲突：{current['main_conflict']}")
+        if current.get("tone"):
+            parts.append(f"调性：{current['tone']}")
+    else:
+        parts.append(f"本章（第 {chapter_number} 章）未归属任何 arc（请检查 macro_spine）")
+
+    return "\n".join(parts) + "\n"
+
+
+def _build_showitem_block(expectation_ledger: list | None, *, chapter_number: int) -> str:
+    """v1.0 Stage F Block 4：show-item 接力 block。
+
+    从 expectation_ledger 取最近 3 章的 show_item_used，提示 writer
+    '本章应延续这些物件/动作，构成 show-item chain'。
+    这是 show-don't-tell 落到 writer prompt 的物理机制。
+    """
+    if not expectation_ledger:
+        return ""
+
+    recent: list[dict] = []
+    for entry in expectation_ledger:
+        try:
+            ch = int(entry.get("chapter_number", 0))
+        except (TypeError, ValueError):
+            continue
+        if ch < chapter_number:
+            recent.append(entry)
+    recent = recent[-3:]  # 最近 3 章
+
+    if not recent:
+        return ""
+
+    parts: list[str] = ["【v1.0 show-item 接力（前几章留下的物件/动作）】"]
+    seen: set[str] = set()
+    for entry in recent:
+        ch = entry.get("chapter_number")
+        items = entry.get("show_item_used") or []
+        for item in items:
+            if item and item not in seen:
+                seen.add(item)
+                parts.append(f"第 {ch} 章 → {item}")
+
+    if len(parts) == 1:
+        # 没收集到任何 item
+        return ""
+
+    parts.append(
+        "\n（本章应在合适处让上述物件/动作再次出现，构成读者'对这部小说的牵挂'"
+        "——不要全部出现，至少 1 个能在本章找到呼应）"
+    )
+    return "\n".join(parts) + "\n"
+
+
 def _build_early_style_block(task: dict, setting: dict) -> str:
     """当 chapter <= 20 且 style_samples 为空时，注入题材惯例指南。
 
@@ -570,7 +725,22 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 
     system_dynamic = genre_instr + world_one_liner
 
-    user_prompt = f"""【当前写作任务】
+    # v1.0 Stage F：组装 4 个新 block（genre / theme / expectation / show-item）
+    # 注入位置：【当前写作任务】之前，让 writer 先'知道读者是谁/写什么主题'，
+    # 再进入具体任务指令。
+    v1_genre_block = _build_genre_block(setting.get("v1_genre_profile"))
+    v1_theme_block = _build_theme_block(setting.get("v1_theme_spine"))
+    v1_expectation_block = _build_expectation_block(
+        setting.get("v1_macro_spine"),
+        chapter_number=task.get("chapter_number", 0),
+    )
+    v1_showitem_block = _build_showitem_block(
+        context.get("v1_expectation_ledger"),
+        chapter_number=task.get("chapter_number", 0),
+    )
+    v1_blocks = v1_genre_block + v1_theme_block + v1_expectation_block + v1_showitem_block
+
+    user_prompt = f"""{v1_blocks}【当前写作任务】
 第{task.get('chapter_number', 0)}章 ｜ 定位：{task.get('chapter_role','')} ｜ 目标字数：{task.get('target_length','2000-2200')}字
 章节目标：{task.get('chapter_goal','')}
 核心冲突：{core_conflict}
