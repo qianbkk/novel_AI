@@ -43,8 +43,48 @@ def build_state_from_paths(
     )
 
     # 把 setting 里的弧转为 ArcPlan
+    # P1-8（2026-08-17）：plot_skeleton 双形态兜底 —— 与 planner._merge_snapshot_into_setting
+    # 254c724 同型修复。arc_outline 优先；为空时回退读 plot_skeleton，
+    # 对 volume-form（worldbuild 原生形态，title/summary）做 _pick 兜底，
+    # 否则历史项目（只写了 plot_skeleton 没跑 planner）会卡死 bootstrap。
     arc_plans = []
-    for a in setting.get("arc_outline", []):
+    arc_outline = setting.get("arc_outline") or []
+    if not arc_outline:
+        # arc_outline 为空时回退读 plot_skeleton（双形态兜底）
+        plot_skel = setting.get("plot_skeleton") or []
+
+        def _pick(vol: dict, *keys: str, default: str = "") -> str:
+            """按优先级取第一个非空字段（arc 形态名在前，卷形态名兜底）。
+
+            与 engine.agents.planner._merge_snapshot_into_setting 同款 _pick
+            （254c724 修复），保证 init_arc 与 planner 行为一致。
+            """
+            for k in keys:
+                v = vol.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v
+            return default
+
+        arc_outline = []
+        for i, vol in enumerate(plot_skel, start=1):
+            if not isinstance(vol, dict):
+                continue
+            name = _pick(vol, "arc_name", "title", default=f"第{i}弧")
+            goal = _pick(vol, "arc_goal", "summary", default=f"{name}：待补充弧目标")
+            arc_outline.append({
+                "arc_id": vol.get("arc_id", i),
+                "arc_name": name,
+                "arc_goal": goal,
+                "estimated_chapters": vol.get("estimated_chapters", 30),
+                "arc_climax_description": _pick(vol, "arc_climax_description", "climax", default=goal),
+                "arc_climax_chapter_offset": vol.get("arc_climax_chapter_offset") or 22,
+                "emotion_curve": vol.get("emotion_curve", ""),
+                "new_characters_introduced": vol.get("new_characters_introduced", []),
+                "arc_ending_state": _pick(vol, "arc_ending_state", "ending", default=goal),
+                "is_final_arc": vol.get("is_final_arc", False),
+            })
+
+    for a in arc_outline:
         plans_chapters = chapters_per_arc or a.get("estimated_chapters", 35)
         arc_plans.append({
             "arc_id": a.get("arc_id", len(arc_plans) + 1),
