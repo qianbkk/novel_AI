@@ -67,6 +67,24 @@ def novel_config_path() -> Path:
     return NOVEL_CONFIG_PATH
 
 
+def novel_ai_dir(novel_id: str | None = None) -> Path:
+    """v1.0 Stage A 新增：按 novel_id 取项目级 data 目录根（env-aware）。
+
+    与 novel_config_path 同样 env-aware — 每次调用重读 os.environ，
+    测试可 monkeypatch 本函数重定向到 tmp_path。
+
+    Args:
+        novel_id: 项目 ID；目前保留作未来分项目存储扩展（v1.0 默认同一目录）
+
+    Returns:
+        Path: <NOVEL_AI_DIR>/ 或 DATA_DIR/engine/
+    """
+    val = os.environ.get("NOVEL_AI_DIR")
+    if val:
+        return Path(val)
+    return ENGINE_DATA_DIR
+
+
 # Backward-compat string aliases (the old api_client.py and orchestrator
 # used string paths in some places).
 def _as_str(p: Path) -> str:

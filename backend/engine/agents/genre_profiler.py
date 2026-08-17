@@ -158,12 +158,12 @@ def _parse_llm_json(text: str) -> dict | None:
 def _save_profile(profile: dict, novel_id: str) -> None:
     """落盘到 <novel_ai_dir>/output/genre_profile.json（与 STATE_PATH 同根）。"""
     from ..config.paths import novel_ai_dir
-    from ..utils import atomic_write_json
+    import json as _json
 
     base = Path(novel_ai_dir(novel_id)) / "output"
     base.mkdir(parents=True, exist_ok=True)
     target = base / "genre_profile.json"
-    atomic_write_json(target, profile, ensure_ascii=False, indent=2)
+    target.write_text(_json.dumps(profile, ensure_ascii=False, indent=2), encoding="utf-8")
     _log.info("genre profile 落盘: %s", target)
 
 
