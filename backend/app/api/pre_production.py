@@ -88,6 +88,18 @@ class GenerateThemeIn(BaseModel):
     use_llm: bool = True
 
 
+class OpeningDesignIn(BaseModel):
+    chapter_1_anchor: dict[str, Any]
+    chapter_2_question: dict[str, Any]
+    chapter_3_escalation: dict[str, Any]
+    source: str = "user"
+
+
+class GenerateOpeningIn(BaseModel):
+    concept: str = ""
+    use_llm: bool = True
+
+
 class GenreProfileIn(BaseModel):
     genre_key: str
     use_llm: bool = False
@@ -200,3 +212,76 @@ def generate_theme(
         novel_id=str(novel_ai_dir),
     )
     return theme
+
+
+# ── Opening Design endpoints (Stage C: 黄金三章) ─────────────────────────
+
+@router.get("/opening")
+def get_opening(project_id: str, request: Request, db: Session = Depends(get_db)):
+    """读 opening_design（落盘后返回，未生成返回 404）。"""
+    _require_owned_or_dev(project_id, request, db)
+    novel_ai_dir = _resolve_novel_ai_dir(project_id, db)
+    from engine.agents.opening_designer import load_opening
+    opening = load_opening(str(novel_ai_dir))
+    if opening is None:
+        raise HTTPException(404, "opening_design not yet generated")
+    return opening
+
+
+@router.put("/opening")
+def put_opening(
+    project_id: str,
+    payload: OpeningDesignIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """用户编辑后保存（source='user'）。缺字段或非法 hook_type → 400。"""
+    _require_owned_or_dev(project_id, request, db)
+    novel_ai_dir = _resolve_novel_ai_dir(project_id, db)
+    from engine.agents.opening_designer import save_opening, InvalidOpeningError
+
+    opening_dict = payload.model_dump()
+    opening_dict["source"] = "user"  # PUT = UI 编辑
+    try:
+        save_opening(str(novel_ai_dir), opening_dict)
+    except InvalidOpeningError as exc:
+        raise HTTPException(400, f"invalid opening_design: {exc}") from exc
+    return {"status": "saved", "source": "user"}
+
+
+@router.post("/opening/generate")
+def generate_opening(
+    project_id: str,
+    payload: GenerateOpeningIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """(重新)生成 opening_design（LLM 改写模板），落盘。"""
+    _require_owned_or_dev(project_id, request, db)
+    novel_ai_dir = _resolve_novel_ai_dir(project_id, db)
+    from engine.agents.opening_designer import design_opening
+    from engine.agents.genre_profiler import load_profile
+    from engine.agents.theme_designer import load_theme
+
+    profile = load_profile(str(novel_ai_dir)) or {}
+    theme = load_theme(str(novel_ai_dir)) or {
+        "theme_statement": "", "expectation_arc": {}, "resonance_anchors": [],
+    }
+
+    project = db.get(Project, project_id)
+    key_chars = []
+    if project and getattr(project, "world_setting", None):
+        ws = project.world_setting
+        raw = getattr(ws, "novel_ai_raw_setting_json", None) or {}
+        if isinstance(raw, dict):
+            key_chars = raw.get("key_characters") or []
+
+    opening = design_opening(
+        concept=payload.concept,
+        theme_spine=theme,
+        genre_profile=profile,
+        key_characters=key_chars,
+        use_llm=payload.use_llm,
+        novel_id=str(novel_ai_dir),
+    )
+    return opening

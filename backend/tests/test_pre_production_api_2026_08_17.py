@@ -272,3 +272,89 @@ def test_put_theme_project_not_found(client):
         },
     )
     assert r.status_code == 404
+
+
+# ── 7. Opening endpoints (Stage C: 黄金三章) ─────────────────────────
+
+def _full_opening_payload() -> dict:
+    """构造一个合法 opening_design dict（3 章全字段）。"""
+    return {
+        "chapter_1_anchor": {
+            "scene": {"where": "工地外", "who_present": ["主角", "邻役"]},
+            "hook_type": "悬念钩",
+            "reader_emotion_to_install": "期待",
+            "show_item_seed": "那双布鞋",
+            "expectation_seed": "主角要回家了",
+        },
+        "chapter_2_question": {
+            "scene": {"where": "驿站", "who_present": ["主角", "邻家少年"]},
+            "hook_type": "对抗钩",
+            "reader_question": "主角能不能带邻家少年一起逃？",
+            "show_item_used": "布鞋被让给邻家少年",
+            "expectation_shift": "归途多一个人",
+        },
+        "chapter_3_escalation": {
+            "scene": {"where": "征兵处", "who_present": ["主角", "征兵官"]},
+            "hook_type": "反转钩",
+            "reader_emotion_to_install": "矛盾",
+            "show_item_used": "布鞋被踏了一脚",
+            "expectation_shift": "家方向变谜团",
+        },
+        "source": "user",
+    }
+
+
+def test_get_opening_not_found(client, project_with_novel_ai_dir):
+    pid = project_with_novel_ai_dir["project_id"]
+    r = client.get(f"/projects/{pid}/pre-production/opening")
+    assert r.status_code == 404
+
+
+def test_put_opening_full_then_get(client, project_with_novel_ai_dir):
+    pid = project_with_novel_ai_dir["project_id"]
+    payload = _full_opening_payload()
+
+    r = client.put(f"/projects/{pid}/pre-production/opening", json=payload)
+    assert r.status_code == 200, r.text
+
+    r2 = client.get(f"/projects/{pid}/pre-production/opening")
+    assert r2.status_code == 200
+    assert r2.json()["source"] == "user"
+    assert r2.json()["chapter_1_anchor"]["show_item_seed"] == "那双布鞋"
+
+
+def test_put_opening_rejects_invalid_hook_type(client, project_with_novel_ai_dir):
+    """非法 hook_type → 400（不能让下游渲染乱套）。"""
+    pid = project_with_novel_ai_dir["project_id"]
+    payload = _full_opening_payload()
+    payload["chapter_1_anchor"]["hook_type"] = "但是法则"  # 不在 7 个合法 hook 内
+
+    r = client.put(f"/projects/{pid}/pre-production/opening", json=payload)
+    assert r.status_code == 400
+    assert "hook_type" in r.json()["detail"] or "hook" in r.json()["detail"].lower()
+
+
+def test_generate_opening_without_llm_uses_template(client, project_with_novel_ai_dir):
+    """use_llm=False → 模板生成（CI 友好）。"""
+    pid = project_with_novel_ai_dir["project_id"]
+    # 先 gen genre profile + theme（opening_designer 用）
+    client.post(
+        f"/projects/{pid}/pre-production/genre-profile/generate",
+        json={"genre_key": "lishi", "use_llm": False},
+    )
+    client.post(
+        f"/projects/{pid}/pre-production/theme/generate",
+        json={"concept": "", "use_llm": False},
+    )
+
+    r = client.post(
+        f"/projects/{pid}/pre-production/opening/generate",
+        json={"concept": "", "use_llm": False},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    # 3 章都有
+    for ch in ("chapter_1_anchor", "chapter_2_question", "chapter_3_escalation"):
+        assert ch in data
+        assert "hook_type" in data[ch]
+    assert data["source"] == "template"
