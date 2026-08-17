@@ -359,10 +359,18 @@ def node_load_arc_tasks(state: OrchestratorState) -> OrchestratorState:
             # card 模式：抽卡探索 — 生成 3 个候选分支让作者挑
             candidates, cost = run_outline_card(arc, start, setting, memory)
             _add_cost(state, cost)
+            # P1-6（2026-08-17）：card 模式空候选必须响亮，不能静默落到 placeholder
+            # 模板（"推进剧情：推进主线，回收旧线索"等）。模板污染比 fake PASS
+            # 章节更隐蔽：chapter 数字在动但全是占位文本。空候选 → _outline_failed。
+            if not candidates:
+                log(f"ERR outline card returned empty candidates for arc{arc_idx}", state)
+                state["error_log"] = (state.get("error_log", []) +
+                                      [f"outline card empty candidates arc{arc_idx}"])
+                state["_outline_failed"] = True
+                return state
             # 把所有候选展开成 chapter_task_queue，第一个候选被默认采纳；
             # 其余两个作为 human_pending 推给前端做"三选一"
-            tasks = candidates[0]["tasks"] if candidates else \
-                    [_placeholder_task(arc_idx, i, arc) for i in range(10)]
+            tasks = candidates[0]["tasks"]
             state.setdefault("outline_candidates", []).append({
                 "arc_id": arc.get("arc_id", arc_idx+1),
                 "arc_name": arc.get("arc_name", ""),
@@ -373,8 +381,16 @@ def node_load_arc_tasks(state: OrchestratorState) -> OrchestratorState:
             # talk 模式：交互头脑风暴 — 先输出 1 个大纲 + 一些"分歧点"等作者回应
             result, cost = run_outline_talk(arc, start, setting, memory)
             _add_cost(state, cost)
-            tasks = result.get("tasks", [_placeholder_task(arc_idx, i, arc) for i in range(10)])
+            # P1-6（2026-08-17）：talk 模式空 tasks 同处理。questions 仍可保留
+            # 供前端展示（用户可能想看讨论过的引导问题），但空 tasks → fail-fast。
+            tasks = result.get("tasks", [])
             state.setdefault("talk_questions", []).extend(result.get("questions", []))
+            if not tasks:
+                log(f"ERR outline talk returned empty tasks for arc{arc_idx}", state)
+                state["error_log"] = (state.get("error_log", []) +
+                                      [f"outline talk empty tasks arc{arc_idx}"])
+                state["_outline_failed"] = True
+                return state
             log(f"  💬 生成大纲 + {len(result.get('questions', []))} 个待讨论点（talk 模式）", state)
         else:
             # batch 默认：传统批量
