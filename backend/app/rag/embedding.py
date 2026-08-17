@@ -124,3 +124,24 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     norm_a = math.sqrt(sum(x * x for x in a)) or 1.0
     norm_b = math.sqrt(sum(y * y for y in b)) or 1.0
     return dot / (norm_a * norm_b)
+
+
+def cosine_similarity_with_warning(a: list[float], b: list[float]) -> tuple[float, bool]:
+    """cosine_similarity 的"响亮版"：返回 (score, dimension_mismatch)。
+
+    P1-7（2026-08-17）：换 embedding 模型后历史 chunks 维度不一致，
+    cosine_similarity 静默返 0.0 → RAG 全部 0 命中，运维无信号。
+    上游（retrieval.py）拿到 dimension_mismatch=True 时应 log.warning +
+    写 meta._rag_dimension_warning，让用户知道"全库空召回是因为换模型了，
+    需要触发 re-embed"。
+
+    同维度 + 同长度 + 都非空 → (正常分, False)
+    维度不等 / 任一为空 → (0.0, True)
+    """
+    dim_mismatch = (not a) or (not b) or (len(a) != len(b))
+    if dim_mismatch:
+        return 0.0, True
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a)) or 1.0
+    norm_b = math.sqrt(sum(y * y for y in b)) or 1.0
+    return dot / (norm_a * norm_b), False

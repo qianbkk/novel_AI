@@ -32,7 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from ..models import Chapter, ChapterCharacter, Character, EmbeddingChunk
-from .embedding import embed_text, cosine_similarity, embedding_model_label
+from .embedding import embed_text, cosine_similarity, cosine_similarity_with_warning, embedding_model_label
 
 REPETITION_THRESHOLD = 0.85  # 经验阈值；接入真实 embedding 模型后需要按实际相似度分布重新校准
 
