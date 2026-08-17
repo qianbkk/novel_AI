@@ -85,7 +85,7 @@ def run_p0_checklist(text: str, task: dict, memory: dict) -> tuple[dict, float]:
 钩子预期：{task['ending_hook_description']}
 
 【已知状态】
-主角等级：{hot.get('protagonist_level','感债者')}
+主角等级：{hot.get('protagonist_level','无')}
 活跃剧情线：{str(hot.get('active_threads',[]))[:300]}
 上章结尾：{hot.get('last_chapter_ending','')[:150]}
 
@@ -165,7 +165,7 @@ def run_p0(text: str, feedback: str, task: dict, memory: dict, setting_core: dic
     # 先运行自检清单
     checklist, cost_check = run_p0_checklist(text, task, memory)
     hot = memory.get("hot", {}) if "hot" in memory else memory
-    mc_name = setting_core.get("protagonist", {}).get("name", "陆承")
+    mc_name = setting_core.get("protagonist", {}).get("name", "主角")
 
     # 整合自检结果到重写指令
     priority_str = "\n".join(f"  {i+1}. {p}" for i, p in enumerate(checklist.get("rewrite_priority", [])))

@@ -32,7 +32,17 @@ from engine.config.prompt_templates import (
 )
 
 # 2026-07 30 章实测项目的专名。任何其它项目的 prompt 里都不该出现这些字符串。
-LEAK_TOKENS = ["林渊", "苏晚栀", "孟浩", "顾青锋", "云州"]
+# 2026-08-17 扩展（任务 P0-2）：原列表漏了"云州"宇宙另一组专名 —— prompt_templates
+# 的 HOOK_TYPES examples / 都市题材反例 / title_generator / outline / rewriter
+# 默认 fallback 里硬编码的「陆承/贺苗/苏云溪/章廷/临江市/感债者/识债者/债主委员会」。
+# 这些会随每章 prompt 注入真实 LLM，污染非"云州"题材小说。CLAUDE.md 红线。
+LEAK_TOKENS = [
+    # 原 30 章测试项目
+    "林渊", "苏晚栀", "孟浩", "顾青锋", "云州",
+    # 2026-08-17 新发现的"云州"宇宙另一组专名
+    "陆承", "贺苗", "苏云溪", "章廷", "临江市",
+    "感债者", "识债者", "债主委员会", "周芸",
+]
 
 
 def _fantasy_setting() -> dict:

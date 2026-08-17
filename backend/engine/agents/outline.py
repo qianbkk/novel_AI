@@ -470,7 +470,7 @@ def _build_user_prompt(arc: dict, start_chapter: int, setting: dict,
 本弧引入角色：{', '.join(arc.get('new_characters_introduced', []))}
 弧结束状态：{arc.get('arc_ending_state','')}
 {arc_block}{incoming_block}
-【主角】{mc.get('name','陆承')} | 当前等级：{hot.get('protagonist_level','感债者')} | 点数：{hot.get('protagonist_points',0)}
+【主角】{mc.get('name','主角')} | 当前等级：{hot.get('protagonist_level','无')} | 点数：{hot.get('protagonist_points',0)}
 【力量层级】{level_str}
 【可用角色】
 {char_list}
