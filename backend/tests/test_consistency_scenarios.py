@@ -166,14 +166,30 @@ def test_time_context_flashback_does_not_clobber_current():
 
 
 def test_character_death_recorded_in_states_not_lost():
-    """角色死亡由 character_states 一句话承载，不应被 LLM 漏字段清空。"""
+    """角色死亡由 character_states 一句话承载，不应被 LLM 漏字段清空。
+
+    P2-12（2026-08-17）修改：state 规范化为"死亡（不可复活）"而不仅是"死亡"，
+    让下游 writer 明确识别（语义标记）。原断言锁定的是"死亡"裸字符串，
+    实际却允许"濒死/半死/重伤"等不同死亡强度状态在 fuzzy dedup 里被当成
+    不同 key 持续追加 → 50+ 章后死人复活无前置闸门。
+    新断言：state 必须含"死亡"关键词，且 _dead_characters 集合记录该角色。
+    """
     init = _empty_memory()
     init["hot"]["character_states"] = {"王德顺": "半死"}
     mem, _ = _run_tracker_with_llm_output({
         "chapter_summary": "王德顺咽气",
         "character_states": {"王德顺": "死亡"},
     }, initial_memory=init)
-    assert mem["hot"]["character_states"]["王德顺"] == "死亡"
+    # 规范化为"死亡（不可复活）"（P2-12 修复，避免 LLM 后续写"濒死"被当新 key）
+    assert mem["hot"]["character_states"]["王德顺"] == "死亡（不可复活）", (
+        "P2-12：死亡关键词必须规范化为「死亡（不可复活）」，"
+        "避免 fuzzy dedup 把「濒死/重伤/已亡」当成不同 key 持续追加"
+    )
+    # 死亡角色必须写入 _dead_characters 集合（供 orchestrator 同步到 DB）
+    assert "王德顺" in mem["hot"]["character_states"].get("_dead_characters", []) or \
+           "王德顺" in mem["hot"].get("_dead_characters", []), (
+        "P2-12：死亡角色必须写入 _dead_characters 集合"
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────

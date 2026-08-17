@@ -98,11 +98,27 @@ def _merge_character_states(
     """
     result: dict = dict(existing or {})
     existing_keys: list = list(result.keys())
+
+    # P2-12（2026-08-17）：死亡关键词规范化。
+    # 之前 LLM 在不同章可能写"死亡""已亡""殉职""牺牲"等不同表述，fuzzy dedup
+    # 把它们当成同一角色但 state 值持续追加 → character_states[key] 同时含
+    # "重伤"和"死亡"，下游 writer 不知道取哪个，50+ 章后死人复活无前置闸门。
+    # 修法：检测到死亡关键词时把 state 规范化为"死亡（不可复活）"，并把角色
+    # 名加到 result["_dead_characters"] 集合（供后续 orchestrator 写入 DB
+    # Character.status=dead + died_in_chapter）。
+    _DEATH_KEYWORDS = ("死亡", "已亡", "亡故", "殉职", "牺牲", "阵亡", "殒命")
+
+    _new_dead: list[str] = []
     for new_name, new_state in (updates or {}).items():
         new_name_s = str(new_name).strip()
         new_state_s = str(new_state).strip() if new_state else ""
         if not new_name_s:
             continue
+        # 检测死亡关键词并规范化
+        is_dead = any(kw in new_state_s for kw in _DEATH_KEYWORDS) if new_state_s else False
+        if is_dead:
+            new_state_s = "死亡（不可复活）"
+            _new_dead.append(new_name_s)
         merged_into = None
         for kept in existing_keys[-window:]:
             kept_s = str(kept).strip()
@@ -124,6 +140,11 @@ def _merge_character_states(
             if new_state_s:
                 result[new_name_s] = new_state_s
             existing_keys.append(new_name_s)
+
+    # 把死亡角色名写到 result["_dead_characters"]（orchestrator 可读）
+    if _new_dead:
+        existing_dead = result.get("_dead_characters", []) or []
+        result["_dead_characters"] = list(set(existing_dead) | set(_new_dead))
     return result
 
 

@@ -380,6 +380,23 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
         hook_guidance = _hook_guidance(task.get("ending_hook_type", "悬念钩"))
     voice_reminder = _character_voice_reminder(task.get("main_characters", []) or [], setting)
 
+    # P2-12（2026-08-17）：过滤已死角色（防"角色已死又出现"）。
+    # writer 没有 DB 访问，由 orchestrator 在调用前把 status=dead / missing
+    # 的角色名写到 context["dead_characters"]（set/list）。此处过滤后渲染
+    # 【本章出场人物】行，避免 LLM 把死人塞进 prompt 复活。
+    _dead_set = set(context.get("dead_characters", []) or [])
+    _live_main_chars = [
+        n for n in (task.get("main_characters", []) or []) if n not in _dead_set
+    ]
+    if _live_main_chars:
+        _dead_filtered_main_chars_line = (
+            f"【本章出场人物】{', '.join(_live_main_chars)}"
+        )
+    else:
+        _dead_filtered_main_chars_line = (
+            "【本章出场人物】（无 — main_characters 全部已死/失踪，请 orchestrator 复核）"
+        )
+
     # 2026-07-25 修 bug：原代码在 f-string 内用 `{{}}`（意图是 literal {}）
     # 但 Python 解析 `setting.get('world_setting') or {{}}` 时把 `{{}}` 当 set literal
     # （含 dict 元素），触发 TypeError: unhashable type: 'dict'。
@@ -585,7 +602,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 
 {hook_guidance}
 
-【本章出场人物】{', '.join(task.get('main_characters', []) or [])}
+{_dead_filtered_main_chars_line}
 
 {world_consistency_block}
 

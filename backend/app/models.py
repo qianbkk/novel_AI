@@ -112,6 +112,13 @@ class Character(Base):
     card_props_json = Column(JSON, nullable=True)        # {signature_item, companion}
     card_arc_json = Column(JSON, nullable=True)          # {start_state, catalyst, end_state}
 
+    # ─── P2-12（2026-08-17）：角色生命周期状态（防"已死又出现"））））
+    # status: active=活跃 / dead=死亡 / missing=失踪（不确定生死的过渡态）
+    # died_in_chapter: 在哪一章死的（nullable int，便于 beat_checker 复活检测）
+    # 与 Character 8 段卡分离：8 段卡描述角色属性，status 描述生命周期。
+    status = Column(String, nullable=False, default="active", server_default="active")
+    died_in_chapter = Column(Integer, nullable=True)
+
     project = relationship("Project", back_populates="characters")
 
 
