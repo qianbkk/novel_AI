@@ -13,6 +13,7 @@ import CharacterList from "./pages/CharacterList";  // 2026-08-05：角色专属
 import Outline from "./pages/Outline";  // 弧级大纲管理
 import ChapterReader from "./pages/ChapterReader";  // 章节阅读器（独立页面）
 import NotFound from "./pages/NotFound";  // 2026-07-25: 404 兜底（之前无 path="*" → 白屏）
+import ThemeOpening from "./pages/ThemeOpening";  // v1.0 Stage I: 主题与开篇
 import { LoginDialog } from "./components/LoginDialog";
 import { ErrorBoundary } from "./components/ErrorBoundary";  // 2026-07-25: 路由级错误兜底
 import { api, getStoredToken } from "./api/client";
@@ -219,6 +220,7 @@ export default function App() {
           <Route path="/projects/:projectId/characters/:characterId" element={<CharacterCard />} />
           {/* 弧级大纲管理 */}
           <Route path="/projects/:projectId/outline" element={<Outline />} />
+          <Route path="/projects/:projectId/theme" element={<ThemeOpening />} />
           {/* 章节阅读器（独立页面替代 Dialog） */}
           <Route path="/projects/:projectId/chapter/:chapterNo" element={<ChapterReader />} />
           {/* 404 兜底（必须放最后 — React Router v6 第一个匹配即返回） */}

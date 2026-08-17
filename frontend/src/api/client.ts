@@ -39,6 +39,14 @@ import type {
   // 多用户认证
   User,
   TokenResponse,
+  // v1.0 Pre-Production
+  GenreProfile,
+  ThemeSpine,
+  ThemeSpineIn,
+  OpeningDesign,
+  OpeningDesignIn,
+  ResearchNotes,
+  ResearchNotesIn,
 } from "../types";
 
 // 后端地址：默认 8132（开发用），部署时改 frontend/.env 里的 VITE_API_BASE
@@ -573,6 +581,50 @@ export const api = {
       method: "POST",
       body: JSON.stringify(payload),
     }),
+
+  // ── v1.0 Stage A/B/C/D: Pre-Production API ─────────────────
+  // 用户决策：UI 直接编辑 JSON（put_theme_full_then_get / put_opening_full_then_get）
+  getGenreProfile: (projectId: string) =>
+    request<GenreProfile>(`/projects/${projectId}/pre-production/genre-profile`),
+  generateGenreProfile: (projectId: string, payload: { genre_key: string; use_llm?: boolean }) =>
+    request<GenreProfile>(`/projects/${projectId}/pre-production/genre-profile/generate`, {
+      method: "POST", body: JSON.stringify(payload),
+    }),
+
+  getTheme: (projectId: string) =>
+    request<ThemeSpine>(`/projects/${projectId}/pre-production/theme`),
+  putTheme: (projectId: string, payload: ThemeSpineIn) =>
+    request<{ status: string; source: string }>(`/projects/${projectId}/pre-production/theme`, {
+      method: "PUT", body: JSON.stringify(payload),
+    }),
+  generateTheme: (projectId: string, payload: { concept: string; use_llm?: boolean }) =>
+    request<ThemeSpine>(`/projects/${projectId}/pre-production/theme/generate`, {
+      method: "POST", body: JSON.stringify(payload),
+    }),
+
+  getOpening: (projectId: string) =>
+    request<OpeningDesign>(`/projects/${projectId}/pre-production/opening`),
+  putOpening: (projectId: string, payload: OpeningDesignIn) =>
+    request<{ status: string; source: string }>(`/projects/${projectId}/pre-production/opening`, {
+      method: "PUT", body: JSON.stringify(payload),
+    }),
+  generateOpening: (projectId: string, payload: { concept: string; use_llm?: boolean }) =>
+    request<OpeningDesign>(`/projects/${projectId}/pre-production/opening/generate`, {
+      method: "POST", body: JSON.stringify(payload),
+    }),
+
+  getResearchNotes: (projectId: string) =>
+    request<ResearchNotes>(`/projects/${projectId}/pre-production/research-notes`),
+  putResearchNotes: (projectId: string, payload: ResearchNotesIn) =>
+    request<{ status: string; source: string }>(`/projects/${projectId}/pre-production/research-notes`, {
+      method: "PUT", body: JSON.stringify(payload),
+    }),
+  initializeResearchNotes: (projectId: string, payload: { concept: string; use_llm?: boolean }) =>
+    request<ResearchNotes>(`/projects/${projectId}/pre-production/research-notes/initialize`, {
+      method: "POST", body: JSON.stringify(payload),
+    }),
+  queryResearchNotes: (projectId: string, chapter: number) =>
+    request<{ notes: string }>(`/projects/${projectId}/pre-production/research-notes/query?chapter=${chapter}`),
 };
 
 /**

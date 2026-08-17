@@ -725,3 +725,90 @@ export interface AuthErrorEvent {
   /** CustomEvent detail for "auth required" signals from api client. */
   reason: "missing" | "expired";
 }
+
+// ── v1.0 Pre-Production types (Stage A/B/C/D) ─────────────────
+
+export interface GenreProfile {
+  genre: string;
+  genre_key: string;
+  reader_persona: { primary: string; core_fantasy?: string; secondary?: string };
+  tone_preference: string;
+  taboo: string[];
+  show_item_examples: string[];
+  research_strength: "strong" | "medium" | "weak";
+  source?: string;
+  [k: string]: unknown;
+}
+
+export interface ThemeSpine {
+  theme_statement: string;
+  expectation_arc: {
+    seed_chapter: number;
+    payoff_chapter: number;
+    twist_chapter: number;
+    description: string;
+  };
+  resonance_anchors: string[];
+  source?: string;
+  [k: string]: unknown;
+}
+
+export interface ThemeSpineIn {
+  theme_statement: string;
+  expectation_arc: {
+    seed_chapter: number;
+    payoff_chapter: number;
+    twist_chapter: number;
+    description: string;
+  };
+  resonance_anchors: string[];
+  source?: string;
+}
+
+export interface OpeningChapterScene {
+  where: string;
+  who_present: string[];
+  time?: string;
+  weather?: string;
+}
+
+export interface OpeningChapter {
+  scene: OpeningChapterScene;
+  hook_type: string;
+  reader_emotion_to_install?: string;
+  reader_question?: string;
+  show_item_seed?: string;
+  show_item_used?: string;
+  expectation_seed?: string;
+  expectation_shift?: string;
+}
+
+export interface OpeningDesign {
+  chapter_1_anchor: OpeningChapter;
+  chapter_2_question: OpeningChapter;
+  chapter_3_escalation: OpeningChapter;
+  source?: string;
+  [k: string]: unknown;
+}
+
+export interface OpeningDesignIn {
+  chapter_1_anchor: OpeningChapter;
+  chapter_2_question: OpeningChapter;
+  chapter_3_escalation: OpeningChapter;
+  source?: string;
+}
+
+export interface ResearchNotes {
+  research_strength: "strong" | "medium" | "weak";
+  baseline: Record<string, string>;
+  per_chapter_notes: Record<string, string>;
+  source?: string;
+  [k: string]: unknown;
+}
+
+export interface ResearchNotesIn {
+  research_strength: "strong" | "medium" | "weak";
+  baseline: Record<string, string>;
+  per_chapter_notes: Record<string, string>;
+  source?: string;
+}
