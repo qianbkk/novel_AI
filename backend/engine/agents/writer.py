@@ -199,6 +199,13 @@ def _build_world_block(task: dict, setting: dict) -> str:
 # 连输出格式都不守）。世界书只补「本章真正会用到的那几条设定原文」。
 LOREBOOK_BUDGET_CHARS = 900
 
+# P1-9（2026-08-17）：writer prompt 硬字符上限。审计 + 文档
+# docs/wiki/03-Writing-Engine.md:198-200 已自承 writer prompt 7k-10k 字
+# 时 LLM 守约束率塌方。6000 字高于常规 4-5k（留 buffer 给方法论 / 钩子等
+# 必有指令），但低于 7k 红线。超限时 build_writer_prompt 末尾强制截断 +
+# log.warning 留下信号（CLAUDE.md「失败要响亮」）。
+WRITER_PROMPT_BUDGET_CHARS = 6000
+
 # 任务 task-02：早期章节风格锚点激活阈值与黄金章节阈值
 #   - 前 5 章：项目样本为空时 style_block 不会注入，但还有【黄金章节写作要点】（结构向）
 #   - 第 6-20 章：项目样本仍为空时，注入题材惯例指南（题材惯例向）
@@ -563,7 +570,7 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
 【上章结尾】
 {context.get('last_chapter_ending','（本书开篇）')}
 
-【近期事件（5章摘要）】
+【近期事件（最近10章摘要）】
 {context.get('recent_events','无')}
 
 【当前剧情线】
@@ -617,6 +624,35 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
     _early_style_block = _build_early_style_block(task, setting)
     if _early_style_block and _style_samples_empty:
         user_prompt += "\n" + _early_style_block
+
+    # 黄金章节专属提示：第1-5章项目风格样本稀少，补充网文早期章节结构要点
+    _ch_num = task.get("chapter_number", 999) if isinstance(task, dict) else 999
+    if _ch_num <= 5:
+        _hook_type = task.get("ending_hook_type", "") if isinstance(task, dict) else ""
+        user_prompt += (
+            f"\n【黄金章节写作要点（第{_ch_num}章，前5章专属）】\n"
+            "1. 开篇前200字内建立明确冲突、悬念或目标，禁止纯环境铺垫或回忆。\n"
+            "2. 每个对话段落后跟1-2句人物内心反应或动作，推动节奏而非停顿。\n"
+            f"3. 章末钩子类型「{_hook_type or '信息钩'}」：最后一段必须让读者想翻页，"
+            "用新信息揭露、情绪转折或直接威胁实现。\n"
+            "4. 全章节奏：每800-1000字安排一个小反转或冲突升级，不允许连续平铺。\n"
+            "5. 禁止大段说教、世界观说明书、或超过3行的独白。"
+        )
+
+    # P1-9（2026-08-17）：writer prompt 硬字符上限。
+    # 审计 + docs/wiki/03-Writing-Engine.md:198-200 已自承：
+    # recent_summaries 5→10 + RAG 900 + lorebook 900 + world 600 + style_samples
+    # 4500 + methodology 4 招 3500 堆叠 → 7k-10k 字，LLM 长 prompt 守约束率塌方
+    # （漏章节字数 / POV 锁 / ending_hook_type）。硬上限 + 超限 warning 防止
+    # 静默污染下游。预算选 6000 字：略高于常规 4-5k 留 buffer，但低于 7k 红线。
+    if len(user_prompt) > WRITER_PROMPT_BUDGET_CHARS:
+        logging.getLogger("novel_ai.engine.agents.writer").warning(
+            "writer prompt overflow budget: %d > %d (chapter %d)；"
+            "强制截断到预算长度（优先保留核心指令，砍末尾 methodology）",
+            len(user_prompt), WRITER_PROMPT_BUDGET_CHARS,
+            task.get("chapter_number", 0) if isinstance(task, dict) else 0,
+        )
+        user_prompt = user_prompt[:WRITER_PROMPT_BUDGET_CHARS]
 
     return system_dynamic, user_prompt
 
