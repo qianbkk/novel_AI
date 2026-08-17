@@ -148,6 +148,15 @@ class OrchestratorState(TypedDict):
     # 同样必须声明才能在节点间存活（之前未声明 → 每章都拿不到历史开场）。
     _recent_chapter_openings: List[str]
     audit_rule_layer: List[Dict]
+    # summarizer arc_end 报告（任务 P1-5 2026-08-17）：
+    # node_save_and_track 写入 arc 级 summary/plan_vs_actual；之前未声明 →
+    # LangGraph 静默丢弃 → frontend arc_end 报告看不到。声明后向后兼容
+    # （旧 state JSON 无此键 → load 后 .get() 返回 None）。
+    summarizer_metrics: Dict[str, Dict]   # arc_id(str) → summary_result
+    # human_escalation 累积的章节级 memory gap（任务 P1-5 2026-08-17）：
+    # node_human_escalation 追加 [{"chapter": int, "issue": str}, ...]；
+    # 之前未声明 → LangGraph 静默丢弃 → arc_end 报告 / 测试断言读不到。
+    memory_gaps: List[Dict]
 
     # 元数据
     style_samples: List[str]
@@ -198,6 +207,9 @@ def create_initial_state(
         style_samples_source="external",
         last_p0_chapter=0,
         error_log=[],
+        # P1-5（2026-08-17）：声明 schema 增量的 key 同步初始化，避免首读 .get() 返 None
+        summarizer_metrics={},
+        memory_gaps=[],
         created_at=now,
         last_updated=now,
     )
