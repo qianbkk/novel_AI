@@ -708,8 +708,17 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
     try:
         clean_text, fmt_issues, cost = run_normalizer(raw_text, task)
     except Exception as e:
+        # P1-4（2026-08-17）：normalizer 异常必须响亮（CLAUDE.md 红线）。
+        # 之前静默 fallback clean_text=raw_text → 污染下游不可观测（满篇对话癌/AI 腔
+        # 流入 compliance+checker+save）。改为标 _normalizer_failed + 提前 return，
+        # 与 _writer_failed 同等待遇走 escalate，让受污染章节不入库。
         log(f"ERR normalizer failed: {e}", state)
-        clean_text, fmt_issues, cost = raw_text, [], 0.0
+        state["error_log"] = (state.get("error_log", []) +
+                              [f"normalizer failed ch{task.get('chapter_number','?')}: {e}"])
+        task["_normalizer_failed"] = True
+        task["_draft_text"]         = ""  # 不留污染文本，下游不会继续
+        state["current_task"]       = task
+        return state
     _add_cost(state, cost)
 
     # 2026-07-23 simplify：normalizer 后再次抽 title/剥 JSON 包装。
@@ -901,9 +910,16 @@ def node_rewrite(state: OrchestratorState) -> OrchestratorState:
         clean_text, _, cost = run_normalizer(new_text, task)
         _add_cost(state, cost)
     except Exception as e:
+        # P1-4（2026-08-17）：normalizer post-rewrite 异常同样响亮化。
+        # 之前静默 fallback 到 new_text 污染下游；改为标 _normalizer_failed + 提前 return，
+        # 与 node_write_pipeline 同等待遇走 escalate。
         log(f"ERR normalizer (post-rewrite) failed: {e}", state)
-        # normalizer 失败但 rewriter 成功 → 退到 raw new_text，不丢重写结果
-        clean_text, cost = new_text, 0.0
+        state["error_log"] = (state.get("error_log", []) +
+                              [f"normalizer (post-rewrite) failed ch{task.get('chapter_number','?')}: {e}"])
+        task["_normalizer_failed"] = True
+        task["_draft_text"]         = ""
+        state["current_task"]       = task
+        return state
 
     # Re-verify compliance — 同 write_pipeline：personal 平台跳过
     rewrite_platform = state.get("platform", "fanqie")
@@ -1216,6 +1232,8 @@ def route_after_pipeline(state) -> Literal["save", "rewrite", "escalate", "budge
     # 之前这些异常会被"fake pass 默认值"吞掉（ch_0064 同型问题）。
     if task.get("_writer_failed"):
         return "escalate"
+    if task.get("_normalizer_failed"):
+        return "escalate"
     if task.get("_compliance_check_failed"):
         return "escalate"
     if task.get("_checker_failed"):
@@ -1236,6 +1254,8 @@ def route_after_rewrite(state) -> Literal["save", "rewrite", "escalate"]:
     # _compliance_check_failed=True，_checker_result 是 pre-rewrite 旧值，保留它
     # 可能误判"重写成功"→ 显式 escalate。
     if task.get("_writer_failed"):
+        return "escalate"
+    if task.get("_normalizer_failed"):
         return "escalate"
     if task.get("_compliance_check_failed"):
         return "escalate"
