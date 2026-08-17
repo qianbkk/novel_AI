@@ -135,9 +135,14 @@ def test_approved_db_outline_syncs_into_project_state(tmp_path):
         outline_json=[{"chapter_number": 99, "chapter_goal": "采用数据库大纲"}],
     ))
     db.commit()
-    config_dir = tmp_path / "config"
-    config_dir.mkdir()
-    state_path = config_dir / "orchestrator_state.json"
+    # 2026-08-17 修复（CI 暴露）：bridge._sync_approved_outlines 写 output/
+    # （commit 42f5818 改成与 init_arc.save_state(STATE_PATH_STR) 同路径，
+    # STATE_PATH_STR = ENGINE_DATA_DIR / "output" / "orchestrator_state.json），
+    # 但本 test 还在 config/ 写 fixture → "init_arc completed but
+    # orchestrator_state.json is missing"。修法：与生产代码路径一致。
+    output_dir = tmp_path / "output"
+    output_dir.mkdir()
+    state_path = output_dir / "orchestrator_state.json"
     state_path.write_text(json.dumps({"approved_outline_tasks": {}}), encoding="utf-8")
 
     result = _sync_approved_outlines(project_id, str(tmp_path), db)

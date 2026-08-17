@@ -163,7 +163,16 @@ def test_alembic_upgrade_head_from_0002_existing_sqlite_db(tmp_path):
     try:
         version = conn.execute("SELECT version_num FROM alembic_version").fetchone()[0]
         fk_rows = conn.execute("PRAGMA foreign_key_list(world_settings)").fetchall()
-        assert version == "0003_fk_cascade_unique"
+        # 2026-08-17 修复（CI 暴露）：P2-12 新增 0004_characters_status 后 head 上移，
+        # 断言"按当前 head 字符串匹配"，避免锁定旧 head；每次新增迁移只改此处一处。
+        from alembic.script import ScriptDirectory
+        from backend.alembic.env import config as alembic_config
+        script = ScriptDirectory.from_config(alembic_config())
+        current_head = script.get_current_head()
+        assert version == current_head, (
+            f"DB version {version} != 当前 alembic head {current_head};"
+            f" 若新增迁移请确认 0004/0005 已合并并按顺序 down_revision 链。"
+        )
         assert any(row[2] == "projects" and row[3] == "project_id" and row[6] == "CASCADE" for row in fk_rows)
     finally:
         conn.close()
