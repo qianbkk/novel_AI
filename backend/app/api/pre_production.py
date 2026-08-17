@@ -21,7 +21,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -102,6 +102,18 @@ class GenerateOpeningIn(BaseModel):
 
 class GenreProfileIn(BaseModel):
     genre_key: str
+    use_llm: bool = False
+
+
+class ResearchNotesIn(BaseModel):
+    research_strength: str
+    baseline: dict[str, Any]
+    per_chapter_notes: dict[str, str]
+    source: str = "user"
+
+
+class InitResearchNotesIn(BaseModel):
+    concept: str = ""
     use_llm: bool = False
 
 
@@ -285,3 +297,77 @@ def generate_opening(
         novel_id=str(novel_ai_dir),
     )
     return opening
+
+
+# ── Research Notes endpoints (Stage D: 资料助手) ─────────────────────────
+
+@router.get("/research-notes")
+def get_research_notes(project_id: str, request: Request, db: Session = Depends(get_db)):
+    """读 research_notes。"""
+    _require_owned_or_dev(project_id, request, db)
+    novel_ai_dir = _resolve_novel_ai_dir(project_id, db)
+    from engine.agents.research_notes import load_notes
+    notes = load_notes(str(novel_ai_dir))
+    if notes is None:
+        raise HTTPException(404, "research_notes not yet initialized")
+    return notes
+
+
+@router.put("/research-notes")
+def put_research_notes(
+    project_id: str,
+    payload: ResearchNotesIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """用户编辑后保存（per_chapter_notes 个人便笺 / 创作记录）。"""
+    _require_owned_or_dev(project_id, request, db)
+    novel_ai_dir = _resolve_novel_ai_dir(project_id, db)
+    from engine.agents.research_notes import save_notes, InvalidResearchNotesError
+
+    notes_dict = payload.model_dump()
+    notes_dict["source"] = "user"
+    try:
+        save_notes(str(novel_ai_dir), notes_dict)
+    except InvalidResearchNotesError as exc:
+        raise HTTPException(400, f"invalid research_notes: {exc}") from exc
+    return {"status": "saved", "source": "user"}
+
+
+@router.post("/research-notes/initialize")
+def initialize_research_notes(
+    project_id: str,
+    payload: InitResearchNotesIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """(重新)初始化 research_notes（按 genre_profile.research_strength 三档分流）。"""
+    _require_owned_or_dev(project_id, request, db)
+    novel_ai_dir = _resolve_novel_ai_dir(project_id, db)
+    from engine.agents.research_notes import init_research_notes
+    from engine.agents.genre_profiler import load_profile
+
+    profile = load_profile(str(novel_ai_dir)) or {}
+
+    notes = init_research_notes(
+        genre_profile=profile,
+        concept=payload.concept,
+        use_llm=payload.use_llm,
+        novel_id=str(novel_ai_dir),
+    )
+    return notes
+
+
+@router.get("/research-notes/query")
+def query_research_notes_endpoint(
+    project_id: str,
+    chapter: int = Query(...),
+    request: Request = None,
+    db: Session = Depends(get_db),
+):
+    """按章 query research_notes（writer 写每章前调一次）。"""
+    _require_owned_or_dev(project_id, request, db)
+    novel_ai_dir = _resolve_novel_ai_dir(project_id, db)
+    from engine.agents.research_notes import query_notes
+    result = query_notes(str(novel_ai_dir), chapter=chapter)
+    return {"notes": result}

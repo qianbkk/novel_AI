@@ -358,3 +358,84 @@ def test_generate_opening_without_llm_uses_template(client, project_with_novel_a
         assert ch in data
         assert "hook_type" in data[ch]
     assert data["source"] == "template"
+
+
+# ── 8. Research Notes endpoints (Stage D: 资料助手) ─────────────────────────
+
+def _full_research_notes_payload(strength: str = "strong") -> dict:
+    return {
+        "research_strength": strength,
+        "baseline": {"朝代": "架空", "物价": "米 5 文"} if strength == "strong" else {},
+        "per_chapter_notes": {"1": "ch1 资料"},
+        "source": "user",
+    }
+
+
+def test_get_research_notes_not_found(client, project_with_novel_ai_dir):
+    pid = project_with_novel_ai_dir["project_id"]
+    r = client.get(f"/projects/{pid}/pre-production/research-notes")
+    assert r.status_code == 404
+
+
+def test_init_research_notes_strong_creates_baseline(client, project_with_novel_ai_dir):
+    """strong 题材 → 5 维度 baseline。"""
+    pid = project_with_novel_ai_dir["project_id"]
+    client.post(
+        f"/projects/{pid}/pre-production/genre-profile/generate",
+        json={"genre_key": "lishi", "use_llm": False},
+    )
+    r = client.post(
+        f"/projects/{pid}/pre-production/research-notes/initialize",
+        json={"concept": "架空王朝末年", "use_llm": False},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["research_strength"] == "strong"
+    for d in ("朝代", "地理", "职官", "物价", "服饰"):
+        assert d in data["baseline"]
+
+
+def test_init_research_notes_weak_minimal(client, project_with_novel_ai_dir):
+    """weak 题材 → baseline 为空。"""
+    pid = project_with_novel_ai_dir["project_id"]
+    client.post(
+        f"/projects/{pid}/pre-production/genre-profile/generate",
+        json={"genre_key": "dushi", "use_llm": False},
+    )
+    r = client.post(
+        f"/projects/{pid}/pre-production/research-notes/initialize",
+        json={"concept": "职场", "use_llm": False},
+    )
+    assert r.status_code == 200
+    assert r.json()["research_strength"] == "weak"
+
+
+def test_put_research_notes_full_then_get(client, project_with_novel_ai_dir):
+    pid = project_with_novel_ai_dir["project_id"]
+    payload = _full_research_notes_payload()
+    r = client.put(f"/projects/{pid}/pre-production/research-notes", json=payload)
+    assert r.status_code == 200, r.text
+
+    r2 = client.get(f"/projects/{pid}/pre-production/research-notes")
+    assert r2.json()["per_chapter_notes"]["1"] == "ch1 资料"
+
+
+def test_put_research_notes_rejects_unknown_strength(client, project_with_novel_ai_dir):
+    """非法 strength → 400。"""
+    pid = project_with_novel_ai_dir["project_id"]
+    payload = _full_research_notes_payload(strength="ultra")
+    r = client.put(f"/projects/{pid}/pre-production/research-notes", json=payload)
+    assert r.status_code == 400
+
+
+def test_query_research_notes_endpoint(client, project_with_novel_ai_dir):
+    """按章 query API 暴露。"""
+    pid = project_with_novel_ai_dir["project_id"]
+    payload = _full_research_notes_payload()
+    payload["per_chapter_notes"]["2"] = "ch2 资料：驿站 30 里"
+    client.put(f"/projects/{pid}/pre-production/research-notes", json=payload)
+
+    r = client.get(f"/projects/{pid}/pre-production/research-notes/query?chapter=2")
+    assert r.status_code == 200
+    assert "ch2 资料" in r.json()["notes"]
+    assert "驿站 30 里" in r.json()["notes"]
