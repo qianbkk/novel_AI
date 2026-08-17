@@ -2,6 +2,67 @@
 
 This file records release-level behavior changes. Individual fixes and implementation details remain available through `git log`.
 
+## v1.0 — 质量优先长篇网文写作架构（2026-08-18）
+
+设计动机（docs/drafts/v1-quality-first-design.md）：v0.5 流水线长、成本高、质量没有匹配。v1.0 走"前期工程深度 + 单章质量"路线，把 1 次前期深度调用变成 5x 写作补救调用的杠杆。
+
+### 核心范式转换
+
+- v0.5：1 次 outline LLM 调用 → 9 个 agent 多轮循环（writer/normalizer/compliance/checker×3/rewriter/tracker）→ 单章 5-9 次 LLM
+- v1.0：**前期工程前置**（Pre-Production 4 个 agent）+ **大纲脊柱化**（macro_spine）+ **writer prompt v2 注入全部前期成果**（4 个 block）+ **单轮聚焦质检**（escalate 不 rewrite）+ **3 个 memory ledger 贯穿**
+
+### Added — 9 个新模块
+
+**Stage 1 Pre-Production（4 个）**：
+- `genre_profiler.py` + `config/genre_profiles.py`：6 个主流男频（玄幻/仙侠/都市/历史/军事/科幻）的 reader_persona + tone + taboo + show_item_examples + research_strength 三档分流
+- `theme_designer.py`：6 题材的 theme_statement + expectation_arc (seed< twist < payoff) + resonance_anchors ≥3 共性维度
+- `opening_designer.py`：6 题材的黄金三章（ch1 锚定 → ch2 问题 → ch3 翻转），hook_type 严格 7 个合法之一，含 show_item_seed/used 接力
+- `research_notes.py`：按 research_strength 三档分流（strong = 5 维度朝代/地理/职官/物价/服饰 baseline；medium = system_consistency；weak = minimal），query API 按章返回
+
+**Stage 2 大纲**：
+- `macro_spine.py`：全书宏观弧（arc 边界连续、twist_chapter 必须落在某 arc 范围内），get_arc_for_chapter 写每章前调
+
+**Stage 3 Writer Prompt v2**：
+- `_build_genre_block` / `_build_theme_block` / `_build_expectation_block` / `_build_showitem_block`：4 个新 block 注入 writer prompt
+
+**Stage 3 质检**：
+- `scene_quality_check.py`：4 维度（expectation_advanced / show_item_landed / resonance_hit / consistency_ok），任一失败 → escalate 给人工（**不自动 rewrite**，v1.0 决策），LLM 失败抛 SceneQualityCheckFailed（不让 silently PASS）
+
+**Stage 4 Memory**：
+- `memory/expectation_ledger.py`：每章 expectation_status 落盘，get_pending_seeds 给下章追踪
+- `memory/show_item_chain.py`：每章 show_item_used 接力，get_recent_items 给 writer prompt v2 用
+- `memory/voice_anchors.py`：角色口癖记录 + check_voice_consistency 一致性检查
+
+**API 8 个 endpoint**（`/projects/{id}/pre-production/{genre-profile,theme,opening,research-notes}` × GET/PUT/POST-generate）：
+- GET 不存在 → 404；PUT 缺字段 → 400；PUT 强制 source='user'（不被 LLM 覆盖）
+
+**Frontend 1 个新页面**：
+- `pages/ThemeOpening.tsx`：4 个 tab（题材画像/共性主题/黄金三章/资料助手），每个 tab View ↔ Edit JSON 状态切换
+- 路由 `/projects/:projectId/theme`
+
+### Changed
+
+- **writer prompt v2**：4 个新 block（genre / theme / expectation / show-item）注入【当前写作任务】之前；向后兼容（无 v1_* 字段仍工作）
+- **paths.py**：新增 `novel_ai_dir(novel_id)` helper（env-aware，测试可 monkeypatch）
+
+### Tests
+
+- **16 个新测试文件，145 个新测试**：
+  - genre_profiler (27) + theme_designer (14) + opening_designer (14)
+  - pre_production_api (16) + research_notes (16) + macro_spine (15)
+  - writer_prompt_v2 (11) + scene_quality_check (11) + memory_ledgers (9)
+  - v1_e2e_pipeline (6) — 全链路串联验证
+
+### 向后兼容
+
+- v0.5 调用方式（无 v1_* 字段）仍正常工作（writer prompt v2 兼容测试通过）
+- 9 个 v0.5 修复（PASS_SCORE_GOLDEN / normalizer 响亮化 / lorebook aliases / RAG cold_history 等）保留
+- 全套基线：**1627 behavior tests pass**（13 个 GBK baseline 无新增回归）
+
+### 真实 LLM 端到端
+
+完整 30 章真实跑需在用户本地（带 MiniMax API key）执行 `python -m scripts.drive_30ch_bridge <project_id>`。Mock 版 e2e 验证所有模块串联。
+
 ## v0.5.0 — 质量门强化与一致性兜底（2026-08-17）
 
 5-Agent 并行审计识别了 P0/P1/P2/P3 共 18+ 项真实缺陷，16 个聚焦 commit 一一落地，每个 commit 都"先复现测试 → 最小实现"。
