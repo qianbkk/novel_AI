@@ -187,6 +187,23 @@ def _config() -> dict:
 
 def save_chapter(novel_id: str, ch_num: int, text: str, meta: dict) -> None:
     CHAPTERS_DIR.mkdir(parents=True, exist_ok=True)
+    chapter_file = CHAPTERS_DIR / f"ch_{ch_num:04d}.txt"
+    meta_file    = CHAPTERS_DIR / f"ch_{ch_num:04d}_meta.json"
+
+    # P0-3（2026-08-17）：幂等保护 —— CLAUDE.md 红线「不得覆盖已完成章节」。
+    # 崩溃窗口：save_chapter 完成 → save_state 之前进程死 → 重启时 current_chapter
+    # 仍是 N-1，node_load_arc_tasks 重建任务，新 LLM 输出会覆盖 ch_NNNN.txt。
+    # 修法：检测目标文件已存在 + 无显式 _overwrite 标记 → log.warning + 跳过，
+    # text 与 meta 都保持原样（保证两者一致性）。仅在 meta._overwrite=True 时
+    # 允许覆盖（合法逃生通道，例如手动修订后由用户显式触发）。
+    if chapter_file.exists() and not meta.get("_overwrite"):
+        _log.warning(
+            "save_chapter: ch_%04d.txt 已存在，跳过覆盖以保护已完成章节（"
+            "若需重写请显式传 meta['_overwrite']=True）",
+            ch_num,
+        )
+        return
+
     # 2026-07-23 修复（问题 #8）+ simplify：落盘前调 extract_llm_response_body
     # 保证 ch_NNNN.txt 是纯 body（剥 LLM JSON 包装）。
     # 之前 _extract_title 第 4 级兜底把 JSON 包装当 text 返回，磁盘上 ch_NNNN.txt
@@ -202,14 +219,12 @@ def save_chapter(novel_id: str, ch_num: int, text: str, meta: dict) -> None:
     except Exception:
         pass  # 解析失败时保留原 text，下游 import 阶段兜底
 
-    with open(CHAPTERS_DIR / f"ch_{ch_num:04d}.txt", "w", encoding="utf-8") as f:
+    with open(chapter_file, "w", encoding="utf-8") as f:
         f.write(text)
     # 迭代 #43: ch_NNNN_meta.json 之前直接 open(w) + json.dump，半写损坏后
     # 该章 meta 全丢（score / word_count / selected_version 等），下次 save
     # 覆盖空数据。改用 atomic_write_json 复用 utils 公共工具。
-    atomic_write_json(
-        str(CHAPTERS_DIR / f"ch_{ch_num:04d}_meta.json"), meta,
-    )
+    atomic_write_json(str(meta_file), meta)
 
 
 def log(msg: str, state: OrchestratorState) -> None:
