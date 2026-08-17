@@ -80,12 +80,16 @@ def build_lorebook_from_setting(setting: dict) -> list[dict]:
             _clip(mc.get("personality"), 80),
             f"初始境界：{_clip(mc.get('initial_power_level'), 30)}"
             if mc.get("initial_power_level") else "",
-            "口癖：" + "、".join(str(q) for q in (mc.get("speech_quirks") or [])[:3])
-            if mc.get("speech_quirks") else "",
         ]
+        # P2-12b（2026-08-17）：speech_quirks / aliases 提到 aliases 列表，
+        # 让正文里的口癖触发能召回角色卡（之前只塞 content，match 找不到）。
+        mc_aliases = list(mc.get("aliases") or []) + list(mc.get("speech_quirks") or [])
+        if mc.get("speech_quirks"):
+            parts.append("口癖：" + "、".join(str(q) for q in (mc.get("speech_quirks") or [])[:3]))
         out.append(_entry(_clip(mc.get("name"), 30),
                           "｜".join(p for p in parts if p),
-                          PRIORITY_PROTAGONIST))
+                          PRIORITY_PROTAGONIST,
+                          aliases=mc_aliases))
 
     for c in (setting.get("key_characters") or []):
         if not isinstance(c, dict):
@@ -93,12 +97,15 @@ def build_lorebook_from_setting(setting: dict) -> list[dict]:
         parts = [
             _clip(c.get("role"), 20),
             _clip(c.get("background"), 120),
-            "口癖：" + "、".join(str(q) for q in (c.get("speech_quirks") or [])[:3])
-            if c.get("speech_quirks") else "",
         ]
+        # P2-12b：speech_quirks / aliases 提到 aliases 列表
+        c_aliases = list(c.get("aliases") or []) + list(c.get("speech_quirks") or [])
+        if c.get("speech_quirks"):
+            parts.append("口癖：" + "、".join(str(q) for q in (c.get("speech_quirks") or [])[:3]))
         out.append(_entry(_clip(c.get("name"), 30),
                           "｜".join(p for p in parts if p),
-                          PRIORITY_CHARACTER))
+                          PRIORITY_CHARACTER,
+                          aliases=c_aliases))
 
     ws = setting.get("world_setting") or {}
     if isinstance(ws, dict):
