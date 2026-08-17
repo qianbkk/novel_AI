@@ -194,25 +194,30 @@ async def pull_setting_package(project_id: str, novel_ai_dir: str, db: Session) 
     # 2026-07-25 软验证（修 P0-6 短板核心链路 Pydantic 化）：
     # 在 jsonschema 校验后用 Pydantic SettingPackage model_validate 验证
     # 一遍 — 给下游代码提供 pkg.protagonist.name 类型的强类型访问（替代
-    # 30+ 处 dict.get 裸访问）。**不抛**——Pydantic 比 jsonschema 严格，
-    # 真实 LLM 输出可能因未声明字段失败；只 log warning 让 dev 看到。
-    # 失败时回退到原 raw dict 路径，老逻辑继续工作（向后兼容）。
+    # 30+ 处 dict.get 裸访问）。
+    #
+    # P2-14（2026-08-17）：Pydantic 失败必须 raise，不能再静默 fallback 裸 dict。
+    # 之前 fallback 让 schema 漂移（planner LLM 输出 "keyCharacter" 而不是
+    # "key_characters"）藏起来 → 下游 8 段角色卡全空 → writer 拿到的【世界观
+    # 速览】全空 → 角色硬编名字。
+    #
+    # 与 jsonschema（log.error 不 raise）不同语义：jsonschema 失败常因老项目
+    # setting 字段漂移，raise 会让所有旧项目 bootstrap 失败（向后兼容优先）；
+    # Pydantic 失败是 schema 严重漂移，必须 raise 阻断污染下游。
     try:
         from shared.setting_models import SettingPackage
         pkg = SettingPackage.model_validate(raw)
-        # 暴露给下游：取代 proto.get("name") 这种裸 dict 访问。
-        # 现有代码仍用 raw dict（30+ 处迁移是 P0 范围外），但 dev 在 IDE
-        # 里能看到 `pkg.xxx` 强类型提示。
         log.info(
             "pull-setting: Pydantic SettingPackage 验证通过 — "
             "protagonist=%r, arc_count=%d, char_count=%d",
             pkg.protagonist.name, len(pkg.arc_outline), len(pkg.key_characters),
         )
     except Exception as pyd_err:
-        log.warning(
-            "pull-setting: Pydantic SettingPackage 验证失败（不阻断，fallback 裸 dict）: %s",
+        log.error(
+            "pull-setting: Pydantic SettingPackage 验证失败（schema 漂移阻断）: %s",
             pyd_err,
         )
+        raise  # 不让裸 dict 路径兜底污染下游 writer
 
     # v3: 校验 setting_package.json 是否符合 schema。fail-fast，
     # 否则「LLM 漏字段」会让 DB 静默缺失（之前 world_view=0 字 / 伏笔=0
