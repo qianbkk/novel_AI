@@ -168,7 +168,19 @@ async def semantic_search_chapters(
         if not candidate_chapter_ids:
             return []  # 这个角色还没在任何章节里出现过
 
-    chunks = db.query(EmbeddingChunk).filter_by(project_id=project_id, source_type="chapter").all()
+    # P2-11（2026-08-17）：同时查 source_type="chapter" 与 source_type="cold_history"
+    # chunks。cold_history 是 L2 cold.compressed_history 摘要（arc_end 时由
+    # embed_cold_history 写入），含 10+ 章前的承诺/约定/伏笔。RAG 之前只查
+    # chapter，长程一致性崩塌（writer 拿不到前情提要）。两路 chunk 合并按
+    # similarity 排序后取 top_k。
+    chunks = (
+        db.query(EmbeddingChunk)
+        .filter(
+            EmbeddingChunk.project_id == project_id,
+            EmbeddingChunk.source_type.in_(["chapter", "cold_history"]),
+        )
+        .all()
+    )
     if candidate_chapter_ids is not None:
         chunks = [c for c in chunks if c.source_id in candidate_chapter_ids]
 
@@ -182,8 +194,54 @@ async def semantic_search_chapters(
                 "chapter_id": chunk.source_id,
                 "similarity": round(similarity, 3),
                 "snippet": chunk.text_snippet,
+                "source_type": chunk.source_type,
             }
     return sorted(best_by_chapter.values(), key=lambda s: -s["similarity"])[:top_k]
+
+
+async def embed_cold_history(
+    project_id: str,
+    arc_id: str,
+    summary_text: str,
+    db: Session,
+) -> int:
+    """P2-11（2026-08-17）：把 cold.compressed_history 摘要 embed 入向量库。
+
+    orchestrator 在 arc_end（summarizer 触发 plan_vs_actual）时调本函数，
+    把弧级冷层摘要写入 EmbeddingChunk（source_type="cold_history"）。后续
+    semantic_search_chapters 自动把 cold_history 与 chapter chunks 合并排序。
+
+    Returns:
+        新写入的 chunk 数（同一 arc_id 的旧 chunk 会被 upsert 覆盖）
+    """
+    from ..models import EmbeddingChunk
+    from ..utils import gen_id
+    from .embedding import embed_text
+
+    if not summary_text or not summary_text.strip():
+        return 0
+
+    # 删除该 arc 的旧 cold_history chunks（upsert 语义）
+    db.query(EmbeddingChunk).filter(
+        EmbeddingChunk.project_id == project_id,
+        EmbeddingChunk.source_type == "cold_history",
+        EmbeddingChunk.source_id == f"arc_{arc_id}",
+    ).delete()
+    db.commit()
+
+    # embed 并写入（summary 通常 ≤ 2000 字，单块即可）
+    embedding = await embed_text(summary_text[:1500])  # 截前 1500 字避免超长
+    chunk = EmbeddingChunk(
+        id=gen_id(),
+        project_id=project_id,
+        source_type="cold_history",
+        source_id=f"arc_{arc_id}",
+        text_snippet=summary_text[:500],  # snippet 截前 500 字供前端预览
+        embedding_json=embedding,
+    )
+    db.add(chunk)
+    db.commit()
+    return 1
 
 
 # ─── 场景切块（2026-07-27 §A1 改造） ────────────────────────────
