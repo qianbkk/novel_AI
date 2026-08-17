@@ -2,6 +2,52 @@
 
 This file records release-level behavior changes. Individual fixes and implementation details remain available through `git log`.
 
+## v0.5.0 — 质量门强化与一致性兜底（2026-08-17）
+
+5-Agent 并行审计识别了 P0/P1/P2/P3 共 18+ 项真实缺陷，16 个聚焦 commit 一一落地，每个 commit 都"先复现测试 → 最小实现"。
+
+### Added
+
+- **`PASS_SCORE_GOLDEN` / `GOLDEN_CHAPTER_COUNT` 常量**：前 N 章走黄金评分阈值，避免黄金章节落盘时被普通阈值拦下。
+- **writer prompt 6k 字硬上限**：`WRITER_PROMPT_BUDGET_CHARS` + 截断 warning，防止 token 爆炸拖垮 LLM 守约束率。
+- **`summarizer_metrics` / `memory_gaps` OrchestratorState 字段**：从源头声明，杜绝状态静默丢字段。
+- **`RECENT_SUMMARIES_INJECT_COUNT = 10`**：writer prompt 注入近期摘要从 5 提到 10，30 章后的回望更稳。
+- **plot_skeleton dual-format fallback**：`arc-form` 与 `volume-form` 双形态解析，254c724 残留不再造成静默丢大纲。
+- **`Character.status` / `died_in_chapter` 字段 + alembic 0004 迁移**：追踪已亡角色，阻断 dead-character-OOC 复活。
+- **RAG `cold_history` 召回**：长程记忆摘要进向量库，长篇一致性不再断在十几章后。
+- **lorebook aliases 扩源**：角色 `speech_quirks` + `aliases` 字段并入 lorebook aliases 列表，让口癖触发能召回角色卡。
+- **`talk_questions` API 暴露**：talk 模式不再"模式死端"，前端可消费。
+- **`cosine_similarity_with_warning`**：embedding 维度漂移触发 warning，不再静默失效。
+
+### Changed
+
+- **normalizer DIALOGUE_TAGS_PATTERN 扩词表 + alternation 修正**：补喊/喝/笑/喃等高频词；排序改为长词优先，避免短词抢先匹配造成"喊道/答道"漏识别。speaker 排除类防贪婪匹配吞掉替代首字符。
+- **`pull_setting` Pydantic ValidationError** 由 `log.warning` 改 `raise`：8 段卡空设定不再静默 fallback。
+
+### Fixed
+
+- **P0 NameError 阻断**：`PASS_SCORE_GOLDEN` 未定义导致黄金章节写崩。
+- **P0 prompt 专名泄漏**：7 处 HOOK_TYPES 例 + 1 处都市线 + 1 处标题示例 + 2 处 fallback 默认值（陆承 / 感债者）改为中性措辞。
+- **P0 覆盖已完成章节**：`save_chapter` 幂等保护 + `_overwrite` 逃生口。
+- **P1 normalizer 静默 fallback**：失败响亮化，issue 入栈并 escalate。
+- **P1 schema 静默丢字段**：`OrchestratorState` 声明 `summarizer_metrics` / `memory_gaps`。
+- **P1 outline placeholder 污染**：card/talk 模式空候选硬失败。
+- **P1 embedding 维度静默失效**：维度漂移 warning。
+- **P1 init_arc 单形态崩**：254c724 残留兼容。
+- **P1 writer prompt 守约束率塌方**：6k 字硬上限 + warning。
+- **P2 Pydantic raise** 防 8 段卡空。
+- **P2 talk 模式死端**：API 暴露 talk_questions。
+- **P2 已死复活 OOC**：Character.status + death keyword 规范。
+- **P2 长程一致性崩塌**：RAG cold_history 召回。
+- **P2 口癖漂移**：lorebook aliases 扩源。
+- **P3 normalizer 满篇"某某说/道"落盘**：dialogue tags 补全 + alternation 修正。
+
+### Tests
+
+- **15 个新测试文件，~95 个新测试**：覆盖每个 P0/P1/P2/P3 修复的真实链路。
+- **2 个老测试更新**：当旧断言锁定的是 bug（normalizer / Character.status），按 CLAUDE.md 规则改成断言正确行为并写明原因。
+- 全套基线：1483 backend behavior tests pass / 519 invariants pass / compileall clean / frontend build clean（12 个 baseline GBK 编码失败与改动无关）。
+
 ## Unreleased
 
 ### 战略审视 7 项 backlog 全部交付（2026-07-25 → 2026-07-26）
