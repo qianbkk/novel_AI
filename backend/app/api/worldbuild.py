@@ -196,6 +196,35 @@ def _load_arc_plans_from_engine(project_id: str) -> list:
         return []
 
 
+def _load_talk_questions_from_engine(project_id: str) -> list:
+    """P2-15（2026-08-17）：从 orchestrator_state.json 读 talk 模式引导性问题。
+
+    orchestrator.py:387 在 talk 模式下把引导性问题写到 state.talk_questions。
+    修复前：app/* 没有任何路由读取，前端永远看不到，talk 模式事实无意义。
+    修复后：与 _load_arc_plans_from_engine 同款 —— 从 orchestrator_state.json
+    读 disk 状态，失败/不存在 → 返 []，不抛。
+    """
+    try:
+        from pathlib import Path
+        import json
+        from ..models import NovelAIBinding
+        from ..database import SessionLocal
+        db = SessionLocal()
+        try:
+            binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
+            if not binding or not binding.novel_ai_dir:
+                return []
+            state_path = Path(binding.novel_ai_dir) / "output" / "orchestrator_state.json"
+            if not state_path.exists():
+                return []
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            return state.get("talk_questions", []) or []
+        finally:
+            db.close()
+    except Exception:
+        return []
+
+
 def _serialize_field(attr_name: str, row):
     """从 ORM row 抽单个 JSON 字段的值。row=None 时返回 None。"""
     if row is None:

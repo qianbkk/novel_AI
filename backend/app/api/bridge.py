@@ -267,6 +267,25 @@ def get_binding(project_id: str, request: Request, db: Session = Depends(get_db)
     }
 
 
+@router.get("/orchestrator-state/talk-questions")
+def get_talk_questions(project_id: str, request: Request, db: Session = Depends(get_db)):
+    """P2-15（2026-08-17）：暴露 talk 模式的引导性问题给前端。
+
+    之前 orchestrator 在 talk 模式下写 state.talk_questions 但全仓无消费端，
+    talk 模式事实无意义。本路由让前端 WorldviewTab / OutlineView 能拿到
+    待讨论问题，作者可在 UI 上回应 + 推进 outline。
+
+    Owner 校验：与既有路由一致（_current_user_or_401 + require_owned_project）。
+    """
+    _current_user_or_401(request)
+    project = db.get(Project, project_id)
+    if not project:
+        raise HTTPException(404, "project not found")
+    require_owned_project(db, project_id, get_current_user_optional(request))
+    from .worldbuild import _load_talk_questions_from_engine
+    return {"talk_questions": _load_talk_questions_from_engine(project_id)}
+
+
 @router.put("/binding", response_model=NovelAIBindingOut)
 def upsert_binding(project_id: str, payload: NovelAIBindingUpsert, request: Request, db: Session = Depends(get_db)):
     current_user = _current_user_or_401(request)
