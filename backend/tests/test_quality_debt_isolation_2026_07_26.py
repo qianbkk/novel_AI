@@ -91,10 +91,24 @@ def test_context_recent_events_clean_when_all_verified():
     assert ctx["recent_events"] == "第5章事件 | 第6章事件 | 第7章事件"
 
 
-def test_only_last_five_summaries_are_rendered():
-    """既有契约不能因为加标记而改变。"""
-    ctx = _ctx([{"chapter": i, "summary": f"e{i}"} for i in range(1, 9)])
-    assert ctx["recent_events"] == "e4 | e5 | e6 | e7 | e8"
+def test_recent_summaries_respect_inject_count():
+    """注入上限契约：超出 RECENT_SUMMARIES_INJECT_COUNT 时只取最新 N 条；低于上限时全部保留。
+
+    2026-08-08: RECENT_SUMMARIES_INJECT_COUNT 从 5 提升至 10（任务 task-03-memory-context），
+    测试随之更新为断言"按常量截断"行为，而非锁定旧的硬编码值 5。
+    这样若将来常量再调整，测试自动跟进，无需手工修数字。
+    """
+    from engine.memory.manager import RECENT_SUMMARIES_INJECT_COUNT
+
+    # 超过上限时：只保留最新 RECENT_SUMMARIES_INJECT_COUNT 条
+    n = RECENT_SUMMARIES_INJECT_COUNT + 5  # 构造明显超出的数量
+    ctx = _ctx([{"chapter": i, "summary": f"e{i}"} for i in range(1, n + 1)])
+    expected = " | ".join(f"e{i}" for i in range(n - RECENT_SUMMARIES_INJECT_COUNT + 1, n + 1))
+    assert ctx["recent_events"] == expected
+
+    # 低于上限时：全部保留（[-N:] 在列表短时不截断）
+    ctx2 = _ctx([{"chapter": i, "summary": f"e{i}"} for i in range(1, 9)])  # 8 条 < 10
+    assert ctx2["recent_events"] == " | ".join(f"e{i}" for i in range(1, 9))
 
 
 def test_marked_summary_reaches_writer_prompt():

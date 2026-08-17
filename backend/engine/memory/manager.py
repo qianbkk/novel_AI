@@ -45,7 +45,8 @@ _log = logging.getLogger("novel_ai.engine.memory.manager")
 STYLE_SWITCH_THRESHOLD = 20
 STYLE_UPDATE_INTERVAL  = 30
 INTERNAL_MIN_SCORE     = 7.5
-HOT_TO_COLD_THRESHOLD  = 20   # >20 summaries → push oldest 10 to cold
+HOT_TO_COLD_THRESHOLD        = 20   # >20 summaries → push oldest 10 to cold
+RECENT_SUMMARIES_INJECT_COUNT = 10  # writer prompt 注入的近期摘要条数（[-N:]）
 
 
 # ══════════════════════════════════════════════
@@ -477,7 +478,7 @@ def get_chapter_relevant_context(memory: dict, task: dict) -> dict:
     all_states = hot.get("character_states", {})
     # 全量传 character_states；不再按 main_characters 子集过滤。
     rel_states = dict(all_states)
-    recent = hot.get("recent_summaries", [])[-5:]
+    recent = hot.get("recent_summaries", [])[-RECENT_SUMMARIES_INJECT_COUNT:]
     recent_events = _format_recent_events(recent)
     ch_num = task.get("chapter_number", 0)
     forbidden = constraints.get("forbidden_constraints", [])
