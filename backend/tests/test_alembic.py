@@ -165,9 +165,12 @@ def test_alembic_upgrade_head_from_0002_existing_sqlite_db(tmp_path):
         fk_rows = conn.execute("PRAGMA foreign_key_list(world_settings)").fetchall()
         # 2026-08-17 修复（CI 暴露）：P2-12 新增 0004_characters_status 后 head 上移，
         # 断言"按当前 head 字符串匹配"，避免锁定旧 head；每次新增迁移只改此处一处。
+        # 用 alembic.config.Config 直读 alembic.ini，不走 env.py 的 context 副作用。
+        from alembic.config import Config as AlembicConfig
         from alembic.script import ScriptDirectory
-        from backend.alembic.env import config as alembic_config
-        script = ScriptDirectory.from_config(alembic_config())
+        alembic_ini = Path(__file__).resolve().parents[1] / "alembic.ini"
+        cfg = AlembicConfig(str(alembic_ini))
+        script = ScriptDirectory.from_config(cfg)
         current_head = script.get_current_head()
         assert version == current_head, (
             f"DB version {version} != 当前 alembic head {current_head};"
