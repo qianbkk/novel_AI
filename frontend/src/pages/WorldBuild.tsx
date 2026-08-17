@@ -6,6 +6,7 @@ import { RelationGraph } from "../components/RelationGraph";
 import { EmptyTab } from "../components/worldview/EmptyTab";
 import { FactionGraph } from "../components/worldview/FactionGraph";
 import { WorldviewTab } from "../components/worldview/WorldviewTab";
+import { LLMStatusBanner } from "../components/LLMStatusBanner";
 
 // 2026-07-25（修 P19 /simplify 极简）：groupMapByLevel 仅 1 处使用（地图 tab），
 // ponytail 极简原则 = 抽离需要 ≥ 2 个调用方。inline 在此。
@@ -75,6 +76,9 @@ export default function WorldBuild() {
   const [error, setError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
   const mountedRef = useRef(true);
+  // 2026-08-18：跟踪 LLM 健康状态；不可用时禁用「开始构建」按钮，
+  // 避免用户点了之后 30 秒才发现失败（用户报告 #3）。
+  const [llmReady, setLlmReady] = useState<boolean | null>(null);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -126,9 +130,24 @@ export default function WorldBuild() {
     return () => { cancelled = true; };
   }, [building]);
 
+  // 2026-08-18：探测 LLM 健康状态；不可用时禁用开始按钮
+  useEffect(() => {
+    let cancelled = false;
+    api.getProviderHealth()
+      .then((h) => { if (!cancelled) setLlmReady(h.can_run_llm); })
+      .catch(() => { if (!cancelled) setLlmReady(false); });
+    return () => { cancelled = true; };
+  }, []);
+
   async function handleStart() {
     if (!projectId) return;
     if (stages.length === 0) return;  // 安全护栏：FALLBACK_STAGES 应该非空，但万一未来被清空不要炸
+    // 2026-08-18：操作前预检 — LLM 不可用时直接拒绝 + 提示去配置，
+    // 而不是启动 SSE 流 30 秒后才失败。
+    if (llmReady === false) {
+      setError("LLM 未配置：点上方 banner 的「去配置供应商」完成 API key 设置后再回来启动。");
+      return;
+    }
     const firstStage = stages[0];
     setError(null);
     setBuilding(true);
@@ -253,6 +272,10 @@ export default function WorldBuild() {
 
       {error && <div className="banner banner-danger">{error}</div>}
 
+      {/* 2026-08-18：LLM 状态 banner — 进入页面立即显示，避免点了开始构建 30 秒才发现失败。
+          顺便用 onStateChange 回调把 llmReady 状态透传给「开始构建」按钮的禁用逻辑。 */}
+      <LLMStatusBanner />
+
       {project.status !== "ready" && (
         <div className="card">
           <h3 className="card__title">世界构建</h3>
@@ -261,7 +284,9 @@ export default function WorldBuild() {
               type="button"
               className="btn btn-primary"
               onClick={handleStart}
+              disabled={llmReady === false}
               aria-label="开始世界构建"
+              title={llmReady === false ? "LLM 未就绪，请先配置供应商" : ""}
             >
               ✨ 开始构建
             </button>

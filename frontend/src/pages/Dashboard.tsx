@@ -56,6 +56,66 @@ const MODULES = [
   { idx: "M06", title: "AI 治理", sub: "规则中心 · 文笔指纹", metric: "毒舌模式 + 去味" },
 ];
 
+// 2026-08-18（架构修复 #7）：
+// 把项目从"功能卡"改为"写作旅程"。小白用户进入 Dashboard 后
+// 看到的不再是「这个项目有多少章/多少字」，而是「我现在在哪一步、下一步是什么」。
+//
+// 5 步旅程对应用户实际操作链路：
+//   1. 创建项目（已创建项目必经过）
+//   2. 题材画像 + 主题（v1.0 Pre-Production）
+//   3. 世界构建（10 阶段）
+//   4. 大纲（弧级）
+//   5. 写章节（每章 + 上下文）
+//
+// 当前 step 从真实数据推断：project.status / outline 数量 / 章节数。
+// 不拉额外接口：用已加载的 chapterMap 推断「写章节」是否开始；
+// 题材画像+主题是否就绪暂用 project.status 兜底（status=ready 表明已完成世界构建；
+// 严格 v1.0 拆开后端需要补 endpoint，但那是另一任务范围）。
+function WritingJourney({ p, chs }: { p: Project; chs: ChapterListItem[] }) {
+  // 推断 5 步完成度
+  const steps: { key: string; label: string; icon: string }[] = [
+    { key: "created",  label: "创建", icon: "📝" },
+    { key: "preprod",  label: "题材+主题", icon: "🎭" },
+    { key: "world",    label: "世界观", icon: "🌍" },
+    { key: "outline",  label: "大纲", icon: "📜" },
+    { key: "chapters", label: "写章节", icon: "✍️" },
+  ];
+  // 1. 创建 — 项目存在 = done
+  // 2. 题材+主题 — 项目 status 已是 ready 时认为完成（更精细需要查 genre/theme endpoint；
+  //    这里保守先用 status；后续补 endpoint 后再细化）
+  // 3. 世界观 — project.status === "ready"
+  // 4. 大纲 — outline 数 > 0（前端无 outline 缓存，先用 hasOutline placeholder）
+  //    但 WorldBuild ready 后通常会 run bootstrap 落 arc_plans；
+  //    在前端加载大纲前粗略判断 = status===ready
+  // 5. 写章节 — chapters.length > 0
+  const hasWorld = p.status === "ready";
+  const hasChapters = chs.length > 0;
+
+  // 当前 step index（高亮）
+  let currentIdx = 1; // 默认在 preprod
+  if (hasWorld) currentIdx = 3;  // 大纲
+  if (hasChapters) currentIdx = 4; // 写章节
+  if (!hasWorld && !hasChapters) currentIdx = 1; // 还在 preprod
+
+  return (
+    <div className="writing-journey" aria-label="写作旅程进度">
+      {steps.map((s, i) => {
+        const done = i < currentIdx || (i === 0); // 创建永远 done
+        const current = i === currentIdx;
+        const cls = done ? "writing-journey__step writing-journey__step--done"
+                       : current ? "writing-journey__step writing-journey__step--current"
+                                 : "writing-journey__step writing-journey__step--pending";
+        return (
+          <div key={s.key} className={cls}>
+            <span className="writing-journey__icon">{done ? "✓" : s.icon}</span>
+            <span className="writing-journey__label">{s.label}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function ModuleCompass({ projects, chapterMap }: { projects: Project[]; chapterMap: Record<string, ChapterListItem[]> }) {
   const totalChapters = Object.values(chapterMap).reduce((a, c) => a + c.length, 0);
   const totalWords = Object.values(chapterMap)
@@ -190,6 +250,9 @@ export default function Dashboard() {
   // bulkBusy: 批量删除进行中（防双击重复发请求）。
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  // 2026-08-18：全量题材池（独立于筛选条件），让 genre chip 始终展示完整题材列表，
+  // 避免「筛了 genre1 之后就看不到 genre2 切回去」这种用户报告的逻辑漏洞。
+  const [availableGenres, setAvailableGenres] = useState<string[]>([]);
   const navigate = useNavigate();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const mountedRef = useRef(true);
@@ -197,10 +260,26 @@ export default function Dashboard() {
 
   useEffect(() => {
     mountedRef.current = true;
+    // 2026-08-18：Esc 键统一清除搜索 + 多选（最直观的「撤销」入口）
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Escape") return;
+      // 如果焦点在 input 内由 input 自身 onKeyDown 处理；这里处理 input 外的 Esc
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (selectedIds.size > 0) {
+        e.preventDefault();
+        clearSelection();
+      } else if (q || genre) {
+        e.preventDefault();
+        setQ(""); setGenre("");
+      }
+    }
+    window.addEventListener("keydown", onKey);
     return () => {
       mountedRef.current = false;
+      window.removeEventListener("keydown", onKey);
     };
-  }, []);
+  }, [selectedIds.size, q, genre]);
 
   useReveal(rootRef);
 
@@ -210,6 +289,25 @@ export default function Dashboard() {
       const ps = await api.listProjects({ q, genre });
       if (!mountedRef.current) return;
       setProjects(ps);
+      // 2026-08-18 修复（用户报告「筛选逻辑漏洞百出」）：
+      // 同时拉一次 "全部项目"（不带 q/genre）来填充"题材池"。
+      // 否则当 genre 切到 X 后，前端 chip 列表只显示 X，
+      // 用户再也点不回 Y。素材池独立于筛选，互不干扰。
+      try {
+        const allPs = await api.listProjects({});
+        if (mountedRef.current) {
+          setAvailableGenres(
+            Array.from(new Set(allPs.map((p) => p.genre).filter(Boolean))).sort()
+          );
+        }
+      } catch {
+        // 拉全量失败 → fallback 到当前结果里的题材（保守但可用）
+        if (mountedRef.current) {
+          setAvailableGenres(
+            Array.from(new Set(ps.map((p) => p.genre).filter(Boolean))).sort()
+          );
+        }
+      }
       // 审计 #2（2026-07-22）：串行 + 4 并发限制，避免全量并发导致
       // 2026-07-25 接入 client.withConcurrency 替换手写 chunk 循环（4 并发）。
       // helper 是本 commit (ad9d8f2) 为收编这块而抽的；现在实际接入。
@@ -270,6 +368,15 @@ export default function Dashboard() {
       else next.add(id);
       return next;
     });
+  }
+
+  // 2026-08-18：全选 / 反选当前可见项目（保持 UI 整洁 + 批量操作高效）
+  function selectAllVisible() {
+    if (!projects) return;
+    setSelectedIds(new Set(projects.map((p) => p.id)));
+  }
+  function clearSelection() {
+    setSelectedIds(new Set());
   }
 
   async function bulkDeleteSelected() {
@@ -359,37 +466,93 @@ export default function Dashboard() {
       )}
 
       {/* 搜索 + 筛选区 */}
-      <div className="dashboard-toolbar" style={{ display: "flex", gap: 12, alignItems: "center", margin: "16px 0" }}>
-        <input
-          type="text"
-          placeholder="搜索项目名 / 主角名…"
-          value={q}
-          onChange={(e) => setQ(e.target.value)}
-          className="dashboard-search-input"
-        />
-        <div className="dashboard-genre-chips">
+      <div className="dashboard-toolbar" style={{ display: "flex", gap: 12, alignItems: "center", margin: "16px 0", flexWrap: "wrap" }}>
+        <div style={{ position: "relative", flex: "1 1 240px", maxWidth: 360 }}>
+          <input
+            type="text"
+            placeholder="搜索项目名 / 主角名…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Escape" && q) {
+                e.preventDefault();
+                setQ("");
+              }
+            }}
+            className="dashboard-search-input"
+            style={{ width: "100%", paddingRight: q ? 32 : 12 }}
+            aria-label="搜索项目"
+          />
+          {q && (
+            <button
+              type="button"
+              onClick={() => setQ("")}
+              aria-label="清除搜索"
+              title="清除搜索（Esc）"
+              style={{
+                position: "absolute",
+                right: 6,
+                top: "50%",
+                transform: "translateY(-50%)",
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+                fontSize: 16,
+                color: "var(--text-muted)",
+                padding: 4,
+                lineHeight: 1,
+              }}
+            >
+              ×
+            </button>
+          )}
+        </div>
+        <div className="dashboard-genre-chips" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          {/* 2026-08-18 修复：全部 chip 总是显示，避免切 genre 后失去回退入口 */}
           <button
             className={`genre-chip ${!genre ? "genre-chip--active" : ""}`}
             onClick={() => setGenre("")}
+            aria-pressed={!genre}
+            title="显示所有题材"
           >
             全部
           </button>
-          {Array.from(new Set((projects || []).map((p) => p.genre).filter(Boolean))).map((g) => (
+          {/* 2026-08-18 修复：chip 列表展示用户**已配置**的所有题材，
+             不能用 (projects || []) — 那只能看到当前筛选命中的题材，
+             一旦切到 genre1 就再也点不回去 genre2（用户报告的逻辑漏洞）。
+             这里改成读一个独立的"全量题材池"，避免 client side 漏列。 */}
+          {availableGenres.map((g) => (
             <button
               key={g}
               className={`genre-chip ${genre === g ? "genre-chip--active" : ""}`}
-              onClick={() => setGenre(g)}
+              onClick={() => setGenre(genre === g ? "" : g)}
+              aria-pressed={genre === g}
+              title={genre === g ? `点击取消「${g}」筛选` : `只显示「${g}」题材的项目`}
             >
               {g}
             </button>
           ))}
         </div>
+        {(q || genre) && (
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => { setQ(""); setGenre(""); }}
+            aria-label="清除所有筛选"
+          >
+            清除筛选
+          </button>
+        )}
       </div>
 
       {/* 2026-08-08 任务 #12：选中条（多选 + 批量操作）。
           selectedIds 非空时才显示，避免每页都有一条空 toolbar 干扰视觉。
-          设计：放工具栏右侧（不影响搜索输入框），半透明背景 + 边框提示"现在是批量模式"。 */}
-      {selectedIds.size > 0 && (
+          设计：放工具栏右侧（不影响搜索输入框），半透明背景 + 边框提示"现在是批量模式"。
+          2026-08-18 修复（用户反馈「批量管理逻辑粗糙」）：
+          - 显示 已选 N/M（M=当前可见项目数），用户能直观看到「全选当前」的目标数
+          - 加「全选当前」「清除选中」两个快捷按钮 + Esc 键清除选中
+          - 已选数 = 当前可见数时「全选当前」禁用，已选数 = 0 时显示一个轻量的提示 */}
+      {projects && projects.length > 0 && (
         <div
           className="bulk-toolbar"
           role="region"
@@ -400,29 +563,49 @@ export default function Dashboard() {
             gap: 10,
             padding: "8px 14px",
             margin: "8px 0 16px",
-            background: "var(--surface-soft, #f5f1ea)",
-            border: "1px solid var(--accent, #6B8AFD)",
+            background: selectedIds.size > 0 ? "var(--surface-soft, #f5f1ea)" : "transparent",
+            border: selectedIds.size > 0 ? "1px solid var(--accent, #6B8AFD)" : "1px dashed var(--border-2)",
             borderRadius: 10,
           }}
         >
-          <span style={{ fontSize: 13, color: "var(--ink, #2b2b2b)" }}>
-            已选 <strong>{selectedIds.size}</strong> 项
-          </span>
-          <button
-            type="button"
-            className="btn"
-            onClick={() => setSelectedIds(new Set())}
-            disabled={bulkBusy}
-            aria-label="取消多选"
-          >
-            取消选择
-          </button>
+          {selectedIds.size > 0 ? (
+            <>
+              <span style={{ fontSize: 13, color: "var(--ink, #2b2b2b)" }}>
+                已选 <strong style={{ color: "var(--accent, #6B8AFD)" }}>{selectedIds.size}</strong>
+                <span style={{ color: "var(--text-muted, #9098B0)" }}> / {projects.length}</span> 项
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm"
+                onClick={clearSelection}
+                disabled={bulkBusy}
+                aria-label="取消多选（Esc）"
+                title="取消多选（Esc）"
+              >
+                取消选择
+              </button>
+            </>
+          ) : (
+            <>
+              <span style={{ fontSize: 12, color: "var(--text-muted, #9098B0)" }}>
+                💡 勾选项目卡片可批量操作（置顶 / 删除）
+              </span>
+              <button
+                type="button"
+                className="btn btn-sm btn-ghost"
+                onClick={selectAllVisible}
+                aria-label="全选当前可见项目"
+              >
+                全选当前
+              </button>
+            </>
+          )}
           <div style={{ flex: 1 }} />
           <button
             type="button"
             className="btn"
             onClick={() => pinSelected(true)}
-            disabled={bulkBusy}
+            disabled={bulkBusy || selectedIds.size === 0}
             aria-label="置顶选中项"
           >
             📌 置顶选中
@@ -431,7 +614,7 @@ export default function Dashboard() {
             type="button"
             className="btn"
             onClick={() => pinSelected(false)}
-            disabled={bulkBusy}
+            disabled={bulkBusy || selectedIds.size === 0}
             aria-label="取消置顶选中项"
           >
             📍 取消置顶
@@ -440,7 +623,7 @@ export default function Dashboard() {
             type="button"
             className="btn btn-danger"
             onClick={bulkDeleteSelected}
-            disabled={bulkBusy}
+            disabled={bulkBusy || selectedIds.size === 0}
             aria-label="删除选中项"
           >
             🗑 删除选中
@@ -523,11 +706,13 @@ export default function Dashboard() {
                 className={`project-card reveal reveal--delay-${Math.min(5, i + 1)}`}
                 onClick={() =>
                   navigate(
+                    // 2026-08-18（架构修复 #7）：点击跳「当前所在步骤」对应页，
+                    // 让小白用户点开项目卡就到该做的下一步。
                     p.active_run_command
                       ? `/projects/${p.id}/bridge`  // 2026-07-24：跑中跳 BridgeConsole 看 SSE
                       : p.status === "ready"
-                      ? `/projects/${p.id}/bridge`
-                      : `/projects/${p.id}/worldbuild`,
+                      ? `/projects/${p.id}/outline`
+                      : `/projects/${p.id}/theme`,
                   )
                 }
               >
@@ -597,6 +782,13 @@ export default function Dashboard() {
                     ? ` · 更新 ${new Date(p.updated_at).toLocaleString("zh-CN", { hour12: false })}`
                     : ""}
                 </div>
+
+                {/* 2026-08-18：写作旅程 stepper（架构修复 #7）。
+                    用户报告「前端布局不合理，要让小白打开就知道项目内容/如何用」。
+                    把"功能清单"改为"用户旅程" — 5 步从创建到写章节，
+                    当前所在步骤高亮（蓝色），已完成步骤打勾（绿色），
+                    未开始步骤灰显。点击项目卡即跳到当前步骤对应页面。 */}
+                <WritingJourney p={p} chs={chs} />
 
                 {/* 项目产出概览。
                     这里原本是三行标着 L1/L2/L3 的"三道记忆防线"，分母还是

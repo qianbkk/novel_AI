@@ -17,6 +17,7 @@ import ThemeOpening from "./pages/ThemeOpening";  // v1.0 Stage I: 主题与开�
 import { LoginDialog } from "./components/LoginDialog";
 import { ErrorBoundary } from "./components/ErrorBoundary";  // 2026-07-25: 路由级错误兜底
 import { api, getStoredToken } from "./api/client";
+import { useBackendHealth } from "./hooks/useBackendHealth";
 
 const GLOBAL_LINKS = [
   { to: "/", label: "项目" },
@@ -29,6 +30,10 @@ export default function App() {
   // Detect "in a project" route for sub-nav
   const projectMatch = location.pathname.match(/^\/projects\/([^/]+)/);
   const projectId = projectMatch?.[1];
+
+  // 2026-08-18：后端实时健康（每 5s 探测 /health）
+  // sidebar footer 展示，让用户随时知道后端在不在
+  const backend = useBackendHealth();
 
   // ─── 登录态管理 ───
   // 优先从 localStorage 恢复；没有 token 时显示"匿名"。
@@ -195,8 +200,10 @@ export default function App() {
         )}
 
         <div className="sidebar-footer">
-          <div>backend :8132</div>
-          <div>frontend :5293</div>
+          {/* 2026-08-18：后端实时状态灯（用户报告 #6：WorldBuild 看不到，
+              怀疑后端没起来；现在随时看得到）。三态：检测中/运行中/未响应。 */}
+          <BackendStatusBadge state={backend} />
+          <div style={{ fontSize: 11, opacity: 0.65 }}>frontend :5293</div>
         </div>
       </aside>
 
@@ -235,6 +242,114 @@ export default function App() {
         onClose={() => setAuthDialogOpen(false)}
         onAuthed={(email) => setAuthEmail(email)}
       />
+    </div>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════
+// BackendStatusBadge — sidebar 实时后端健康灯（2026-08-18）
+// 设计动机：用户报告 #6 — WorldBuild 看不到内容，怀疑后端没起来。
+// 之前没有任何后端状态可见性，前端只能通过请求失败推测。
+//
+// 三态：
+//   checking：黄色 · 旋转点 · "正在检测…"
+//   up：绿色实心点 · "backend :8132 · ok (47ms)"
+//   down：红色实心点 · 错误摘要 + 「重启 dev.bat」提示
+//
+// 不做启动/停止按钮：CLAUDE.md「失败要响亮，不替用户决策」；
+// dev.bat 是用户本地的 bat，浏览器无权调；只给可点击的本地 dev.bat 提示。
+// ════════════════════════════════════════════════════════════════
+
+import type { BackendState } from "./hooks/useBackendHealth";
+
+function BackendStatusBadge({ state }: { state: BackendState }) {
+  const [expanded, setExpanded] = useState(false);
+
+  if (state.kind === "checking") {
+    return (
+      <div
+        className="backend-status backend-status--checking"
+        title="正在探测后端 /health…"
+        style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11 }}
+      >
+        <span style={{
+          width: 8, height: 8, borderRadius: "50%",
+          background: "var(--color-warn, #E0A55F)",
+          display: "inline-block",
+          animation: "pulse 1.4s ease-in-out infinite",
+        }} />
+        backend :8132 · 检测中…
+      </div>
+    );
+  }
+
+  if (state.kind === "up") {
+    const lat = state.latencyMs != null ? ` (${state.latencyMs}ms)` : "";
+    return (
+      <div
+        className="backend-status backend-status--up"
+        title={`后端 /health 200${lat}`}
+        style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "var(--color-moss, #6FBC8A)" }}
+      >
+        <span style={{
+          width: 8, height: 8, borderRadius: "50%",
+          background: "var(--color-moss, #6FBC8A)",
+          display: "inline-block",
+        }} />
+        backend :8132 · ok{lat}
+      </div>
+    );
+  }
+
+  // down
+  return (
+    <div
+      className="backend-status backend-status--down"
+      style={{ fontSize: 11, color: "var(--color-stamp, #E06C5F)" }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{
+          width: 8, height: 8, borderRadius: "50%",
+          background: "var(--color-stamp, #E06C5F)",
+          display: "inline-block",
+        }} />
+        backend :8132 · 未响应
+        <button
+          type="button"
+          onClick={() => setExpanded((v) => !v)}
+          aria-label={expanded ? "收起错误详情" : "展开错误详情"}
+          style={{
+            marginLeft: "auto",
+            background: "transparent",
+            border: "none",
+            color: "inherit",
+            cursor: "pointer",
+            fontSize: 10,
+            opacity: 0.7,
+          }}
+        >
+          {expanded ? "▴" : "▾"}
+        </button>
+      </div>
+      {expanded && (
+        <div
+          style={{
+            marginTop: 6,
+            padding: "6px 8px",
+            background: "var(--color-stamp-soft, rgba(224,108,95,0.12))",
+            borderRadius: 4,
+            fontFamily: "var(--font-mono)",
+            fontSize: 10.5,
+            lineHeight: 1.45,
+            wordBreak: "break-all",
+          }}
+        >
+          <div style={{ marginBottom: 4 }}>{state.error}</div>
+          <div style={{ opacity: 0.75, fontStyle: "italic" }}>
+            在项目根目录执行 <code>dev.bat start-all</code> 启动后端
+          </div>
+        </div>
+      )}
     </div>
   );
 }

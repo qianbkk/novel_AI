@@ -22,6 +22,36 @@ export interface Project {
   pin_order?: number;
 }
 
+// 2026-08-18：LLM provider 健康检查响应（用户报告 #3 + #5：生成失败前无可知性）
+export interface ProviderHealth {
+  mode: "mock" | "live";
+  can_run_llm: boolean;
+  message: string;
+  active_provider: string | null;
+  active_model: string | null;
+  active_api_base?: string | null;
+  roles: Record<string, {
+    provider: string;
+    model: string | null;
+    ok: boolean;
+    reason: string | null;
+  }>;
+  db_providers: Array<{
+    id: string;
+    name: string;
+    provider_type: string;
+    default_model: string | null;
+    has_api_key: boolean;
+    api_key_suffix: string | null;
+  }>;
+}
+
+export interface ProviderTestResult {
+  ok: boolean;
+  status: number;
+  message: string;
+}
+
 export interface JobStatus {
   id: string;
   project_id: string;

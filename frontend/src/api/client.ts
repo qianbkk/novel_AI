@@ -13,6 +13,8 @@ import type {
   ChapterCandidateDetail,
   Provider,
   ProviderCreate,
+  ProviderHealth,
+  ProviderTestResult,
   RoleAssignment,
   BridgeRun,
   BridgeStatus,
@@ -367,6 +369,17 @@ export const api = {
   deleteProvider: (id: string) =>
     request<{ ok: boolean }>(`/providers/${id}`, {
       method: "DELETE",
+    }),
+
+  // 2026-08-18：LLM provider 健康检查（用户报告 #3 + #5 的架构修复）
+  // 进入「开始构建」「生成大纲」等重资源操作前先调一次，
+  // 不可用时直接给引导而不是让用户等 30 秒才看到失败。
+  getProviderHealth: () => request<ProviderHealth>("/providers/health"),
+
+  // 单个 provider 联通测试：点「立即测试」按钮触发
+  testProvider: (id: string) =>
+    request<ProviderTestResult>(`/providers/${id}/test`, {
+      method: "POST",
     }),
 
   listRoleAssignments: () => request<RoleAssignment[]>("/role-assignments"),

@@ -289,6 +289,11 @@ set "CMD_LINE=%~4"
 >> "%LAUNCHER_PATH%" echo ^)
 >> "%LAUNCHER_PATH%" echo chcp 65001 ^>nul
 >> "%LAUNCHER_PATH%" echo cd /d "%TARGET_DIR%"
+>> "%LAUNCHER_PATH%" echo REM 2026-08-18 修复（Windows 中文编码乱码）：python 在 Windows 默认按 CP_ACP 写 stdout/stderr，
+>> "%LAUNCHER_PATH%" echo REM 这会让 launcher 日志里的中文 log 变成 GBK 字节，dev.bat tail 用 UTF-8 读出来就是乱码。
+>> "%LAUNCHER_PATH%" echo REM 设 PYTHONIOENCODING=utf-8 让 python 把中文字符按 UTF-8 写出，与 dev.bat 顶部 chcp 65001 一致。
+>> "%LAUNCHER_PATH%" echo set "PYTHONIOENCODING=utf-8"
+>> "%LAUNCHER_PATH%" echo set "PYTHONUNBUFFERED=1"
 if "%ADD_BLANK%"=="1" >> "%LAUNCHER_PATH%" echo echo. ^>^> "%LOG_PATH%"
 >> "%LAUNCHER_PATH%" echo echo ==== 启动于 %DATE% %TIME% ==== ^>^> "%LOG_PATH%"
 >> "%LAUNCHER_PATH%" echo %CMD_LINE% ^>^> "%LOG_PATH%" 2^>^&1

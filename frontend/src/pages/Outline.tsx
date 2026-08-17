@@ -6,6 +6,7 @@ import type {
 } from "../types";
 import { useToast } from "../components/Toast";
 import { Dialog } from "../components/Dialog";
+import { LLMStatusBanner } from "../components/LLMStatusBanner";
 
 /**
  * Outline 页 — 弧级大纲管理
@@ -63,6 +64,17 @@ export default function Outline() {
     if (!projectId) return;
     if (!genForm.arc_name.trim() || !genForm.arc_goal.trim()) {
       toast.warn("请填写弧名称和弧目标");
+      return;
+    }
+    // 2026-08-18：操作前预检 — LLM 不可用时直接拒绝 + 提示去配置
+    try {
+      const h = await api.getProviderHealth();
+      if (!h.can_run_llm) {
+        toast.error("LLM 未配置", "点页面顶部 banner 的「去配置供应商」完成 API key 设置后再来生成大纲");
+        return;
+      }
+    } catch {
+      toast.error("无法连接后端", "请检查后端是否运行（dev.bat start-all）");
       return;
     }
     setGenerating(genForm.arc_id);
@@ -134,6 +146,10 @@ export default function Outline() {
           </button>
         </div>
       </div>
+
+      {/* 2026-08-18：进入大纲页立刻显示 LLM 状态，
+          用户报告 #5：点生成大纲才发现 LLM 没配置；现在进入页面就知道。 */}
+      <LLMStatusBanner />
 
       {loading && <div className="loading-text">加载中…</div>}
 

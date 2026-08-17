@@ -20,6 +20,7 @@ import type {
   OpeningDesign, OpeningDesignIn,
   ResearchNotes, ResearchNotesIn,
 } from "../types";
+import { LLMStatusBanner } from "../components/LLMStatusBanner";
 
 type Tab = "genre" | "theme" | "opening" | "research";
 
@@ -44,6 +45,10 @@ export default function ThemeOpening() {
       <p style={{ color: "var(--text-secondary)", marginBottom: 24, fontSize: 14 }}>
         v1.0 前期工程：4 个结构化产物。前期做足 → 写作阶段省心。
       </p>
+
+      {/* 2026-08-18：4 个 tab 都需要 LLM，统一显示状态 banner。
+          用户报告 #3 架构修复：进入页面就知道 LLM 是否就绪。 */}
+      <LLMStatusBanner />
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16, borderBottom: "1px solid var(--border)" }}>
         {(["genre", "theme", "opening", "research"] as Tab[]).map((t) => (

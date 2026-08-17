@@ -790,6 +790,9 @@ label {
   margin-bottom: var(--space-1);
   line-height: var(--leading-snug);
   color: var(--color-fg-1);
+  /* 2026-08-18 修复：左上角复选框 + 置顶按钮占 60px 宽；title 必须留出空间，
+     否则与控件重叠（用户报告「按钮与项目名重叠」）。 */
+  padding-left: 60px;
 }
 .project-card__meta {
   color: var(--color-fg-3);
@@ -808,6 +811,50 @@ label {
 }
 
 /* —— 4.2 进度条 · 墨水笔触 —— */
+
+/* 2026-08-18：写作旅程 stepper — 项目卡片显示用户当前所在步骤 */
+.writing-journey {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+  margin: var(--space-3) 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--color-bg-0);
+  border: 1px solid var(--color-border-1);
+  border-radius: var(--radius-md);
+  font-size: var(--text-xs);
+}
+.writing-journey__step {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 2px;
+  border-radius: var(--radius-xs);
+  position: relative;
+}
+.writing-journey__step--done {
+  color: var(--color-moss);
+}
+.writing-journey__step--current {
+  color: var(--color-accent-strong);
+  background: var(--color-accent-soft);
+  font-weight: var(--weight-semibold);
+}
+.writing-journey__step--pending {
+  color: var(--color-fg-4);
+  opacity: 0.7;
+}
+.writing-journey__icon {
+  font-size: 14px;
+  line-height: 1;
+}
+.writing-journey__label {
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-align: center;
+  line-height: 1.2;
+}
 .progress-track {
   position: relative;
   height: 6px;

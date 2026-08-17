@@ -162,6 +162,27 @@ export default function BridgeConsole() {
 
   async function runBridge(label: string, command: string, args: string[]) {
     if (!projectId) return;
+    // 2026-08-18：操作前预检 — 凡是会调 LLM 的命令都先确认 provider 就绪。
+    // Bridge 命令全集里只有这些会调 LLM：planner / bootstrap / run / run_draft
+    // / dashboard / fingerprint。其余（push / pull / export / init_arc / scan）
+    // 是本地或子进程纯跑，不依赖 LLM。
+    const llmCommands = new Set(["planner", "bootstrap", "run", "run_draft", "dashboard", "fingerprint"]);
+    if (llmCommands.has(command)) {
+      try {
+        const h = await api.getProviderHealth();
+        if (!h.can_run_llm) {
+          appendLogLine("err",
+            `LLM 未就绪 — 命令「${command}」需要调用 LLM，当前 ${h.active_provider ?? "未配置"} 无可用 key。` +
+            `去「模型供应商」配置后再试。`, "err");
+          setError("LLM 未配置：点侧栏底部「模型供应商」配置 API key");
+          return;
+        }
+      } catch (e) {
+        appendLogLine("err", `无法连接后端：${String(e)}`, "err");
+        setError(String(e));
+        return;
+      }
+    }
     eventSourceRef.current?.close();
     setRunning(true);
     setActiveLabel(label);
