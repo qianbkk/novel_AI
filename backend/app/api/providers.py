@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from ..database import get_db, SessionLocal
@@ -6,6 +6,7 @@ from ..models import Provider, RoleAssignment
 from ..schemas import ProviderCreate, ProviderOut
 from ..security import encrypt_api_key, decrypt_api_key, key_suffix
 from ..config import settings
+from ..auth_scope import is_production_mode
 
 
 # 2026-08-18：/providers/health 端点里要查 DB provider 列表，
@@ -15,15 +16,39 @@ def SessionLocal_for_health() -> Session:
     return SessionLocal()
 
 
-router = APIRouter(prefix="/providers", tags=["providers"])
+# 2026-08-18（架构审查 #11 发现的 CLAUDE.md 红线违规修复）：
+# 之前 providers.py / role_assignments.py 在 prod 模式下不强制鉴权 —
+# 未登录用户能 list/create/update/delete 全局 LLM Provider + RoleAssignment，
+# 等于能改所有项目的 LLM 路由和 API key。这是 CLAUDE.md「project-scoped API
+# 必须做 ownership 校验；生产模式不得退化为匿名访问」的直接违反。
+#
+# Provider / RoleAssignment 不是 project-scoped（无 project_id），
+# CLAUDE.md 措辞更广 —"生产模式不得退化为匿名访问"。
+# 修法：所有读写端点加 _require_admin_or_dev Depends，
+# prod 模式未登录 → 401，登录即可（per-user 隔离留待后续任务）。
+#
+# dev 模式（默认）：保持现状，任意请求均可读写，方便本地原型。
+# 旧注释把 "prod 模式仍由 NOVEL_PRODUCTION 启动时 fail-fast 兜底" 当作
+# 跨用户访问的"已知妥协" — 这是漏的：fail-fast 只验证配置，不验证请求本身。
+def _require_admin_or_dev(request: Request):
+    """prod 模式下必须登录，否则 401。dev 模式放行（本地原型）。"""
+    from ..auth import get_current_user_optional
+    user = get_current_user_optional(request)
+    if user is None and is_production_mode():
+        raise HTTPException(401, "authentication required")
+    return user
+
+
+router = APIRouter(prefix="/providers", tags=["providers"],
+                   dependencies=[Depends(_require_admin_or_dev)])
+
 
 # 审计 #9 (2026-07-20)：本路由族 Phase 1 是"全局共享配置"—— Provider /
 # RoleAssignment 两张表无 owner 字段。设计原因：15 个写作角色需要
 # 可复用同一组 Provider 配置；本地原型阶段共享是预期行为。
 #   - dev 模式（默认）：任意请求均可 list/create/update/delete；
-#   - prod 模式（NOVEL_PRODUCTION=1）：仍由 NOVEL_PRODUCTION 启动时的
-#     fail-fast 兜底（强制 JWT_SECRET / MASTER_KEY 等），跨用户访问
-#     当前没有 owner 校验——属于已知设计现状，README 已声明"原型阶段"。
+#   - prod 模式（NOVEL_PRODUCTION=1）：见 _require_admin_or_dev，
+#     必须登录才能读写（避免匿名改全局 LLM 路由 + API key）。
 # 如未来要做 per-user Provider 隔离：加 provider_owners(provider_id, user_id)
 # 关联表 + 在 list / update 路径挂 owner_filter，CLAUDE.md 禁止未经
 # 任务授权增加表，故本次范围仅做注释。

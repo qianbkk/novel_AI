@@ -465,7 +465,9 @@ async def list_chapter_candidates(
                         c["created_at"] = e.get("created_at")
                         break
         except Exception:
-            pass
+            # 2026-08-18 修复（CLAUDE.md「失败要响亮」）：之前 pass 吞掉 —
+            # rewrite_candidates.json 损坏/权限错误都看不到，前端列表就少 instruction_preview。
+            log.exception("chapters: rewrite_candidates.json 读取失败（候选列表少 instruction_preview）")
 
     return {"chapter_no": chapter_no, "candidates": candidates}
 

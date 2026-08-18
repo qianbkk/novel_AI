@@ -32,6 +32,9 @@ def load_anchors(novel_id: str) -> dict:
             return {}
         return data
     except Exception:
+        # 2026-08-18 修复（CLAUDE.md「失败要响亮」）：之前 return {} 完全无声
+        # — 磁盘损坏 / 权限错误 / 编码错误都看不到。
+        _log.exception("load_anchors 读取失败（将视作无 anchors）: %s", target)
         return {}
 
 

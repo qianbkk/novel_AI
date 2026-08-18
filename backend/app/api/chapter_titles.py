@@ -79,6 +79,18 @@ def regenerate_titles(
         project_id, payload.limit, payload.only_missing, payload.chapter_nos, payload.sample,
     )
 
+    # 2026-08-18（架构审查 #11 修复）：操作前预检 — LLM 不可用时直接 400 拒绝，
+    # 避免循环 N 章 × 重试 4 次 × sleep 退避才发现配置缺失（用户白白等几分钟）。
+    from ..config import settings as _cfg
+    from ..llm_router import resolve_provider, ROLE_DEFAULTS
+    provider_cfg = resolve_provider(ROLE_DEFAULTS["creative_detail"])
+    if not provider_cfg:
+        if _cfg.llm_provider != "mock":
+            raise HTTPException(
+                400,
+                "LLM 未配置：无法生成标题。点前端「模型供应商」配置 API key 后重试。",
+            )
+
     q = db.query(Chapter).filter_by(project_id=project_id)
     if payload.chapter_nos:
         q = q.filter(Chapter.chapter_no.in_(payload.chapter_nos))

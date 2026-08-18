@@ -106,6 +106,8 @@ def _load_setting_summary(novel_ai_dir: str) -> dict:
             "key_characters": d.get("key_characters") or [],
         }
     except Exception:
+        # 2026-08-18 修复（CLAUDE.md「失败要响亮」）：之前 return {} 完全无声。
+        log.exception("chapter_rewrite: setting 读取失败（将用空 setting）")
         return {}
 
 

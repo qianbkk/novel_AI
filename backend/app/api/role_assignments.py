@@ -1,18 +1,33 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
 from ..bridge.role_registry import ROLE_KEYS, ROLE_REGISTRY
 from ..database import get_db
 from ..models import Provider, RoleAssignment
 from ..schemas import RoleAssignmentOut, RoleAssignmentUpdate
+from ..auth_scope import is_production_mode
 
-router = APIRouter(prefix="/role-assignments", tags=["role-assignments"])
+
+# 2026-08-18（架构审查 #11 修复）：见 backend/app/api/providers.py 同名 helper 注释。
+# provider 路由已加 _require_admin_or_dev，本路由族同样适用 — RoleAssignment
+# 能改全局 LLM 路由，prod 模式必须登录。
+def _require_admin_or_dev(request: Request):
+    from ..auth import get_current_user_optional
+    user = get_current_user_optional(request)
+    if user is None and is_production_mode():
+        raise HTTPException(401, "authentication required")
+    return user
+
+
+router = APIRouter(prefix="/role-assignments", tags=["role-assignments"],
+                   dependencies=[Depends(_require_admin_or_dev)])
 
 # 审计 #9 (2026-07-20)：RoleAssignment 决定"某个 Agent 角色用哪个
 # Provider"，是全局共享配置。15 个角色通常共用 1-2 个 Provider 账号，
 # 没有"per-user 隔离"的合理动机。Phase 1 不带 owner 字段是设计现状。
 #   - dev 模式：seed_role_assignments 启动时种入 15 行；任意请求可改；
-#   - prod 模式：仍由 NOVEL_PRODUCTION 启动校验兜底。
+#   - prod 模式：见 _require_admin_or_dev — 必须登录才能读写，
+#     防止匿名改全局 LLM 路由。
 # 跨用户可见/可写是已知妥协。如未来要 per-user：加 user_role_overrides
 # 表（user_id, role_key, provider_id, model_override），不在本次范围。
 

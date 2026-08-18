@@ -9,8 +9,11 @@ v3：写入前 validate against backend/schema/setting_package.schema.json
 from __future__ import annotations
 
 import json
+import logging
 import sys
 from pathlib import Path
+
+_log = logging.getLogger("novel_ai.engine.agents.planner")
 
 # 把 backend 加进 path 以便 import app.schema_validator
 _BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -45,6 +48,8 @@ def _load_novel_config() -> dict:
         with open(p, encoding="utf-8") as f:
             return json.load(f)
     except Exception:
+        # 2026-08-18 修复（CLAUDE.md「失败要响亮」）：之前 return {} 完全无声。
+        _log.exception("planner._load_novel_config 读取失败: %s", p)
         return {}
 
 

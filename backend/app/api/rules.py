@@ -270,6 +270,17 @@ def post_process(
     if not text:
         raise HTTPException(400, f"chapter {chapter_no} has no content")
 
+    # 2026-08-18（架构审查 #11 修复）：操作前预检 — post-process 调 LLM，
+    # LLM 不可用时直接 400 拒绝，避免后端跑 30 秒才告诉用户"没配 key"。
+    from ..config import settings as _cfg
+    from ..llm_router import resolve_provider, ROLE_DEFAULTS
+    _provider_cfg = resolve_provider(ROLE_DEFAULTS["creative_detail"])
+    if not _provider_cfg and _cfg.llm_provider != "mock":
+        raise HTTPException(
+            400,
+            "LLM 未配置：无法执行后处理。点前端「模型供应商」配置 API key 后重试。",
+        )
+
     # 取项目规则
     cfg = _ensure_config(db, project_id)
     style = payload.style or cfg.style

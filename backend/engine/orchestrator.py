@@ -217,7 +217,10 @@ def save_chapter(novel_id: str, ch_num: int, text: str, meta: dict) -> None:
         if clean_body and clean_body.strip():
             text = clean_body
     except Exception:
-        pass  # 解析失败时保留原 text，下游 import 阶段兜底
+        # 2026-08-18 修复（CLAUDE.md「失败要响亮」）：之前 pass 吞掉 —
+        # extract_llm_response_body 解析失败意味着章节正文可能带 LLM JSON
+        # 包装，没声音就只能等下游 import 阶段再剥（重复工作 + 静默）。
+        _log.exception("save_chapter: extract_llm_response_body 失败（章节正文可能带 JSON 包装）")
 
     with open(chapter_file, "w", encoding="utf-8") as f:
         f.write(text)
@@ -751,7 +754,9 @@ def node_write_pipeline(state: OrchestratorState) -> OrchestratorState:
             if _t and _t != "未命名章节":
                 draft_title = _t
         except Exception:
-            pass
+            # 2026-08-18 修复（CLAUDE.md「失败要响亮」）：同 save_chapter —
+            # extract_llm_response_body 失败要 log 让用户看到根因。
+            _log.exception("save_chapter draft: extract_llm_response_body 失败")
 
     # 草稿模式（个人试错）：跳过 compliance + checker，只保留 writer+normalizer+tracker。
     # 设计动机：用户在试不同开篇 / 调试 prompt 时，不想为每章花 6-9 次 LLM 调用的全
