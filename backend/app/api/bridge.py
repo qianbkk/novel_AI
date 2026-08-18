@@ -623,7 +623,13 @@ def _spawn_engine_subprocess(run_id: str, project_id: str, command: str,
                         bridge_run.status = "failed"
                         db.commit()
                     except Exception:
-                        pass
+                        # 2026-08-18 修复（CLAUDE.md「失败要响亮」+ silent-exception agent）：
+                        # 之前 pass 吞掉 — exit_code 更新失败意味着 BridgeRun 行
+                        # 永远卡在 "running" 状态，前端 dashboard 显示 ⟳ 一直转。
+                        # log.exception 让运维能从日志看到根因（数据库锁 / session 失效等）。
+                        log.exception(
+                            "_drain_stdout: BridgeRun 状态更新失败（行可能卡在 running）"
+                        )
                     safe_msg = (str(loop_exc) or "loop error")[:200]
                     queue.put({"event": "error", "message": f"内部错误：{safe_msg}"})
             finally:
