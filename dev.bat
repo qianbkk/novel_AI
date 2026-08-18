@@ -332,6 +332,11 @@ echo %GREEN%[ÕýÔÚÆô¶¯ !APP_NAME!]%RESET%  !TOOL_NAME!  :%APP_PORT%  --^>^>  %LOG
 call :_write_launcher "%LAUNCHER%" "%APP_DIR%" "%LOG_DIR%\!LOG_BASENAME!.log" "%CMD_LINE%"
 cd /d "%APP_DIR%"
 start "%WINDOW_TITLE%" /B cmd /c "%LAUNCHER%"
+REM 2026-08-18 fix (chcp leak back): launcher.cmd sets chcp 65001 so python writes UTF-8 log;
+REM start /B shares console with dev.bat, chcp is console-wide not per-process.
+REM launcher exits with chcp stuck at 65001, dev.bat subsequent echoes GBK bytes through
+REM UTF-8 console = garbled. Restore 936 here so dev.bat main flow keeps working.
+chcp 936 >nul
 ping -n %START_WAIT% 127.0.0.1 >nul
 call :find_pids_by_port %APP_PORT%
 if defined RESULT_PIDS goto :_launch_app_report_up
