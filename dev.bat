@@ -465,7 +465,25 @@ if exist "%LOG_DIR%\frontend.log" (
     echo %GRAY%（尚无 frontend.log）%RESET%
 )
 echo %GRAY%------------------------------------------------------------%RESET%
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Content '%LOG_DIR%\backend.log','%LOG_DIR%\frontend.log' -Wait -Encoding UTF8 -Tail 20 -ErrorAction SilentlyContinue"
+REM 2026-08-18 修复（Windows 中文编码）：
+REM 之前用 Get-Content -Encoding UTF8，但 PowerShell 5.1 在文件没有 UTF-8 BOM 时
+REM 会按 ANSI (GBK) 解码，导致 launcher 写的中文 banner + python 写的中文 log
+REM 显示成乱码。改用 .NET [System.IO.File]::ReadAllText + [System.Text.Encoding]::UTF8
+REM 强制按 UTF-8 解码（无论是否有 BOM），与 launcher 顶部 chcp 65001 + python
+REM PYTHONIOENCODING=utf-8 一致。 -Wait 循环里也用同样读法。
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$logDir = '%LOG_DIR%';" ^
+    "$paths = @('$logDir\backend.log','$logDir\frontend.log') | Where-Object { Test-Path \$_ };" ^
+    "if (-not \$paths) { Write-Host '(no log files yet)' -ForegroundColor Gray; return };" ^
+    "function Read-Utf8(\$p) { try { [System.IO.File]::ReadAllText(\$p, [System.Text.Encoding]::UTF8) -split \"`r?`n\" } catch { '' } };" ^
+    "while (\$true) {" ^
+    "  foreach (\$p in \$paths) {" ^
+    "    \$name = Split-Path \$p -Leaf;" ^
+    "    \$lines = Read-Utf8 \$p;" ^
+    "    if (\$lines.Count -gt 0) { Clear-Host; Write-Host \"==== \$name (last \$([Math]::Min(20,\$lines.Count)) lines) ====\" -ForegroundColor Yellow; \$lines | Select-Object -Last 20 | ForEach-Object { Write-Host \$_ } }" ^
+    "  };" ^
+    "  Start-Sleep -Milliseconds 500" ^
+    "}"
 goto :eof
 
 REM ==================== 主循环 ====================
