@@ -44,6 +44,32 @@ LangGraph 状态机驱动的多 Agent 网文写作引擎，被后端以子进程
 
 另有 `init_arc.py:13 build_state_from_setting`（仅 bootstrap 阶段用，无 LLM，纯数据转换：`setting_package.json → orchestrator_state.json.arc_plans`）。
 
+## v1.0 Pre-Production 5 个 Agent
+
+v1.0 起把"大纲质量"前置到正文之前——5 个新 Agent 在 10 阶段 worldbuild 之前先生成结构化产物，写每章时注入到 writer prompt。
+
+| Agent | 文件 | 产物 | 默认 LLM |
+|-------|------|------|----------|
+| Genre Profiler | `genre_profiler.py` | 6 类男频（玄幻/仙侠/都市/历史/军事/科幻）的 reader_persona/tone_preference/taboo/show_item_examples/research_strength 三档分流 | DeepSeek |
+| Theme Designer | `theme_designer.py` | theme_statement/expectation_arc (seed<twist<payoff)/resonance_anchors ≥3 共性维度 | DeepSeek |
+| Opening Designer | `opening_designer.py` | 黄金三章（ch1_anchor/ch2_question/ch3_escalation），hook_type 严格 7 个合法之一，含 show_item_seed/used 接力 | Claude Sonnet |
+| Research Notes | `research_notes.py` | 按 research_strength 三档分流 baseline（strong=5 维度，medium=system_consistency，weak=minimal） | DeepSeek |
+| Macro Spine | `macro_spine.py` | 全书宏观弧（arc 边界连续、twist_chapter 必须落在某 arc 范围内），get_arc_for_chapter 写每章前调 | DeepSeek |
+
+**Writer Prompt v2**：`_build_genre_block` / `_build_theme_block` / `_build_expectation_block` / `_build_showitem_block` 4 个 block 注入 writer prompt，把前期工程成果贯穿到正文。
+
+**Scene Quality Check**（`scene_quality_check.py`）：4 维度（expectation_advanced / show_item_landed / resonance_hit / consistency_ok），任一失败 → escalate 给人工（**不自动 rewrite**，v1.0 决策），LLM 失败抛 SceneQualityCheckFailed（不让 silently PASS）。
+
+## v1.0 3 个 Memory Ledger（`backend/engine/memory/`）
+
+| 文件 | 作用 |
+|------|------|
+| `expectation_ledger.py` | 每章 expectation_status 落盘；`get_pending_seeds` 给下章追踪 |
+| `show_item_chain.py` | 每章 show_item_used 接力；`get_recent_items` 给 writer prompt v2 用 |
+| `voice_anchors.py` | 角色口癖记录 + `check_voice_consistency` 一致性检查 |
+
+3 个 ledger 跟 L2/L5 是并行的"质量回环"——L2/L5 是按需检索的写作上下文，ledger 是按章节追踪的主题/物件/口癖一致性。
+
 ## 记忆系统（`backend/engine/memory/manager.py`）
 
 三层结构：

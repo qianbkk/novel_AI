@@ -85,6 +85,25 @@ FastAPI 应用，端口 `8132`。入口 `backend/app/main.py`。
 
 `mock` provider 模式下所有阶段均走内置 `mock_payload` 兜底，可离线跑通全流程用于测试。
 
+### `/projects/{id}/pre-production/*` v1.0 Pre-Production（`app/api/pre_production.py`）
+
+| 方法 路径 | 说明 |
+|---|---|
+| `GET /projects/{id}/pre-production/genre-profile` | 题材画像（reader_persona/tone_preference/show_item_examples/research_strength 三档） |
+| `POST /projects/{id}/pre-production/genre-profile/generate` | LLM 生成（默认 mock，可传 `use_llm=true`）；6 类男频模板 |
+| `PUT /projects/{id}/pre-production/genre-profile` | 用户编辑；强制 `source='user'`（LLM 不能覆盖） |
+| `GET /projects/{id}/pre-production/theme` | 共性主题（theme_statement/expectation_arc/resonance_anchors） |
+| `POST /projects/{id}/pre-production/theme/generate` | LLM 生成（依赖 genre_profile） |
+| `PUT /projects/{id}/pre-production/theme` | 用户编辑；强制 `source='user'` |
+| `GET /projects/{id}/pre-production/opening` | 黄金三章（ch1_anchor/ch2_question/ch3_escalation，hook_type 严格 7 个合法之一） |
+| `POST /projects/{id}/pre-production/opening/generate` | LLM 生成（依赖 genre_profile + theme_spine） |
+| `PUT /projects/{id}/pre-production/opening` | 用户编辑 |
+| `GET /projects/{id}/pre-production/research-notes` | 资料助手（按 research_strength 三档分流 baseline） |
+| `POST /projects/{id}/pre-production/research-notes/initialize` | 初始化 |
+| `PUT /projects/{id}/pre-production/research-notes` | 用户编辑 |
+
+PUT 缺字段 → 400；不存在 → 404；`source='user'` 不被 LLM 后续覆盖。
+
 ### `/projects/{id}/chapters`（`app/api/chapters.py`）
 
 | 方法 路径 | 说明 |
@@ -95,9 +114,18 @@ FastAPI 应用，端口 `8132`。入口 `backend/app/main.py`。
 | `GET /chapters/{id}/characters` | 出场角色列表 |
 | `POST /chapters` | 创建章节 → 触发 embedding、角色打标、重复率检查 |
 
-### `/providers`、`/role-assignments`
+### `/providers`、`/role-assignments`、`/providers/health`（`app/api/providers.py`）
 
 `GET/POST/PUT/DELETE /providers`（创建/更新时加密 `api_key`，删除时先置空依赖的 `RoleAssignment.provider_id`）；`GET /role-assignments`（15 角色解析后的 provider 信息）、`PUT /role-assignments/{role_key}`（重新绑定）。
+
+**v1.0.1 新增操作前预检端点**：
+
+| 方法 路径 | 说明 |
+|---|---|
+| `GET /providers/health` | LLM 全局健康检查：返回 `mode` (mock/live) + `can_run_llm` + 3 角色（structured_logic/creative_detail/consistency_check）路由明细 + DB provider 列表 + 失败原因 |
+| `POST /providers/{id}/test` | 单 provider 联通测试；带超时、上游 4xx/5xx 错误透传；缺 key → 400 |
+
+这两个端点无 `Depends(get_db)`（避免 owner 校验污染 meta 端点）。前端 `LLMStatusBanner` 在 WorldBuild / Outline / ThemeOpening / BridgeConsole / NewProject 顶部统一调用，让用户在进入页面就知道能不能跑，不需要点了 30 秒才发现失败。
 
 `ROLE_REGISTRY`（`app/bridge/role_registry.py`）15 个角色：`structured_logic`、`creative_detail`、`consistency_check`（世界构建向导用）+ `orchestrator`、`planner`、`outline`、`writer`、`normalizer`、`compliance`、`checker_main`、`checker_cross1`、`checker_cross2`、`rewriter`、`tracker`、`summarizer`（写作引擎用）。
 
