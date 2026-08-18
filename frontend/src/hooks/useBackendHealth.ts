@@ -17,7 +17,9 @@ CLAUDE.md 红线：探测只读 health 端点；不调用写接口；不阻塞 U
 
 import { useEffect, useState } from "react";
 
-const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) || "http://localhost:8132";
+// 2026-08-18 修：强制 127.0.0.1 而非 localhost — Windows 同时解析 IPv4/IPv6，
+// 浏览器优先 IPv6 (::1) 而 uvicorn 只绑 IPv4 (127.0.0.1) → TypeError: Failed to fetch。
+const API_BASE = (import.meta.env.VITE_API_BASE as string | undefined) || "http://127.0.0.1:8132";
 
 export type BackendState =
   | { kind: "checking" }

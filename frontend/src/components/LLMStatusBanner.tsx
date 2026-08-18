@@ -103,7 +103,7 @@ export function LLMStatusBanner({ defaultExpanded = false, hideWhenMock = false 
           ⚠ 后端未响应 — 无法生成内容
         </div>
         <div style={{ opacity: 0.85, fontSize: 12 }}>
-          {state.error}（默认地址 <code style={{ fontFamily: "var(--font-mono)" }}>http://localhost:8132</code>）
+          {state.error}（默认地址 <code style={{ fontFamily: "var(--font-mono)" }}>http://127.0.0.1:8132</code>）
         </div>
         <div style={{ marginTop: 8 }}>
           <button

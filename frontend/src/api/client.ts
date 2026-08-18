@@ -54,7 +54,12 @@ import type {
 // 后端地址：默认 8132（开发用），部署时改 frontend/.env 里的 VITE_API_BASE
 // 注：本地开发后端通常跑在 8132 端口，因为 8123 经常被测试残留进程占着，
 // 强抢会失败。统一走 8132 避免「前端 404、后端没起来」这种误判。
-const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:8132";
+// 2026-08-18 修（"TypeError: Failed to fetch" 反复报错）：
+// Windows 上 localhost 同时解析为 IPv4 (127.0.0.1) 和 IPv6 (::1)，
+// 浏览器按 Happy Eyeballs 优先 IPv6；uvicorn 默认绑 127.0.0.1 (IPv4 only)，
+// 浏览器试 [::1]:8132 失败 → TypeError: Failed to fetch。
+// 强制 IPv4 (127.0.0.1) 让 DNS 不再歧义，请求直达 backend。
+const API_BASE = import.meta.env.VITE_API_BASE || "http://127.0.0.1:8132";
 
 // ─── JWT token 管理 ───
 // 审计 #10 (2026-07-20)：token 存 localStorage（不是 cookie）。
