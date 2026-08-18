@@ -1,21 +1,21 @@
-﻿@echo off
+@echo off
 REM ============================================================
-REM   NovelAI 后端管理 - 本地启动
-REM   文件编码：UTF-8 with BOM
-REM   平台：Windows 10/11
-REM   用途：启动 / 停止 / 查看状态 / 查日志（后端 + 前端）
+REM   NovelAI ��˹��� - ��������
+REM   �ļ����룺UTF-8 with BOM
+REM   ƽ̨��Windows 10/11
+REM   ��;������ / ֹͣ / �鿴״̬ / ����־����� + ǰ�ˣ�
 REM ============================================================
 
-REM 1) 先强制切到 UTF-8 代码页，cmd 才能正确回显中文。
+REM 1) ��ǿ���е� UTF-8 ����ҳ��cmd ������ȷ�������ġ�
 chcp 65001 >nul
 
-REM 2) 窗口标题（用 CJK 安全的字符串）
-title NovelAI 后端管理 - 本地启动
+REM 2) ���ڱ��⣨�� CJK ��ȫ���ַ�����
+title NovelAI ��˹��� - ��������
 
-REM 3) 启用扩展 + 延迟变量展开
+REM 3) ������չ + �ӳٱ���չ��
 setlocal EnableExtensions EnableDelayedExpansion
 
-REM ==================== 配置 ====================
+REM ==================== ���� ====================
 set "PROJECT_ROOT=%~dp0"
 if "%PROJECT_ROOT:~-1%"=="\" set "PROJECT_ROOT=%PROJECT_ROOT:~0,-1%"
 
@@ -30,7 +30,7 @@ set "FRONTEND_PORT=5293"
 set "LOG_DIR=%PROJECT_ROOT%\.runlogs"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
-REM ==================== ANSI 颜色辅助 ====================
+REM ==================== ANSI ��ɫ���� ====================
 for /F "tokens=1,2 delims=#" %%a in ('"prompt #$H#$E# & echo on & for %%b in (1) do rem"') do set "ESC=%%b"
 set "GREEN=%ESC%[92m"
 set "YELLOW=%ESC%[93m"
@@ -39,66 +39,66 @@ set "CYAN=%ESC%[96m"
 set "GRAY=%ESC%[90m"
 set "RESET=%ESC%[0m"
 
-REM ==================== 辅助子程序 ====================
-REM 下面所有子程序只通过 `call :name` 到达；主流程必须跳过它们，
-REM 直接跳到配置区末尾的 :main_start。
+REM ==================== �����ӳ��� ====================
+REM ���������ӳ���ֻͨ�� `call :name` ��������̱����������ǣ�
+REM ֱ������������ĩβ�� :main_start��
 goto :main_start
 
 :print_banner
 echo.
 echo %CYAN%============================================================%RESET%
-echo %CYAN%   NovelAI 后端管理 - 本地启动%RESET%
+echo %CYAN%   NovelAI ��˹��� - ��������%RESET%
 echo %CYAN%============================================================%RESET%
-echo   后端     : http://%BACKEND_HOST%:%BACKEND_PORT%  (uvicorn)
-echo   前端     : http://%FRONTEND_HOST%:%FRONTEND_PORT%  (vite)
-echo   API 文档 : http://%BACKEND_HOST%:%BACKEND_PORT%/docs
-echo   日志目录 : %LOG_DIR%
+echo   ���     : http://%BACKEND_HOST%:%BACKEND_PORT%  (uvicorn)
+echo   ǰ��     : http://%FRONTEND_HOST%:%FRONTEND_PORT%  (vite)
+echo   API �ĵ� : http://%BACKEND_HOST%:%BACKEND_PORT%/docs
+echo   ��־Ŀ¼ : %LOG_DIR%
 echo %CYAN%------------------------------------------------------------%RESET%
 goto :eof
 
 :print_top_menu
 echo.
-echo %YELLOW%请选择操作：%RESET%
-echo   %GREEN%1)%RESET% 启动全部          (uvicorn :8132 + vite :5293)
-echo   %GREEN%2)%RESET% 停止全部
-echo   %GREEN%3)%RESET% 重启全部          (先停止，等待，再启动)
-echo   %GREEN%0)%RESET% 详细状态          (端口 + PID + HTTP /health)
-echo   %GREEN%x)%RESET% 更多选项...
+echo %YELLOW%��ѡ�������%RESET%
+echo   %GREEN%1)%RESET% ����ȫ��          (uvicorn :8132 + vite :5293)
+echo   %GREEN%2)%RESET% ֹͣȫ��
+echo   %GREEN%3)%RESET% ����ȫ��          (��ֹͣ���ȴ���������)
+echo   %GREEN%0)%RESET% ��ϸ״̬          (�˿� + PID + HTTP /health)
+echo   %GREEN%x)%RESET% ����ѡ��...
 echo.
-set /p "CHOICE=  请输入 [0-3, x]: "
+set /p "CHOICE=  ������ [0-3, x]: "
 goto :eof
 
 :print_submenu
 echo.
-echo %YELLOW%更多选项：%RESET%
-echo   %GREEN%1)%RESET% 启动后端          (uvicorn :8132)
-echo   %GREEN%2)%RESET% 启动前端          (vite    :5293)
-echo   %GREEN%3)%RESET% 停止后端
-echo   %GREEN%4)%RESET% 停止前端
-echo   %GREEN%5)%RESET% 查看实时日志
-echo   %GREEN%6)%RESET% 备份 SQLite       (快照 data/*.db)
-echo   %GREEN%0)%RESET% 返回主菜单
-echo   %GREEN%9)%RESET% 退出
+echo %YELLOW%����ѡ�%RESET%
+echo   %GREEN%1)%RESET% �������          (uvicorn :8132)
+echo   %GREEN%2)%RESET% ����ǰ��          (vite    :5293)
+echo   %GREEN%3)%RESET% ֹͣ���
+echo   %GREEN%4)%RESET% ֹͣǰ��
+echo   %GREEN%5)%RESET% �鿴ʵʱ��־
+echo   %GREEN%6)%RESET% ���� SQLite       (���� data/*.db)
+echo   %GREEN%0)%RESET% �������˵�
+echo   %GREEN%9)%RESET% �˳�
 echo.
-set /p "CHOICE=  请输入 [0-6, 9]: "
+set /p "CHOICE=  ������ [0-6, 9]: "
 goto :eof
 
-REM ---------- 按监听端口查找 PID ----------
+REM ---------- �������˿ڲ��� PID ----------
 :find_pids_by_port
 set "PORT_TO_CHECK=%~1"
 set "RESULT_PIDS="
-REM 匹配 ":PORT" 后跟一个空格（同时兼容 IPv4 "127.0.0.1:5293 " 和
-REM IPv6 "[::1]:5293 "）。锚定在尾部空格上是为了防止 ":8123" 误匹配
-REM 到 ":81230" 之类的端口号。
+REM ƥ�� ":PORT" ���һ���ո�ͬʱ���� IPv4 "127.0.0.1:5293 " ��
+REM IPv6 "[::1]:5293 "����ê����β���ո�����Ϊ�˷�ֹ ":8123" ��ƥ��
+REM �� ":81230" ֮��Ķ˿ںš�
 for /F "tokens=5" %%P in ('netstat -ano ^| findstr ":%PORT_TO_CHECK% " ^| findstr LISTENING') do (
     if not defined RESULT_PIDS (set "RESULT_PIDS=%%P") else (set "RESULT_PIDS=!RESULT_PIDS! %%P")
 )
 goto :eof
 
-REM ---------- 从 .runlogs/<name>.pid 读取我们记录的 PID ----------
-REM 把 TRUSTED_PIDS 设为空格分隔的 PID 列表；文件缺失/为空则留空。
-REM 这是我们启动应用时写下的"白名单"，用来区分"我们自己的进程"
-REM 和碰巧占用同一端口的外部进程。
+REM ---------- �� .runlogs/<name>.pid ��ȡ���Ǽ�¼�� PID ----------
+REM �� TRUSTED_PIDS ��Ϊ�ո�ָ��� PID �б����ļ�ȱʧ/Ϊ�������ա�
+REM ������������Ӧ��ʱд�µ�"������"����������"�����Լ��Ľ���"
+REM ������ռ��ͬһ�˿ڵ��ⲿ���̡�
 :read_pid_file
 set "TRUSTED_PIDS="
 if exist "%~1" (
@@ -111,18 +111,18 @@ set "PID_TO_KILL=%~1"
 taskkill /F /PID %PID_TO_KILL% >nul 2>&1
 goto :eof
 
-REM ---------- 状态面板 ----------
+REM ---------- ״̬��� ----------
 :print_status
 set "BE_PROBE_OK=0"
 set "FE_PROBE_OK=0"
 echo.
-echo %CYAN%[快照]%RESET%
+echo %CYAN%[����]%RESET%
 echo %GRAY%------------------------------------------------------------%RESET%
 
-REM 后端快照 — 三种状态：
-REM   running（运行中）：PID 文件存在，且我们记录的 PID 仍在监听该端口。
-REM   foreign（外部进程）：端口被占用，但不是我们记录的 PID（外部进程）。
-REM   stopped（已停止）：端口上无任何进程（若有陈旧 PID 文件则一并清理）。
+REM ��˿��� �� ����״̬��
+REM   running�������У���PID �ļ����ڣ������Ǽ�¼�� PID ���ڼ����ö˿ڡ�
+REM   foreign���ⲿ���̣����˿ڱ�ռ�ã����������Ǽ�¼�� PID���ⲿ���̣���
+REM   stopped����ֹͣ�����˿������κν��̣����г¾� PID �ļ���һ����������
 call :find_pids_by_port %BACKEND_PORT%
 set "BE_PORT_PIDS=!RESULT_PIDS!"
 call :read_pid_file "%LOG_DIR%\backend.pid"
@@ -136,14 +136,14 @@ if defined BE_TRUSTED_PIDS (
     )
 )
 if "!BE_UP!"=="1" (
-    echo   backend  :%BACKEND_PORT%    %GREEN%运行中%RESET%   PID: !BE_PORT_PIDS!
+    echo   backend  :%BACKEND_PORT%    %GREEN%������%RESET%   PID: !BE_PORT_PIDS!
 ) else (
-    REM 没有 PID 文件，或者我们的 PID 已经消失 — 清理陈旧文件（如果有）。
+    REM û�� PID �ļ����������ǵ� PID �Ѿ���ʧ �� �����¾��ļ�������У���
     if exist "%LOG_DIR%\backend.pid" del "%LOG_DIR%\backend.pid" >nul 2>&1
     if defined BE_PORT_PIDS (
-        echo   backend  :%BACKEND_PORT%    %YELLOW%外部进程%RESET%   PID: !BE_PORT_PIDS!  非 dev.bat 启动
+        echo   backend  :%BACKEND_PORT%    %YELLOW%�ⲿ����%RESET%   PID: !BE_PORT_PIDS!  �� dev.bat ����
     ) else (
-        echo   backend  :%BACKEND_PORT%    %GRAY%已停止%RESET%
+        echo   backend  :%BACKEND_PORT%    %GRAY%��ֹͣ%RESET%
     )
     set "BE_UP=0"
 )
@@ -161,21 +161,21 @@ if defined FE_TRUSTED_PIDS (
     )
 )
 if "!FE_UP!"=="1" (
-    echo   frontend :%FRONTEND_PORT%    %GREEN%运行中%RESET%   PID: !FE_PORT_PIDS!
+    echo   frontend :%FRONTEND_PORT%    %GREEN%������%RESET%   PID: !FE_PORT_PIDS!
 ) else (
     if exist "%LOG_DIR%\frontend.pid" del "%LOG_DIR%\frontend.pid" >nul 2>&1
     if defined FE_PORT_PIDS (
-        echo   frontend :%FRONTEND_PORT%    %YELLOW%外部进程%RESET%   PID: !FE_PORT_PIDS!  非 dev.bat 启动
+        echo   frontend :%FRONTEND_PORT%    %YELLOW%�ⲿ����%RESET%   PID: !FE_PORT_PIDS!  �� dev.bat ����
     ) else (
-        echo   frontend :%FRONTEND_PORT%    %GRAY%已停止%RESET%
+        echo   frontend :%FRONTEND_PORT%    %GRAY%��ֹͣ%RESET%
     )
     set "FE_UP=0"
 )
 echo %GRAY%------------------------------------------------------------%RESET%
 
-REM HTTP /health 探测（始终探测 — 即使是外部进程也值得验证一下，
-REM 如果端口已经没有进程了，探测会返回"down"而不是让人误以为"跳过"。
-echo %CYAN%[HTTP 探测]%RESET%
+REM HTTP /health ̽�⣨ʼ��̽�� �� ��ʹ���ⲿ����Ҳֵ����֤һ�£�
+REM ����˿��Ѿ�û�н����ˣ�̽��᷵��"down"��������������Ϊ"����"��
+echo %CYAN%[HTTP ̽��]%RESET%
 call :http_probe "backend /health    " "http://%BACKEND_HOST%:%BACKEND_PORT%/health" tri
 set "BE_PROBE_OK=!PROBE_OK!"
 call :http_probe "frontend /         " "http://%FRONTEND_HOST%:%FRONTEND_PORT%/" bin
@@ -185,10 +185,10 @@ echo.
 call :_hint
 goto :eof
 
-REM ---------- HTTP 探测（tri：后端 /health 三态；bin：前端 / 二态） ----------
-REM PROBE_OK=1 表示 HTTP 状态码 <400，否则为 0。这里用 curl.exe 是因为
-REM 它会根据 HTTP 状态设置 ERRORLEVEL，让我们能可靠地把结果读回父级
-REM 批处理（子进程里的 PowerShell $global: 不会传回 cmd）。
+REM ---------- HTTP ̽�⣨tri����� /health ��̬��bin��ǰ�� / ��̬�� ----------
+REM PROBE_OK=1 ��ʾ HTTP ״̬�� <400������Ϊ 0�������� curl.exe ����Ϊ
+REM ������� HTTP ״̬���� ERRORLEVEL���������ܿɿ��ذѽ�����ظ���
+REM ���������ӽ������ PowerShell $global: ���ᴫ�� cmd����
 :http_probe
 set "LABEL=%~1"
 set "URL=%~2"
@@ -196,35 +196,35 @@ set "MODE=%~3"
 set "PROBE_OK=0"
 set "PROBE_CODE="
 if /I "%MODE%"=="tri" goto :_probe_tri
-REM --- bin 模式（前端）---
-REM 单独跑 curl 以便读到它真实的退出码（而不是 for 循环的）。
+REM --- bin ģʽ��ǰ�ˣ�---
+REM ������ curl �Ա��������ʵ���˳��루������ for ѭ���ģ���
 curl.exe -s -o NUL -w "%%{http_code}" --max-time 3 "%URL%" 1>"%TEMP%\_probe_code.txt" 2>nul
 set "CURL_ERR=!errorlevel!"
 set /p "PROBE_CODE=" < "%TEMP%\_probe_code.txt" 2>nul
 del "%TEMP%\_probe_code.txt" 2>nul
 if !CURL_ERR! NEQ 0 (
-    echo   %LABEL%%YELLOW%n/a%RESET%     连接被拒绝或超时
+    echo   %LABEL%%YELLOW%n/a%RESET%     ���ӱ��ܾ���ʱ
     goto :eof
 )
 if "!PROBE_CODE!"=="" (
-    echo   %LABEL%%YELLOW%n/a%RESET%     无响应
+    echo   %LABEL%%YELLOW%n/a%RESET%     ����Ӧ
     goto :eof
 )
 set "PROBE_OK=1"
 echo   %LABEL%%GREEN%ok%RESET%      status=!PROBE_CODE!
 goto :eof
 :_probe_tri
-REM --- tri 模式（后端 /health）---
+REM --- tri ģʽ����� /health��---
 curl.exe -s -o NUL -w "%%{http_code}" --max-time 3 "%URL%" 1>"%TEMP%\_probe_code.txt" 2>nul
 set "CURL_ERR=!errorlevel!"
 set /p "PROBE_CODE=" < "%TEMP%\_probe_code.txt" 2>nul
 del "%TEMP%\_probe_code.txt" 2>nul
 if !CURL_ERR! NEQ 0 (
-    echo   %LABEL%%RED%down%RESET%     连接被拒绝或超时
+    echo   %LABEL%%RED%down%RESET%     ���ӱ��ܾ���ʱ
     goto :eof
 )
 if "!PROBE_CODE!"=="" (
-    echo   %LABEL%%RED%down%RESET%     无响应
+    echo   %LABEL%%RED%down%RESET%     ����Ӧ
     goto :eof
 )
 set /a "HTTP_NUM=!PROBE_CODE!" 2>nul
@@ -236,84 +236,99 @@ if !HTTP_NUM! LSS 400 (
 )
 goto :eof
 
-REM ---------- 智能提示（消费 :print_status 设置的 BE_UP/FE_UP） ----------
+REM ---------- ������ʾ������ :print_status ���õ� BE_UP/FE_UP�� ----------
 :_hint
-REM 仅当后端和前端都不是 dev.bat 管理的、且端口上也没有外部监听时，
-REM 才提示"全部已停止"。
+REM ������˺�ǰ�˶����� dev.bat �����ġ��Ҷ˿���Ҳû���ⲿ����ʱ��
+REM ����ʾ"ȫ����ֹͣ"��
 if NOT "%BE_UP%%FE_UP%"=="00" goto :_hint_check_backend
 if defined BE_PORT_PIDS goto :_hint_check_backend
 if defined FE_PORT_PIDS goto :_hint_check_backend
-echo %YELLOW%提示%RESET%  全部已停止。按 %GREEN%1%RESET% 启动全部，或运行：dev.bat start-all
+echo %YELLOW%��ʾ%RESET%  ȫ����ֹͣ���� %GREEN%1%RESET% ����ȫ���������У�dev.bat start-all
 goto :eof
 :_hint_check_backend
 if NOT "%BE_UP%"=="0" goto :_hint_check_frontend
-REM 端口上可能仍有外部监听者响应了 /health，这种情况下
-REM BE_PROBE_OK=1，此时提示"后端已停止"就不准确了。
+REM �˿��Ͽ��������ⲿ��������Ӧ�� /health�����������
+REM BE_PROBE_OK=1����ʱ��ʾ"�����ֹͣ"�Ͳ�׼ȷ�ˡ�
 if "%BE_PROBE_OK%"=="1" goto :_hint_check_frontend
 if defined BE_PORT_PIDS (
-    echo %YELLOW%提示%RESET%  后端端口 :%BACKEND_PORT% 上有外部进程（PID: !BE_PORT_PIDS!），但 /health 无响应。
-    echo          dev.bat 无法管理该进程。请手动结束它，或修改 dev.bat 里的 BACKEND_PORT。
+    echo %YELLOW%��ʾ%RESET%  ��˶˿� :%BACKEND_PORT% �����ⲿ���̣�PID: !BE_PORT_PIDS!������ /health ����Ӧ��
+    echo          dev.bat �޷������ý��̡����ֶ������������޸� dev.bat ��� BACKEND_PORT��
 ) else (
-    echo %YELLOW%提示%RESET%  后端已停止，前端仍在运行。Web 界面将无法访问后端 API。
-    echo          按 %GREEN%x%RESET% 再按 %GREEN%1%RESET% 启动后端，或运行：dev.bat start-backend
+    echo %YELLOW%��ʾ%RESET%  �����ֹͣ��ǰ���������С�Web ���潫�޷����ʺ�� API��
+    echo          �� %GREEN%x%RESET% �ٰ� %GREEN%1%RESET% ������ˣ������У�dev.bat start-backend
 )
 goto :eof
 :_hint_check_frontend
 if NOT "%FE_UP%"=="0" goto :eof
-echo %YELLOW%提示%RESET%  后端已运行，前端未启动。可直接访问 API 文档：http://%BACKEND_HOST%:%BACKEND_PORT%/docs
-echo          按 %GREEN%x%RESET% 再按 %GREEN%2%RESET% 启动前端，或运行：dev.bat start-frontend
+echo %YELLOW%��ʾ%RESET%  ��������У�ǰ��δ��������ֱ�ӷ��� API �ĵ���http://%BACKEND_HOST%:%BACKEND_PORT%/docs
+echo          �� %GREEN%x%RESET% �ٰ� %GREEN%2%RESET% ����ǰ�ˣ������У�dev.bat start-frontend
 goto :eof
 
-REM ==================== 启动 ====================
+REM ==================== ���� ====================
 
-REM ---------- 写一个启动器 .cmd（避免在 `start ... cmd /c` 里处理引号地狱） ----------
+REM ---------- дһ�������� .cmd�������� `start ... cmd /c` �ﴦ�����ŵ����� ----------
+REM 2026-08-18 ��д���� PowerShell WriteAllText һ����д�루UTF-8 �� BOM����
+REM �滻ԭ������ `>> file echo ...` �� cmd ������������ chcp 65001 �»�д BOM��
+REM �� `echo` ������/ת������������ơ�
+REM ʵ��Ҫ�㣺build һ�� $body ���ַ������������� [Environment]::NewLine ����
+REM ���� PowerShell -Command �� `@(...)` ������������� `+ var` ��������ָ���
+REM ���� launcher �ļ���·�����سɶ��е� bug��
+REM launcher ����ȫ���� ASCII Ӣ�ģ��ܿ� GBK/UTF-8 �����ͻ��
 :_write_launcher
 set "LAUNCHER_PATH=%~1"
 set "TARGET_DIR=%~2"
 set "LOG_PATH=%~3"
 set "CMD_LINE=%~4"
->  "%LAUNCHER_PATH%" echo @echo off
->> "%LAUNCHER_PATH%" echo REM ---------- 可写性自检（捕获锁住日志文件的孤儿进程） ----------
->> "%LAUNCHER_PATH%" echo type nul ^>^> "%LOG_PATH%" 2^>^&1
->> "%LAUNCHER_PATH%" echo if errorlevel 1 ^(
->> "%LAUNCHER_PATH%" echo     echo [FATAL] 无法写入日志文件："%LOG_PATH%"
->> "%LAUNCHER_PATH%" echo     echo [FATAL] 很可能有其他进程正锁着它 [ERROR_SHARING_VIOLATION]。
->> "%LAUNCHER_PATH%" echo     echo [FATAL] 通常意味着上一次的 uvicorn / node 进程还没退出。
->> "%LAUNCHER_PATH%" echo     echo [FATAL]
->> "%LAUNCHER_PATH%" echo     echo [FATAL] 请找到并结束这个孤儿进程：
->> "%LAUNCHER_PATH%" echo     echo [FATAL]   powershell -NoProfile -Command "Get-Process python,node -ErrorAction SilentlyContinue ^| Where-Object { $_.StartTime -lt (Get-Date).AddHours(-1) } ^| Format-Table Id,ProcessName,StartTime -AutoSize"
->> "%LAUNCHER_PATH%" echo     echo [FATAL]   powershell -NoProfile -Command "Stop-Process -Id ^<pid^> -Force"
->> "%LAUNCHER_PATH%" echo     echo [FATAL]
->> "%LAUNCHER_PATH%" echo     echo [FATAL] 然后重新运行 dev.bat start-!APP_NAME!。
->> "%LAUNCHER_PATH%" echo     exit /b 1
->> "%LAUNCHER_PATH%" echo ^)
->> "%LAUNCHER_PATH%" echo chcp 65001 ^>nul
->> "%LAUNCHER_PATH%" echo cd /d "%TARGET_DIR%"
->> "%LAUNCHER_PATH%" echo REM 2026-08-18 修复（Windows 中文编码乱码）：python 在 Windows 默认按 CP_ACP 写 stdout/stderr，
->> "%LAUNCHER_PATH%" echo REM 这会让 launcher 日志里的中文 log 变成 GBK 字节，dev.bat tail 用 UTF-8 读出来就是乱码。
->> "%LAUNCHER_PATH%" echo REM 设 PYTHONIOENCODING=utf-8 让 python 把中文字符按 UTF-8 写出，与 dev.bat 顶部 chcp 65001 一致。
->> "%LAUNCHER_PATH%" echo set "PYTHONIOENCODING=utf-8"
->> "%LAUNCHER_PATH%" echo set "PYTHONUNBUFFERED=1"
-if "%ADD_BLANK%"=="1" >> "%LAUNCHER_PATH%" echo echo. ^>^> "%LOG_PATH%"
->> "%LAUNCHER_PATH%" echo echo ==== 启动于 %DATE% %TIME% ==== ^>^> "%LOG_PATH%"
->> "%LAUNCHER_PATH%" echo %CMD_LINE% ^>^> "%LOG_PATH%" 2^>^&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$pl = '%LAUNCHER_PATH%';" ^
+    "$lg = '%LOG_PATH%';" ^
+    "$tg = '%TARGET_DIR%';" ^
+    "$cm = '%CMD_LINE%';" ^
+    "$bk = %ADD_BLANK%;" ^
+    "$app = '!APP_NAME!';" ^
+    "$nl = [Environment]::NewLine;" ^
+    "$body = '@echo off'" + $nl + ^
+    "'REM ---------- writability check (detect orphan process locking the log) ----------'" + $nl + ^
+    "'type nul >> \"' + $lg + '\" 2>&1'" + $nl + ^
+    "'if errorlevel 1 ('" + $nl + ^
+    "'    echo [FATAL] Cannot write to log: \"' + $lg + '\"'" + $nl + ^
+    "'    echo [FATAL] Probably another process is locking it [ERROR_SHARING_VIOLATION].'" + $nl + ^
+    "'    echo [FATAL] Usually means last uvicorn / node process has not exited.'" + $nl + ^
+    "'    echo [FATAL]'" + $nl + ^
+    "'    echo [FATAL] Find and stop the orphan process:'" + $nl + ^
+    "'    echo [FATAL]   powershell -NoProfile -Command \"Get-Process python,node -ErrorAction SilentlyContinue ^| Where-Object { $_.StartTime -lt (Get-Date).AddHours(-1) } ^| Format-Table Id,ProcessName,StartTime -AutoSize\"'" + $nl + ^
+    "'    echo [FATAL]   powershell -NoProfile -Command \"Stop-Process -Id ^<pid^> -Force\"'" + $nl + ^
+    "'    echo [FATAL]'" + $nl + ^
+    "'    echo [FATAL] Then re-run dev.bat start-' + $app + '.'" + $nl + ^
+    "'    exit /b 1'" + $nl + ^
+    "')'" + $nl + ^
+    "'chcp 65001 >nul'" + $nl + ^
+    "'cd /d \"' + $tg + '\"'" + $nl + ^
+    "'REM 2026-08-18: PYTHONIOENCODING=utf-8 makes python log UTF-8 to stdout/stderr.'" + $nl + ^
+    "'set \"PYTHONIOENCODING=utf-8\"'" + $nl + ^
+    "'set \"PYTHONUNBUFFERED=1\"';" ^
+    "if ($bk -eq 1) { $body = $body + $nl + 'echo. >> \"' + $lg + '\"' };" ^
+    "$body = $body + $nl + 'echo ==== launched at %DATE% %TIME% ==== >> \"' + $lg + '\"';" ^
+    "$body = $body + $nl + ($cm + ' >> \"' + $lg + '\" 2>&1');" ^
+    "$utf8NoBom = New-Object System.Text.UTF8Encoding($false);" ^
+    "[System.IO.File]::WriteAllText($pl, $body, $utf8NoBom)"
 goto :eof
 
-REM ---------- 通用应用启动器（由调用方 thunk 提前设好的环境变量驱动） ----------
+REM ---------- ͨ��Ӧ�����������ɵ��÷� thunk ��ǰ��õĻ������������� ----------
 :launch_app
 set "LAST_RESULT=ok"
 set "LAUNCHER=%LOG_DIR%\_start_%LOG_BASENAME%.cmd"
 call :find_pids_by_port %APP_PORT%
 if defined RESULT_PIDS (
-    echo %YELLOW%[!APP_NAME! 已在运行]%RESET% PID: !RESULT_PIDS!
+    echo %YELLOW%[!APP_NAME! ��������]%RESET% PID: !RESULT_PIDS!
     goto :eof
 )
 if not exist "%APP_DIR%" (
-    echo %RED%[错误]%RESET% !APP_NAME! 目录不存在：!APP_DIR!
+    echo %RED%[����]%RESET% !APP_NAME! Ŀ¼�����ڣ�!APP_DIR!
     set "LAST_RESULT=fail"
     goto :eof
 )
-echo %GREEN%[正在启动 !APP_NAME!]%RESET%  !TOOL_NAME!  :%APP_PORT%  --^>^>  %LOG_DIR%\!LOG_BASENAME!.log
+echo %GREEN%[�������� !APP_NAME!]%RESET%  !TOOL_NAME!  :%APP_PORT%  --^>^>  %LOG_DIR%\!LOG_BASENAME!.log
 call :_write_launcher "%LAUNCHER%" "%APP_DIR%" "%LOG_DIR%\!LOG_BASENAME!.log" "%CMD_LINE%"
 cd /d "%APP_DIR%"
 start "%WINDOW_TITLE%" /B cmd /c "%LAUNCHER%"
@@ -321,19 +336,19 @@ ping -n %START_WAIT% 127.0.0.1 >nul
 call :find_pids_by_port %APP_PORT%
 if defined RESULT_PIDS goto :_launch_app_report_up
 if "%BOOT_RETRY%"=="1" (
-    echo %YELLOW%[!APP_NAME! 仍在启动中]%RESET% 再等待 !BOOT_MSG! 秒...
+    echo %YELLOW%[!APP_NAME! ����������]%RESET% �ٵȴ� !BOOT_MSG! ��...
     ping -n %BOOT_WAIT% 127.0.0.1 >nul
     call :find_pids_by_port %APP_PORT%
     if defined RESULT_PIDS goto :_launch_app_report_up
 )
-echo %RED%[!APP_NAME! 启动失败]%RESET% 详见：%LOG_DIR%\!LOG_BASENAME!.log
+echo %RED%[!APP_NAME! ����ʧ��]%RESET% �����%LOG_DIR%\!LOG_BASENAME!.log
 set "LAST_RESULT=fail"
 goto :eof
 :_launch_app_report_up
-REM 记录我们的 PID，供 :print_status 之后区分"我们启动的进程"
-REM 和碰巧占用同一端口的外部进程。格式：一行，空格分隔，同 RESULT_PIDS。
+REM ��¼���ǵ� PID���� :print_status ֮������"���������Ľ���"
+REM ������ռ��ͬһ�˿ڵ��ⲿ���̡���ʽ��һ�У��ո�ָ���ͬ RESULT_PIDS��
 > "%PID_FILE%" echo !RESULT_PIDS!
-echo %GREEN%[!APP_NAME! 已启动]%RESET% PID: !RESULT_PIDS!    !UP_URL!
+echo %GREEN%[!APP_NAME! ������]%RESET% PID: !RESULT_PIDS!    !UP_URL!
 goto :eof
 
 :start_backend
@@ -374,7 +389,7 @@ set "CMD_LINE=npm run dev -- --host %FRONTEND_HOST% --port %FRONTEND_PORT%"
 call :launch_app
 goto :eof
 
-REM ==================== 停止 ====================
+REM ==================== ֹͣ ====================
 
 :stop_port
 set "APP_NAME=%~1"
@@ -384,36 +399,36 @@ set "LAST_RESULT=ok"
 set "PID_FILE=%LOG_DIR%\!APP_NAME!.pid"
 call :find_pids_by_port %APP_PORT%
 if not defined RESULT_PIDS (
-    REM 端口上没有进程 — 清理陈旧的 PID 文件（如果有）。
+    REM �˿���û�н��� �� �����¾ɵ� PID �ļ�������У���
     if exist "!PID_FILE!" del "!PID_FILE!" >nul 2>&1
-    echo %GRAY%[!APP_NAME! 未运行]%RESET%
+    echo %GRAY%[!APP_NAME! δ����]%RESET%
     goto :eof
 )
-echo %YELLOW%[正在停止 !APP_NAME!]%RESET%  PID: !RESULT_PIDS!
+echo %YELLOW%[����ֹͣ !APP_NAME!]%RESET%  PID: !RESULT_PIDS!
 for %%P in (!RESULT_PIDS!) do call :kill_pid %%P
 ping -n 2 127.0.0.1 >nul
 call :find_pids_by_port %APP_PORT%
 if not defined RESULT_PIDS (
-    REM 成功 — 清除白名单，让下次启动更干净。
+    REM �ɹ� �� ��������������´��������ɾ���
     if exist "!PID_FILE!" del "!PID_FILE!" >nul 2>&1
-    echo %GREEN%[!APP_NAME! 已停止]%RESET%
+    echo %GREEN%[!APP_NAME! ��ֹͣ]%RESET%
     goto :eof
 )
 if /I not "%ORPHAN_RETRY%"=="1" (
-    echo %RED%[停止失败]%RESET%   :%APP_PORT% 上仍有进程：!RESULT_PIDS!
+    echo %RED%[ֹͣʧ��]%RESET%   :%APP_PORT% �����н��̣�!RESULT_PIDS!
     set "LAST_RESULT=fail"
     goto :eof
 )
-echo %YELLOW%[有残留进程，强制结束]%RESET%
+echo %YELLOW%[�в������̣�ǿ�ƽ���]%RESET%
 for %%P in (!RESULT_PIDS!) do call :kill_pid %%P
 ping -n 2 127.0.0.1 >nul
 call :find_pids_by_port %APP_PORT%
 if defined RESULT_PIDS (
-    echo %RED%[停止失败]%RESET%   :%APP_PORT% 上仍有进程：!RESULT_PIDS!
+    echo %RED%[ֹͣʧ��]%RESET%   :%APP_PORT% �����н��̣�!RESULT_PIDS!
     set "LAST_RESULT=fail"
 ) else (
     if exist "!PID_FILE!" del "!PID_FILE!" >nul 2>&1
-    echo %GREEN%[!APP_NAME! 已停止]%RESET%
+    echo %GREEN%[!APP_NAME! ��ֹͣ]%RESET%
 )
 goto :eof
 
@@ -429,48 +444,48 @@ goto :eof
 set "LAST_RESULT=ok"
 call :stop_backend
 call :stop_frontend
-echo %GREEN%[全部已停止]%RESET%
+echo %GREEN%[ȫ����ֹͣ]%RESET%
 goto :eof
 
-REM ==================== 日志 ====================
+REM ==================== ��־ ====================
 
-REM ---------- backend/data/*.db 的 SQLite 快照（P1：数据丢失兜底） ----------
-REM 复用 backend/app/backup_db.py —— 和 FastAPI 启动时走同一段代码，
-REM 避免逻辑漂移。NOVEL_AI_SKIP_BACKUP=0 强制开启，即便用户在环境变量
-REM 里设过其他值。这里调一个小启动脚本（scripts/backup_cli.py），
-REM 因为 cmd 没法可靠地把多行 f-string 传给 python -c。
+REM ---------- backend/data/*.db �� SQLite ���գ�P1�����ݶ�ʧ���ף� ----------
+REM ���� backend/app/backup_db.py ���� �� FastAPI ����ʱ��ͬһ�δ��룬
+REM �����߼�Ư�ơ�NOVEL_AI_SKIP_BACKUP=0 ǿ�ƿ����������û��ڻ�������
+REM ���������ֵ�������һ��С�����ű���scripts/backup_cli.py����
+REM ��Ϊ cmd û���ɿ��ذѶ��� f-string ���� python -c��
 :do_backup
-echo %CYAN%[备份]%RESET% 正在快照 backend/data/*.db
+echo %CYAN%[����]%RESET% ���ڿ��� backend/data/*.db
 cd /d "%BACKEND_DIR%"
 set NOVEL_AI_SKIP_BACKUP=0
 python -m scripts.backup_cli
 if errorlevel 1 (
-    echo %YELLOW%[备份]%RESET% 未写出任何快照（请查看上方警告信息）
+    echo %YELLOW%[����]%RESET% δд���κο��գ���鿴�Ϸ�������Ϣ��
 ) else (
-    echo %GREEN%[备份完成]%RESET%
+    echo %GREEN%[�������]%RESET%
 )
 goto :eof
 
 :tail_logs
-echo %CYAN%[实时日志 - 按 Ctrl+C 停止]%RESET%
+echo %CYAN%[ʵʱ��־ - �� Ctrl+C ֹͣ]%RESET%
 echo %GRAY%------------------------------------------------------------%RESET%
 if exist "%LOG_DIR%\backend.log" (
     echo %YELLOW%== %LOG_DIR%\backend.log ==%RESET%
 ) else (
-    echo %GRAY%（尚无 backend.log）%RESET%
+    echo %GRAY%������ backend.log��%RESET%
 )
 if exist "%LOG_DIR%\frontend.log" (
     echo %YELLOW%== %LOG_DIR%\frontend.log ==%RESET%
 ) else (
-    echo %GRAY%（尚无 frontend.log）%RESET%
+    echo %GRAY%������ frontend.log��%RESET%
 )
 echo %GRAY%------------------------------------------------------------%RESET%
-REM 2026-08-18 修复（Windows 中文编码）：
-REM 之前用 Get-Content -Encoding UTF8，但 PowerShell 5.1 在文件没有 UTF-8 BOM 时
-REM 会按 ANSI (GBK) 解码，导致 launcher 写的中文 banner + python 写的中文 log
-REM 显示成乱码。改用 .NET [System.IO.File]::ReadAllText + [System.Text.Encoding]::UTF8
-REM 强制按 UTF-8 解码（无论是否有 BOM），与 launcher 顶部 chcp 65001 + python
-REM PYTHONIOENCODING=utf-8 一致。 -Wait 循环里也用同样读法。
+REM 2026-08-18 �޸���Windows ���ı��룩��
+REM ֮ǰ�� Get-Content -Encoding UTF8���� PowerShell 5.1 ���ļ�û�� UTF-8 BOM ʱ
+REM �ᰴ ANSI (GBK) ���룬���� launcher д������ banner + python д������ log
+REM ��ʾ�����롣���� .NET [System.IO.File]::ReadAllText + [System.Text.Encoding]::UTF8
+REM ǿ�ư� UTF-8 ���루�����Ƿ��� BOM������ launcher ���� chcp 65001 + python
+REM PYTHONIOENCODING=utf-8 һ�¡� -Wait ѭ����Ҳ��ͬ��������
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$logDir = '%LOG_DIR%';" ^
     "$paths = @('$logDir\backend.log','$logDir\frontend.log') | Where-Object { Test-Path \$_ };" ^
@@ -486,11 +501,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "}"
 goto :eof
 
-REM ==================== 主循环 ====================
+REM ==================== ��ѭ�� ====================
 
 :main_start
-REM CLI 模式：dev.bat <参数> -> 执行一次对应动作后退出。
-REM 适用于非交互场景（如 CI、计划任务、快速检查）。
+REM CLI ģʽ��dev.bat <����> -> ִ��һ�ζ�Ӧ�������˳���
+REM �����ڷǽ����������� CI���ƻ����񡢿��ټ�飩��
 if not "%~1"=="" (
     if /I "%~1"=="start-backend"   call :start_backend  & goto :exit_script
     if /I "%~1"=="start-frontend"  call :start_frontend & goto :exit_script
@@ -502,28 +517,28 @@ if not "%~1"=="" (
     if /I "%~1"=="restart-all"     call :stop_all & ping -n 3 127.0.0.1 ^>nul & call :start_backend & call :start_frontend & goto :exit_script
     if /I "%~1"=="backup"          call :do_backup        & goto :exit_script
     if /I "%~1"=="help"            goto :print_help
-    echo %RED%[错误]%RESET% 未知的命令行参数：%~1
+    echo %RED%[����]%RESET% δ֪�������в�����%~1
     goto :print_help
 )
 
-REM 无命令行参数：进入交互菜单。（不要落到下面的 :print_help 标签，
-REM 那样只会打印用法说明就退出。）
+REM �������в��������뽻���˵�������Ҫ�䵽����� :print_help ��ǩ��
+REM ����ֻ���ӡ�÷�˵�����˳�����
 goto :top_menu
 
 :print_help
 echo.
-echo %CYAN%用法：%RESET%
-echo   dev.bat                       交互菜单
-echo   dev.bat start-backend         启动 uvicorn :8132
-echo   dev.bat start-frontend        启动 vite    :5293
-echo   dev.bat start-all             启动全部
-echo   dev.bat stop-backend          结束 8132 端口上的进程
-echo   dev.bat stop-frontend         结束 5293 端口上的进程
-echo   dev.bat stop-all              结束全部
-echo   dev.bat restart-all           先停止再启动全部
-echo   dev.bat status                打印端口 / PID / /health 状态
-echo   dev.bat backup                快照两个 SQLite 数据库
-echo   dev.bat help                  显示本帮助
+echo %CYAN%�÷���%RESET%
+echo   dev.bat                       �����˵�
+echo   dev.bat start-backend         ���� uvicorn :8132
+echo   dev.bat start-frontend        ���� vite    :5293
+echo   dev.bat start-all             ����ȫ��
+echo   dev.bat stop-backend          ���� 8132 �˿��ϵĽ���
+echo   dev.bat stop-frontend         ���� 5293 �˿��ϵĽ���
+echo   dev.bat stop-all              ����ȫ��
+echo   dev.bat restart-all           ��ֹͣ������ȫ��
+echo   dev.bat status                ��ӡ�˿� / PID / /health ״̬
+echo   dev.bat backup                �������� SQLite ���ݿ�
+echo   dev.bat help                  ��ʾ������
 goto :exit_script
 
 :top_menu
@@ -547,11 +562,11 @@ if "%CHOICE%"=="3" (
 if "%CHOICE%"=="0" call :print_status
 if /I "%CHOICE%"=="X" goto :submenu
 
-REM ---------- 主菜单操作后的提示 ----------
+REM ---------- ���˵����������ʾ ----------
 :top_post_prompt
 echo.
 echo %GRAY%------------------------------------------------------------%RESET%
-echo   按 %GREEN%M%RESET% 返回主菜单  %GREEN%x%RESET% 更多选项  %GREEN%0%RESET% 查看状态  %GREEN%Q%RESET% 退出
+echo   �� %GREEN%M%RESET% �������˵�  %GREEN%x%RESET% ����ѡ��  %GREEN%0%RESET% �鿴״̬  %GREEN%Q%RESET% �˳�
 set /p "NEXT=  ... "
 if /I "!NEXT!"=="Q" goto :exit_script
 if /I "!NEXT!"=="X" goto :submenu
@@ -559,7 +574,7 @@ if "!NEXT!"=="0" (
     call :print_status
     echo.
     echo %GRAY%------------------------------------------------------------%RESET%
-    echo   按 %GREEN%M%RESET% 返回主菜单  %GREEN%x%RESET% 更多选项  %GREEN%Q%RESET% 退出
+    echo   �� %GREEN%M%RESET% �������˵�  %GREEN%x%RESET% ����ѡ��  %GREEN%Q%RESET% �˳�
     set /p "NEXT=  ... "
     if /I "!NEXT!"=="Q" goto :exit_script
     if /I "!NEXT!"=="X" goto :submenu
@@ -582,11 +597,11 @@ if "%CHOICE%"=="6" call :do_backup
 if "%CHOICE%"=="0" goto :top_menu
 if "%CHOICE%"=="9" goto :exit_script
 
-REM ---------- 子菜单操作后的提示 ----------
+REM ---------- �Ӳ˵����������ʾ ----------
 :sub_post_prompt
 echo.
 echo %GRAY%------------------------------------------------------------%RESET%
-echo   按 %GREEN%M%RESET% 更多选项  %GREEN%T%RESET% 返回主菜单  %GREEN%0%RESET% 查看状态  %GREEN%Q%RESET% 退出
+echo   �� %GREEN%M%RESET% ����ѡ��  %GREEN%T%RESET% �������˵�  %GREEN%0%RESET% �鿴״̬  %GREEN%Q%RESET% �˳�
 set /p "NEXT=  ... "
 if /I "!NEXT!"=="Q" goto :exit_script
 if /I "!NEXT!"=="T" goto :top_menu
@@ -594,7 +609,7 @@ if "!NEXT!"=="0" (
     call :print_status
     echo.
     echo %GRAY%------------------------------------------------------------%RESET%
-    echo   按 %GREEN%M%RESET% 更多选项  %GREEN%T%RESET% 返回主菜单  %GREEN%Q%RESET% 退出
+    echo   �� %GREEN%M%RESET% ����ѡ��  %GREEN%T%RESET% �������˵�  %GREEN%Q%RESET% �˳�
     set /p "NEXT=  ... "
     if /I "!NEXT!"=="Q" goto :exit_script
     if /I "!NEXT!"=="T" goto :top_menu
@@ -604,5 +619,5 @@ goto :submenu
 :exit_script
 endlocal
 echo.
-echo %CYAN%再见。%RESET%
+echo %CYAN%�ټ���%RESET%
 exit /b 0

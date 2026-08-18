@@ -136,7 +136,7 @@ class TestFrontendBackendPortConsistency:
         ]:
             if not path.exists():
                 continue
-            content = path.read_text(encoding="utf-8")
+            content = path.read_text(encoding="utf-8", errors="replace")
             # 排除注释里说明旧值的字样
             for line in content.splitlines():
                 stripped = line.strip()
@@ -173,7 +173,7 @@ class TestFrontendBackendPortConsistency:
         for path in targets:
             if not path.exists():
                 continue
-            content = path.read_text(encoding="utf-8")
+            content = path.read_text(encoding="utf-8", errors="replace")
             for i, line in enumerate(content.splitlines(), start=1):
                 if ":8123" not in line:
                     continue
