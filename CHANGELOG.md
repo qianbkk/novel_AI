@@ -2,6 +2,72 @@
 
 This file records release-level behavior changes. Individual fixes and implementation details remain available through `git log`.
 
+## v1.0.1 — UX 架构修复：6 个真实问题（2026-08-18）
+
+设计动机（docs/wiki/09-Architecture-Audit-2026-08-18.md）：用户在真实使用中发现的 6 个问题，每个背后都是一类架构层缺陷（操作前不可知 / 状态不可见 / 一次性黑盒 / 用户旅程断裂）。本版本用架构方案一次性把同模式的所有问题修掉，不是字面 bug 修补。
+
+### Added — 架构级新组件
+
+**1. 后端 LLM 健康检查（核心）**
+- `GET /providers/health`：返回 `mode`（mock/live）+ `can_run_llm` + 3 角色（structured_logic / creative_detail / consistency_check）路由明细 + DB provider 列表 + 失败原因
+- `POST /providers/{id}/test`：单 provider 联通测试（带超时、上游错误透传）
+- 端点签名无 `Depends(get_db)`（避免 owner 校验污染 meta 端点）
+- 5 个测试覆盖 mock/live/4xx/404 路径（`tests/test_provider_health_2026_08_18.py`）
+
+**2. 前端 LLM 状态 banner**
+- `components/LLMStatusBanner.tsx`：折叠态一行 chip，展开显示 3 角色路由详情
+- 不可用时显示「去配置供应商 →」按钮跳 `/settings/providers`
+- 接入页面：WorldBuild / Outline / ThemeOpening / NewProject / BridgeConsole
+- 6 个页面中 5 个在进入页面时就显示 LLM 状态
+
+**3. 前端后端健康灯**
+- `hooks/useBackendHealth.ts`：每 5s 探测 `/health`，三态（checking / up+latency / down+error）
+- `App.tsx` sidebar 底部 `BackendStatusBadge` 实时显示
+- down 时可展开看错误详情 + 「dev.bat start-all」提示
+
+**4. 前端写作旅程 stepper**
+- `Dashboard` 项目卡嵌入 `WritingJourney` 组件
+- 5 步（创建 → 题材+主题 → 世界 → 大纲 → 写章节），当前所在步骤高亮
+- 项目卡点击跳「当前步骤」对应页（不再固定跳 WorldBuild）
+
+### Fixed — 6 个真实问题
+
+| # | 问题 | 根因 | 修复 |
+|---|------|------|------|
+| 1 | dev.bat 启动脚本中文乱码 | launcher 启动 python 时未设 `PYTHONIOENCODING=utf-8`，python 按 CP_ACP 写中文到日志，dev.bat tail 用 UTF-8 读乱码 | `dev.bat` launcher 加 `set PYTHONIOENCODING=utf-8` + `PYTHONUNBUFFERED=1` |
+| 2 | Dashboard 项目卡复选框与项目名重叠 | `.project-card__title` 无 padding-left | styles.css 加 `padding-left: 60px` |
+| 2 | 筛选逻辑漏洞百出（筛 genre1 看不到 genre2） | 题材 chip 来源是 `projects.map(genre)`，filter 掉 genre2 后再点不回 | 引入 `availableGenres` 独立题材池，额外拉一次不带筛选的 list |
+| 3 | 创建小说后「开始构建」失败无可知性 | 前端没有任何方式提前知道 LLM 是否就绪 | 见 Added #1 / #2 |
+| 4 | 旧项目「生成大纲」失败同上 | 同上 | 同上 + Outline 进入页面强制预检 |
+| 5 | WorldBuild 看不到内容，怀疑后端没起来 | 前端无后端状态可视化 | 见 Added #3 |
+| 6 | 前端布局不合理，小白不知如何使用 | 前端是「功能清单」不是「用户旅程」 | 见 Added #4 + NewProject 加 5 步旅程说明 |
+
+### Changed — 设计决策
+
+- **WorldBuild 「开始构建」按钮在 LLM 不可用时禁用**：避免用户点了之后 30 秒才发现失败
+- **NewProject 创建成功后跳 `/theme`（Pre-Production）** 而非 `/worldbuild`：v1.0 设计要求先做题材画像 + 主题 + 黄金三章，再做世界构建
+- **Outline / BridgeConsole 重资源操作前预检**：调用前同步探测 LLM 健康状态，失败时给「去配置供应商」引导而非默默吞错
+
+### Tests
+
+- **6 个新测试**（`tests/test_provider_health_2026_08_18.py`）：
+  - mock 模式 can_run_llm=True
+  - live 模式无 key → can_run_llm=False + 每角色 reason 含 "API key"
+  - live 模式全局 key 配齐 + 角色 provider 未配 → can_run_llm=True + 退回全局
+  - DB provider 无 api_key → test 端点 400
+  - DB provider api_base 不通 → test 端点 502 + 错误透传
+  - 不存在 provider_id → 404
+- 前端 build 验证：`npm run build` 通过（62 modules，360KB JS / 84KB CSS）
+
+### Migration Notes
+
+- 无 DB schema 变更
+- 无新增环境变量
+- 无新增依赖
+- 旧项目无需任何改动即可获得新 banner + stepper
+
+---
+
 ## v1.0 — 质量优先长篇网文写作架构（2026-08-18）
 
 设计动机（docs/drafts/v1-quality-first-design.md）：v0.5 流水线长、成本高、质量没有匹配。v1.0 走"前期工程深度 + 单章质量"路线，把 1 次前期深度调用变成 5x 写作补救调用的杠杆。

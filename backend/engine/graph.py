@@ -234,7 +234,11 @@ def _load_state_for_project(project_id: str) -> dict:
                     corrupted, e,
                 )
             except Exception:
-                pass
+                # 2026-08-18 修复（CLAUDE.md「失败要响亮」）：
+                # backup-rename 失败也要 log — 否则用户数据丢失都没声音。
+                log.exception(
+                    "_load_state_for_project: state 文件备份失败（可能丢失！）: %s", _STATE_PATH
+                )
             # raise 而不是 pass —— 让 caller 看到状态文件坏（不要静默 fallback 到 fresh state）
             raise
 

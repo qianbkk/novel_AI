@@ -12,7 +12,7 @@
 
 ## 1. 一句话
 
-**FastAPI + React 嵌一个 LangGraph 9-Agent 长篇网文写作引擎，前置 10 阶段结构化世界构建，后置图谱+向量混合检索守一致性。dev 模式默认单租户；`NOVEL_PRODUCTION=1` 切换为强制鉴权的多租户模式（Phase 4 起可用）。**
+**FastAPI + React 嵌一个 LangGraph 9-Agent 长篇网文写作引擎，前置 v1.0 Pre-Production 4 个结构化产物（题材画像/共性主题/黄金三章/资料助手）+ 10 阶段世界构建 + 大纲脊柱化 + 单轮聚焦质检 + 3 维记忆 ledger 贯穿，后置图谱+向量混合检索守一致性。dev 模式默认单租户；`NOVEL_PRODUCTION=1` 切换为强制鉴权的多租户模式（Phase 4 起可用）。**
 
 ---
 
@@ -48,6 +48,11 @@
 │  app/auth_scope.py: owner 校验（dev 模式 owner_id IS NULL 全局可见；      │
 │                      生产模式强制登录 + 拒绝 NULL-owner 行）              │
 │  app/worldbuild/*: 10 阶段 linear pipeline + SSE                          │
+│  app/pre_production.py: v1.0 Pre-Production CRUD                          │
+│                       (genre_profile + theme_spine + opening_design +     │
+│                        research_notes, PUT 强制 source='user')            │
+│  app/api/providers.py: 含 GET /providers/health + POST /providers/{id}/test│
+│                       (v1.0.1 — 操作前预检, 失败链路穿透)                  │
 │  app/bridge/*:   与 engine 桥接 (push-concept → planner → pull → ...)    │
 │  app/rag/*:      图谱 + 向量混合检索 (重复度 + 语义)                      │
 │  app/security.py: Fernet + MASTER_KEY (env > 磁盘 > 临时生成)            │
@@ -63,12 +68,16 @@
 │  engine/orchestrator.py: 6 节点 LangGraph 状态机 (load_arc_tasks →        │
 │    get_next_task → write_pipeline →(不过)→ rewrite →(仍不过)→            │
 │    human_escalation；(通过)→ save_and_track，循环至完成)                  │
-│  engine/agents/*: 9 个真实实现的 agent                                     │
+│  engine/agents/*: 9 个真实实现的 agent + v1.0 5 个 Pre-Production         │
 │    planner / outline (batch|card|talk) / writer / normalizer /            │
 │    compliance / checker (主评+2 路交叉) / rewriter (P0/P1/P2) /            │
 │    tracker (L2 热冷分层) / summarizer (L5 弧档案) / init_arc              │
+│    + v1.0: genre_profiler / theme_designer / opening_designer /          │
+│            research_notes / macro_spine / scene_quality_check              │
 │  engine/llm/router.py: 6 provider + mock, length budget 控字数             │
 │  engine/memory/manager.py: L2 热冷分层 + 风格样本切换 + 约束过期          │
+│  engine/memory/{expectation_ledger,show_item_chain,voice_anchors}.py:    │
+│    v1.0 3 个新 ledger（贯穿章节写作）                                       │
 │  engine/config/*: paths + prompt_templates + power_levels                  │
 │  engine/tools/*: bootstrap / budget / scan / fingerprint / exporter...    │
 │  engine/utils.py: atomic_write_json + parse_llm_json_response (3 策略)    │

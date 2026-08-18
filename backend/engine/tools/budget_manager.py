@@ -6,6 +6,7 @@ backend/data/engine/output/orchestrator_state.json (via config.paths).
 """
 from __future__ import annotations
 import json
+import logging
 import os
 import time
 from datetime import datetime
@@ -17,6 +18,8 @@ from ..config.paths import (
 from ..llm.router import LLMRouter
 from ..llm_router import get_active_router
 from ..utils import atomic_write_json
+
+_log = logging.getLogger("novel_ai.engine.tools.budget_manager")
 
 
 # Budget log lives alongside the orchestrator state
@@ -64,7 +67,9 @@ def load_all_records() -> list:
             try:
                 records.append(json.loads(line))
             except Exception:
-                pass
+                # 2026-08-18 修复（CLAUDE.md「失败要响亮」）：之前 pass 吞掉 JSONL 损坏行
+                _log.warning("budget log 跳过损坏行: %r", line[:80])
+                continue
     return records
 
 
@@ -84,7 +89,7 @@ def generate_report(budget_limit: float = 500.0) -> dict:
                 # 迭代 #50: 也读 planned，否则 print_report 会 KeyError
                 total_planned = state.get("total_chapters_planned", total_planned)
             except Exception:
-                pass
+                _log.exception("budget_manager.generate_report: state 文件读取失败（用 fallback 默认）")
         return {
             "total_cost_usd": total,
             "budget_limit_usd": budget_limit,
@@ -127,7 +132,7 @@ def generate_report(budget_limit: float = 500.0) -> dict:
             total_planned = state.get("total_chapters_planned", 157)
             budget_limit = state.get("budget_limit_usd", budget_limit)
         except Exception:
-            pass
+            _log.exception("budget_manager: state 二次读取失败（用 fallback 默认）")
 
     remaining = max(0, total_planned - chapters_done)
     projected_total = total_cost + remaining * cost_per_recent

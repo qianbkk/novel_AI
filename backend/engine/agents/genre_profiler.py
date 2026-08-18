@@ -25,6 +25,7 @@ from ..config.genre_profiles import (
 )
 from ..llm.router import LLMRouter  # noqa: F401  re-exported for callers
 from ..llm_router import get_active_router
+from ..utils import parse_llm_json_response
 
 
 _log = logging.getLogger("novel_ai.engine.agents.genre_profiler")
@@ -119,7 +120,7 @@ def _refine_with_llm(profile: dict, genre_key: str) -> dict:
             max_tokens=600,
             temperature=0.6,
         )
-        refined = _parse_llm_json(out)
+        refined = parse_llm_json_response(out, default={})
         if refined:
             # 合并：模板核心字段不动，LLM 字段叠加
             for k, v in refined.items():
@@ -146,13 +147,10 @@ def _call_llm_refine(*args, **kwargs):  # pragma: no cover  — 测试可 monkey
     raise NotImplementedError("应通过 router.call 或 monkeypatch 调用")
 
 
-def _parse_llm_json(text: str) -> dict | None:
-    """解析 LLM 输出 JSON — 复用 utils.parse_llm_json_response 失败时返回 None。"""
-    try:
-        from ..utils import parse_llm_json_response
-        return parse_llm_json_response(text, default={})
-    except Exception:
-        return None
+# 2026-08-18 修复（CLAUDE.md「失败要响亮」）：删除 _parse_llm_json wrapper。
+# utils.parse_llm_json_response 本身已经 log + 处理失败返 default；
+# 包一层 except Exception: return None 反而吞了 import 失败和潜在 bug。
+# 直接调 utils.parse_llm_json_response 即可。
 
 
 def _save_profile(profile: dict, novel_id: str) -> None:
@@ -168,7 +166,14 @@ def _save_profile(profile: dict, novel_id: str) -> None:
 
 
 def load_profile(novel_id: str) -> dict | None:
-    """加载已落盘的 genre profile（v1.0 老项目 bootstrap 时若存在则跳过初始化）。"""
+    """加载已落盘的 genre profile（v1.0 老项目 bootstrap 时若存在则跳过初始化）。
+
+    2026-08-18 修复（CLAUDE.md「失败要响亮」）：之前 `except Exception: return None`
+    无任何 log — 磁盘损坏 / 权限错误 / 编码错误都静默吞掉，
+    跟 normalizer 修复（commit cd57dfd）同样的反模式。
+    修法：catch 后调 log.exception，留 traceback 但仍返 None
+    （调用方按"文件不存在 / 损坏"语义处理是合理的）。
+    """
     from ..config.paths import novel_ai_dir
 
     target = Path(novel_ai_dir(novel_id)) / "output" / "genre_profile.json"
@@ -183,4 +188,5 @@ def load_profile(novel_id: str) -> dict | None:
                 return None
         return data
     except Exception:
+        _log.exception("load_profile 读取失败（将视作无 profile）: %s", target)
         return None

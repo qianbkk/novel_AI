@@ -2,27 +2,38 @@
 
 novel_AI：一个用多 Agent 协作写长篇网文的工程。
 
-FastAPI + React Web 框架内嵌一个 LangGraph 多 Agent 写作引擎。前端点点按钮，9 个写作 Agent（Planner / Writer / Normalizer / Compliance / Checker×3 / Rewriter / Outline / Summarizer / Tracker）协同生成设定、规划章节、逐章写作、质量评审与重写，章节自动入库。
+FastAPI + React Web 框架内嵌一个 LangGraph 多 Agent 写作引擎。前端点点按钮，9 个写作 Agent（Planner / Writer / Normalizer / Compliance / Checker×3 / Rewriter / Outline / Summarizer / Tracker）+ v1.0 Pre-Production 5 个（Genre Profiler / Theme Designer / Opening Designer / Research Notes / Macro Spine）协同生成设定、规划章节、逐章写作、质量评审与重写，章节自动入库。
 
 仓库目录：
 
-- `backend/`：FastAPI 后端，提供项目管理、世界构建、Provider/角色配置、写作引擎桥接、章节导入与检索。
-- `frontend/`：React + TypeScript + Vite 前端，提供项目页面、Provider 管理、角色配置和写作引擎控制台。
-- `docs/`：当前项目文档；[`docs/INDEX.md`](docs/INDEX.md) 是统一入口，`docs/wiki/` 维护架构、API、写作引擎、前端、数据模型与开发部署说明。
+- `backend/`：FastAPI 后端，提供项目管理、世界构建、Pre-Production、Provider/角色配置、写作引擎桥接、章节导入与检索。
+- `frontend/`：React + TypeScript + Vite 前端，提供项目页面（5 步写作旅程 stepper）、Provider 管理、角色配置和写作引擎控制台。
+- `docs/`：当前项目文档；[`docs/INDEX.md`](docs/INDEX.md) 是统一入口，`docs/wiki/` 维护架构、API、写作引擎、前端、数据模型、开发部署与架构审查产物。
 
 ## 本地运行
+
+**Windows 一键脚本（推荐）**：
+
+```bash
+dev.bat           # 交互菜单
+dev.bat start-all # 后端 :8132 + 前端 :5293
+dev.bat status    # 看运行状态 + /health 探测
+```
+
+**手动启动（Linux / macOS 或开发调试）**：
 
 后端：
 
 ```bash
 cd backend
 pip install -r requirements.txt
+set -a; . ./.env; set +a  # 必须 .env env 启动，否则 bridge subprocess 拿不到 LLM_API_KEY
 uvicorn app.main:app --reload --port 8132
 ```
 
 > **多用户认证**：v2 起 `register` / `login` 端点可用，但 **dev 模式（默认）仍是单租户**——不登录也能用所有功能，方便本地原型。
 > 真要多用户隔离时设 `NOVEL_PRODUCTION=1` 启动后端（fail-fast 强制鉴权）。
-> 生产模式要求与部署检查见下方“部署”章节。
+> 生产模式要求与部署检查见下方"部署"章节。
 
 前端：
 
@@ -32,22 +43,22 @@ npm install
 npm run dev
 ```
 
-写作引擎依赖（backend 内置，无需额外安装）：
-
-```bash
-cd backend
-pip install -r requirements.txt
-```
-
 打开 `http://localhost:5293`。
 
-## 使用顺序
+## 5 步写作旅程（v1.0 设计核心）
 
-1. 在 Provider 页面配置模型供应商。
-2. 在角色配置页面为 15 个写作角色绑定 Provider 和模型。
-3. 新建项目并完成世界构建。
-4. 在写作引擎控制台绑定 engine 输出目录（默认 `backend/data/engine/output/`）。
-5. 推送设定、生成设定包、运行章节写作，并导入章节。
+新版前端从"功能清单"改为"用户旅程"——所有项目卡显示 5 步 stepper，点开跳到当前所在步骤对应页。
+
+1. **创建项目** — `/new` 填标题 + 题材 + 受众 + 篇幅
+2. **Pre-Production** — `/projects/:id/theme` 4 个 tab：题材画像 + 共性主题 + 黄金三章 + 资料助手
+3. **世界构建** — `/projects/:id/worldbuild` 10 阶段自动跑（5-10 分钟）
+4. **大纲** — `/projects/:id/outline` 弧级大纲生成 + 编辑
+5. **写章节** — `/projects/:id/bridge` push-concept → planner → pull-setting → bootstrap → select → run N → import-chapters
+
+> 每进入需要 LLM 的页面（WorldBuild / Outline / ThemeOpening / BridgeConsole / NewProject）顶部都会显示 LLM 状态 banner——不可用时直接给"去配置供应商"引导，不会让你点了开始构建 30 秒后才发现失败。
+> Sidebar 底部有后端实时健康灯（每 5 秒探测），后端没起来时立刻可见。
+
+完整流程详见 [docs/wiki/08-Frontend-Runbook.md](docs/wiki/08-Frontend-Runbook.md)。
 
 ## 一键 MVP 脚本（CLI）
 
@@ -58,7 +69,7 @@ cd backend
 # 1. 启动后端（另一个终端）
 uvicorn app.main:app --reload --port 8132
 
-# 2. 在 frontend 新建项目 + 完成 worldbuild（10 阶段），记下 project_id
+# 2. 在 frontend 新建项目 + 完成 Pre-Production + worldbuild（10 阶段），记下 project_id
 # 3. 跑 MVP（默认写 1 章，选版本 A）
 python -m scripts.run_mvp <project_id>
 # 或：python -m scripts.run_mvp <project_id> --chapters 3 --select B

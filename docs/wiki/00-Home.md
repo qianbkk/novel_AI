@@ -21,6 +21,7 @@
 | 8 | [06-Dev-Setup.md](06-Dev-Setup.md) | 本地启动 / 部署 / 测试 |
 | 9 | [07-Real-LLM-Testing.md](07-Real-LLM-Testing.md) | 真实 LLM 测试前必看（问题清单 + 根因） |
 | 10 | [08-Frontend-Runbook.md](08-Frontend-Runbook.md) | 仅通过前端按钮操作的用户视角 |
+| 11 | [09-Architecture-Audit-2026-08-18.md](09-Architecture-Audit-2026-08-18.md) | 架构审查产物 + 同模式未来排查清单 |
 
 ## 文档维护规则（来自 `docs/INDEX.md`）
 

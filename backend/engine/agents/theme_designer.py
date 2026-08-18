@@ -22,6 +22,7 @@ import logging
 from pathlib import Path
 
 from ..llm_router import get_active_router
+from ..utils import parse_llm_json_response
 
 
 _log = logging.getLogger("novel_ai.engine.agents.theme_designer")
@@ -316,7 +317,7 @@ def _refine_with_llm(
             max_tokens=800,
             temperature=0.7,
         )
-        refined = _parse_llm_json(out)
+        refined = parse_llm_json_response(out, default={})
         if refined:
             # 字段兜底：LLM 缺字段时用模板字段补
             if not refined.get("theme_statement"):
@@ -341,10 +342,5 @@ def _refine_with_llm(
         return theme
 
 
-def _parse_llm_json(text: str) -> dict | None:
-    """解析 LLM 输出 JSON。"""
-    try:
-        from ..utils import parse_llm_json_response
-        return parse_llm_json_response(text, default={})
-    except Exception:
-        return None
+# 2026-08-18 修复（CLAUDE.md「失败要响亮」）：删除 _parse_llm_json wrapper。
+# utils.parse_llm_json_response 本身已 log + 处理失败；wrapper 反而吞了 import error。

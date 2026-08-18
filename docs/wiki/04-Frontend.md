@@ -14,17 +14,21 @@ React 18 + TypeScript 5 + Vite 5，无外部状态管理库、无 UI 组件库�
 
 | 路径 | 组件 | 说明 |
 |------|------|------|
-| `/` | `Dashboard` | 项目列表/搜索/类型筛选、"六大模块"罗盘可视化 |
-| `/new` | `NewProject` | 新建项目向导（类型、套路、受众、篇幅、主冲突） |
+| `/` | `Dashboard` | 项目列表 + 5 步写作旅程 stepper + 搜索/筛选 + 批量操作 |
+| `/new` | `NewProject` | 新建项目向导（类型、套路、受众、篇幅、主冲突）+ 5 步旅程说明 |
 | `/settings/providers` | `Providers` | LLM Provider CRUD（API Key、base URL、代理开关） |
 | `/settings/roles` | `RoleAssignments` | 15 个写作角色绑定 Provider + 可选模型覆盖 |
+| `/projects/:projectId/theme` | `ThemeOpening` | v1.0 Pre-Production 4 tab（题材画像/共性主题/黄金三章/资料助手） |
 | `/projects/:projectId/worldbuild` | `WorldBuild` | 10 阶段世界构建向导（SSE 进度）+ 结果多标签页 |
 | `/projects/:projectId/chapters` | `Chapters` | 手动录入章节、语义搜索、已存章节列表 |
 | `/projects/:projectId/bridge` | `BridgeConsole` | 写作引擎控制台：命令按钮、SSE 日志流、预算/待审面板、目录绑定 |
 | `/projects/:projectId/rules` | `RuleCenter` | 风格预设、禁忌词、提示词模板、后处理工具（logic/venom/deai） |
+| `/projects/:projectId/outline` | `Outline` | 弧级大纲 CRUD + LLM 重新生成 |
 | `/projects/:projectId/characters/:characterId` | `CharacterCard` | 角色 8 部分结构化卡片详情 + 关系列表 |
+| `/projects/:projectId/characters` | `CharacterList` | 角色专属索引页（Dashboard 角色按钮目标） |
+| `/projects/:projectId/chapter/:chapterNo` | `ChapterReader` | 章节阅读器（独立页面，替代 Dialog） |
 
-顶层布局（`App.tsx`）：固定侧边栏全局导航 + 登录状态指示（JWT 存 localStorage，挂载时 `api.meOrNull()` 校验，监听 `window` 事件 `novel_ai:auth_required`）+ 匹配 `/projects/:id/*` 时显示的项目内子导航（worldbuild/bridge/chapters/rules）+ 全局 `LoginDialog`。
+顶层布局（`App.tsx`）：固定侧边栏全局导航 + **后端实时健康灯**（每 5s 探测 `/health`，三态指示）+ 登录状态指示（JWT 存 localStorage，挂载时 `api.meOrNull()` 校验，监听 `window` 事件 `novel_ai:auth_required`）+ 匹配 `/projects/:id/*` 时显示的项目内子导航（theme/worldbuild/outline/bridge/chapters/rules）+ 全局 `LoginDialog`。
 
 ## API 客户端层（`frontend/src/api/client.ts`）
 
@@ -48,16 +52,20 @@ React 18 + TypeScript 5 + Vite 5，无外部状态管理库、无 UI 组件库�
 | 跨页面通用 | `components/Dialog.tsx` | 原生 `<dialog>` 封装（ESC 关闭、遮罩、焦点陷阱） |
 | 跨页面通用 | `components/Toast.tsx` | `ToastProvider` + `useToast()`，全局提示条 |
 | 跨页面通用 | `components/LoginDialog.tsx` | 登录/注册模态框 |
+| 跨页面通用 | `components/LLMStatusBanner.tsx` | **v1.0.1** LLM 状态 banner（折叠/展开），进入需要调 LLM 的页面立即显示；不可用时给"去配置供应商"引导 |
+| 跨页面通用 | `hooks/useBackendHealth.ts` | **v1.0.1** 每 5s 探测 `/health` 的三态 hook；sidebar 底部 `BackendStatusBadge` 实时显示 |
 | 世界构建 | `components/RelationGraph.tsx` | 纯 SVG（无 d3）人物关系图，主角居中，按角色分区环绕，关系类型着色边 |
 | 世界构建 | `pages/WorldBuild.tsx` 内联组件 | `WorldviewTab`/`WorldviewSection`/`FactionGraph`（力量体系 SVG 力导向布局） |
-| 项目管理 | `pages/Dashboard.tsx` | 项目列表/搜索/筛选 + `ModuleCompass` 装饰性罗盘 |
-| 项目管理 | `pages/NewProject.tsx` | 新建项目向导 |
+| 项目管理 | `pages/Dashboard.tsx` | **v1.0.1** 5 步写作旅程 stepper + 项目列表/搜索/筛选/批量操作 + `ModuleCompass` 装饰性罗盘 |
+| 项目管理 | `pages/NewProject.tsx` | **v1.0.1** 5 步旅程说明 + 新建向导；创建后跳 Pre-Production 而非 WorldBuild |
 | Provider 管理 | `pages/Providers.tsx` | CRUD 表单 + 列表，MASTER_KEY 警告横幅 |
 | 角色分配 | `pages/RoleAssignments.tsx` | 15 角色 → Provider/模型下拉表 |
 | 章节管理 | `pages/Chapters.tsx` | 录入表单、语义搜索、"连续性锁定"详情列表 |
-| 写作引擎控制台 | `pages/BridgeConsole.tsx` | 最复杂页面：命令按钮、SSE 日志、预算表、人工审核面板（accept/reject/edit）、目录绑定表单、七要素情节轮盘、节点状态翻卡、记忆层"温度计"仪表、章节时间线火花图 |
+| 写作引擎控制台 | `pages/BridgeConsole.tsx` | **v1.0.1** 操作前预检 LLM；最复杂页面：命令按钮、SSE 日志、预算表、人工审核面板（accept/reject/edit）、目录绑定表单、七要素情节轮盘、节点状态翻卡、记忆层"温度计"仪表、章节时间线火花图 |
 | 规则中心 | `pages/RuleCenter.tsx` | 风格预设、禁忌词（带音效的原生 dialog 添加流程）、模板试跑、后处理工具卡片 |
 | 角色详情 | `pages/CharacterCard.tsx` | 8 部分结构化卡片 + 关系列表，含内联 `SectionCard` 辅助组件 |
+| 大纲管理 | `pages/Outline.tsx` | **v1.0.1** 操作前预检；弧级大纲 CRUD + LLM 重新生成 |
+| v1.0 Pre-Production | `pages/ThemeOpening.tsx` | 4 tab（题材画像 / 共性主题 / 黄金三章 / 资料助手）；v1.0 设计核心产物 |
 
 ## 数据流模式
 

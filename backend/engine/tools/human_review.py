@@ -9,6 +9,7 @@ Reads from backend/data/engine/output/.
 """
 from __future__ import annotations
 import json
+import logging
 import os
 
 from ..config.paths import OUTPUT_DIR_STR, STATE_PATH_STR, SETTING_PATH_STR
@@ -38,7 +39,11 @@ def load_state() -> dict:
                 os.replace(STATE_PATH, corrupted)
                 print(f"⚠️  human_review: state 损坏，已备份 {corrupted}: {e}")
             except Exception:
-                pass
+                # 2026-08-18 修复（CLAUDE.md「失败要响亮」）：
+                # backup-rename 失败也要 log（用模块 logger 而不是 print）。
+                logging.getLogger("novel_ai.tools.human_review").exception(
+                    "human_review state 备份失败（可能丢失！）: %s", STATE_PATH
+                )
             raise
     return {}
 

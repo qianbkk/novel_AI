@@ -551,7 +551,12 @@ def _load_json_or_default(path: str, default_factory):
                     "memory file corrupted, backed up to %s: %s", corrupted, e
                 )
             except Exception:
-                pass
+                # 2026-08-18 修复（CLAUDE.md「失败要响亮」）：
+                # 之前 pass 完全吞掉 — backup-rename 失败 → 用户数据丢失都没声音。
+                # 改成 log.exception 让运维能从日志里看到。
+                logging.getLogger("novel_ai.memory").exception(
+                    "memory file 损坏后备份失败（用户数据可能丢失！）: %s", path
+                )
     return default_factory()
 
 

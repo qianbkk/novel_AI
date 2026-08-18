@@ -23,6 +23,7 @@ from pathlib import Path
 
 from ..config.prompt_templates import HOOK_TYPES
 from ..llm_router import get_active_router
+from ..utils import parse_llm_json_response
 
 
 _log = logging.getLogger("novel_ai.engine.agents.opening_designer")
@@ -398,7 +399,10 @@ def save_opening(novel_id: str, opening: dict) -> None:
 
 
 def load_opening(novel_id: str) -> dict | None:
-    """加载已落盘的 opening_design（启动时检测，老项目 bootstrap 自动按 default 初始化）。"""
+    """加载已落盘的 opening_design（启动时检测，老项目 bootstrap 自动按 default 初始化）。
+
+    2026-08-18 修复（CLAUDE.md「失败要响亮」）：见 genre_profiler.load_profile 注释。
+    """
     from ..config.paths import novel_ai_dir
 
     target = Path(novel_ai_dir(novel_id)) / "output" / "opening_design.json"
@@ -413,6 +417,7 @@ def load_opening(novel_id: str) -> dict | None:
                 return None
         return data
     except Exception:
+        _log.exception("load_opening 读取失败（将视作无 opening）: %s", target)
         return None
 
 
@@ -499,7 +504,7 @@ def _refine_with_llm(
             max_tokens=1200,
             temperature=0.7,
         )
-        refined = _parse_llm_json(out)
+        refined = parse_llm_json_response(out, default={})
         if refined:
             # 字段兜底
             for ch_name in _CHAPTER_REQUIRED:
@@ -519,10 +524,5 @@ def _refine_with_llm(
         return opening
 
 
-def _parse_llm_json(text: str) -> dict | None:
-    """解析 LLM 输出 JSON。"""
-    try:
-        from ..utils import parse_llm_json_response
-        return parse_llm_json_response(text, default={})
-    except Exception:
-        return None
+# 2026-08-18 修复（CLAUDE.md「失败要响亮」）：删除 _parse_llm_json wrapper。
+# utils.parse_llm_json_response 本身已 log + 处理失败；wrapper 反而吞了 import error。
