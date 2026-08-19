@@ -44,8 +44,16 @@ export default function ThemeOpening() {
   // 进入页面就并发查 4 个产物是否存在，让 tab 头部带"已完成 ✓"标记，
   // 并在 4/4 全完成后底部显示"下一步：世界构建 →"按钮（v1.0 Pre-Production 链路终结）。
   // 单 Tab 自己 useEffect 也查一次（保持各 tab 自洽），这里只算"是否生成过"。
+  //
+  // 2026-08-19 第二轮（用户报告"完全是硬编码"）：之前只看"文件存在"判定完成，
+  // 但 backend _resolve_novel_ai_dir 走全局路径 → 新项目读到旧全局模板也被算 done。
+  // 改：必须 source === 'llm' 才算"用户为本项目专门走过 LLM"（user 编辑也算），
+  //     source === 'template' 或 undefined 显示黄色 ⚠（仅模板，请重新生成走 LLM）。
   const [completed, setCompleted] = useState<Record<Tab, boolean>>({
     genre: false, theme: false, opening: false, research: false,
+  });
+  const [sources, setSources] = useState<Record<Tab, string | null | undefined>>({
+    genre: undefined, theme: undefined, opening: undefined, research: undefined,
   });
   useEffect(() => {
     if (!projectId) return;
@@ -58,11 +66,23 @@ export default function ThemeOpening() {
     ]).then((results) => {
       if (cancelled) return;
       const [g, t, o, r] = results;
+      // "本项目专门做过"：source === "llm" 或 source === "user"
+      const isDone = (s: string | null | undefined) => s === "llm" || s === "user";
+      const src = (x: PromiseSettledResult<unknown>) =>
+        x.status === "fulfilled"
+          ? (x.value as { source?: string | null })?.source ?? null
+          : null;
       setCompleted({
-        genre: g.status === "fulfilled",
-        theme: t.status === "fulfilled",
-        opening: o.status === "fulfilled",
-        research: r.status === "fulfilled",
+        genre: isDone(src(g)),
+        theme: isDone(src(t)),
+        opening: isDone(src(o)),
+        research: isDone(src(r)),
+      });
+      setSources({
+        genre: src(g),
+        theme: src(t),
+        opening: src(o),
+        research: src(r),
       });
     });
     return () => { cancelled = true; };
@@ -79,7 +99,7 @@ export default function ThemeOpening() {
             v1.0 前期工程：4 个结构化产物。前期做足 → 写作阶段省心。
           </p>
         </div>
-        {/* 完成度芯片（右上角）— 用户一眼看到还差几个 */}
+        {/* 完成度芯片（右上角）— 用户一眼看到还差几个 + 哪些只跑了模板没走 LLM */}
         <div
           aria-label="前期工程完成度"
           style={{
@@ -93,7 +113,16 @@ export default function ThemeOpening() {
             whiteSpace: "nowrap",
           }}
         >
-          {allDone ? "✓ 4/4 已完成" : `前期工程 ${[completed.genre, completed.theme, completed.opening, completed.research].filter(Boolean).length}/4`}
+          {allDone
+            ? "✓ 4/4 已完成"
+            : (() => {
+                const doneCount = [completed.genre, completed.theme, completed.opening, completed.research].filter(Boolean).length;
+                // 区分：已有产物但只是模板 / 没产物
+                const tabHas = (t: Tab) => sources[t] === "template" || sources[t] === "llm" || sources[t] === "user";
+                const onlyTpl = !completed.opening && tabHas("opening");
+                const suffix = onlyTpl ? "（⚠ 含模板）" : "";
+                return `前期工程 ${doneCount}/4${suffix}`;
+              })()}
         </div>
       </div>
 
@@ -102,26 +131,41 @@ export default function ThemeOpening() {
       <LLMStatusBanner />
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16, borderBottom: "1px solid var(--border)" }}>
-        {(["genre", "theme", "opening", "research"] as Tab[]).map((t) => (
-          <button
-            key={t}
-            onClick={() => { setTab(t); setError(null); setSuccess(null); }}
-            style={{
-              padding: "8px 16px",
-              border: "none",
-              borderBottom: tab === t ? "2px solid var(--accent)" : "2px solid transparent",
-              background: "transparent",
-              color: tab === t ? "var(--accent)" : "var(--text-secondary)",
-              cursor: "pointer",
-              fontWeight: tab === t ? 600 : 400,
-            }}
-          >
-            {t === "genre" && (completed.genre ? "① 题材画像 ✓ " : "① 题材画像 ")}
-            {t === "theme" && (completed.theme ? "② 共性主题 ✓ " : "② 共性主题 ")}
-            {t === "opening" && (completed.opening ? "③ 黄金三章 ✓ " : "③ 黄金三章 ")}
-            {t === "research" && (completed.research ? "④ 资料助手 ✓ " : "④ 资料助手 ")}
-          </button>
-        ))}
+        {(["genre", "theme", "opening", "research"] as Tab[]).map((t) => {
+          // 2026-08-19：tab 标记要反映"用户为本项目专门走过 LLM"——
+          // 完成（✓）= source='llm'/'user'；半完成（⚠）= 产物存在但只模板（source='template'）；
+          // 未开始 = 没产物。
+          const src = sources[t];
+          const hasProd = src === "llm" || src === "user" || src === "template";
+          const mark = completed[t]
+            ? " ✓"
+            : hasProd
+              ? " ⚠"
+              : "";
+          const labels: Record<Tab, string> = {
+            genre: "① 题材画像",
+            theme: "② 共性主题",
+            opening: "③ 黄金三章",
+            research: "④ 资料助手",
+          };
+          return (
+            <button
+              key={t}
+              onClick={() => { setTab(t); setError(null); setSuccess(null); }}
+              style={{
+                padding: "8px 16px",
+                border: "none",
+                borderBottom: tab === t ? "2px solid var(--accent)" : "2px solid transparent",
+                background: "transparent",
+                color: tab === t ? "var(--accent)" : "var(--text-secondary)",
+                cursor: "pointer",
+                fontWeight: tab === t ? 600 : 400,
+              }}
+            >
+              {labels[t]}{mark}
+            </button>
+          );
+        })}
       </div>
 
       {error && <div style={{ padding: 12, background: "var(--error-bg)", color: "var(--error)", borderRadius: 6, marginBottom: 16 }}>{error}</div>}

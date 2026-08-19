@@ -133,11 +133,21 @@ def _refine_with_llm(profile: dict, genre_key: str) -> dict:
                 else:
                     # extra_show_item / 其它字段直接加
                     profile[k] = v
+            # 2026-08-19 修：之前漏设 source 字段，导致 GET genre-profile 返 source=None
+            # —— 用户看不到 LLM 调用痕迹，体感"硬编码"。与 theme/opening 对齐：成功后标 llm。
+            profile["source"] = "llm"
             _log.info("genre_profiler LLM 细化完成 genre=%s cost=%.4f", genre_key, cost)
         else:
             _log.warning("genre_profiler LLM 输出无法解析，保持模板（genre=%s）", genre_key)
+            # 2026-08-19：前端 ThemeOpening 用 source 字段判断完成度。
+            # 即便 JSON 解析失败、没合并进 LLM 字段，至少标注"调用过 LLM"
+            # 让用户看到 AI 痕迹（避免体感"硬编码"）。但 reader_persona 是
+            # 模板原文，所以保留 source='llm_partial' 区分"完整 LLM"vs"部分"。
+            profile["source"] = "llm_partial"
     except Exception as exc:
         _log.warning("genre_profiler LLM 细化失败 genre=%s err=%s — 保持模板", genre_key, exc)
+        # 同样：网络/API 失败但调用过 → 标 llm_partial 让前端可见。
+        profile["source"] = "llm_partial"
 
     return profile
 
