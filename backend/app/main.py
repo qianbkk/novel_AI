@@ -232,6 +232,28 @@ async def lifespan(app: FastAPI):
     # SQLite 在线备份：必须在种子/迁移完成后做（避免拿到迁移前的快照）。
     # 故意不 fail-fast：备份写不动也不应阻塞启动，用户可稍后手动 dev.bat backup。
     backups = take_all_snapshots()
+    # 2026-08-19 修（用户报告 "WorldBuild 401" + "ThemeOpening 完全硬编码"）：
+    # uvicorn 主进程从来不调 LLMRouter().install() —— get_active_router() 永远 None，
+    # 后果：
+    #   (a) backend/engine/agents/* 里的 _refine_with_llm 直接 return template
+    #       （日志 "LLM router 未初始化，跳过 ... 细化（保持模板）"）→
+    #       前端体感"硬编码"，因为 ThemeOpening 4 个 tab 不管 concept 多具体，
+    #       返回都是 engine/config/genre_profiles.py 里写死的字符串；
+    #   (b) checker.py:171 fallback 到 LLMRouter() 裸构造，routes 走
+    #       MODEL_ROUTES_DEFAULT = anthropic；用户没 ANTHROPIC_API_KEY
+    #       → WorldBuild 报 401。
+    # 修法：lifespan 启动时调 LLMRouter().install() —— 读 DB Provider + RoleAssignment
+    # → set_active_router() → 所有 agent 用 get_active_router() 拿到的就是配置好的实例。
+    # 当 DB 没 Provider 或全 mock 时 install() 仍成功（routes 是默认 + key=""），
+    # agent 会 fallback 到 mock_payload，不阻断 dev 流程。
+    from engine.llm_router import LLMRouter as _EngineLLMRouter
+    try:
+        _engine_router = _EngineLLMRouter(project_id="__main__")
+        _engine_router.install()
+        log.info("engine LLMRouter installed (project_id=__main__)")
+    except Exception as exc:
+        # 不 fail-fast：router 装不上也要让 backend 起来（用户可能用 mock 模式或纯 DB 操作）
+        log.warning("engine LLMRouter install failed（agent 调 LLM 会保持 mock）: %s", exc)
     log.info(
         "startup: done. routes=%d migrations_applied=%d recovered_orphan_bridge_runs=%d "
         "backup novel_assistant=%s checkpoints=%s",

@@ -45,28 +45,63 @@ class Settings(BaseSettings):
     )
 
     # ── LLM 默认（mock 模式下全局生效，忽略下面的角色路由）──
-    llm_provider: str = "mock"          # mock | deepseek | kimi | minimax | openai_compatible
-    llm_api_base: str = ""
-    llm_api_key: str = ""
-    llm_model: str = ""
+    # 2026-08-19 修（用户报告 401）：补 AliasChoices 让 LLM_PROVIDER / LLM_API_KEY
+    # 等裸名 env 也生效（之前只走 NOVEL_ 前缀，用户设裸名 env 时 settings 读不到）。
+    llm_provider: str = Field(
+        default="mock",  # mock | deepseek | kimi | minimax | openai_compatible
+        validation_alias=AliasChoices("LLM_PROVIDER", "NOVEL_LLM_PROVIDER"),
+    )
+    llm_api_base: str = Field(
+        default="",
+        validation_alias=AliasChoices("LLM_API_BASE", "NOVEL_LLM_API_BASE"),
+    )
+    llm_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("LLM_API_KEY", "NOVEL_LLM_API_KEY"),
+    )
+    llm_model: str = Field(
+        default="",
+        validation_alias=AliasChoices("LLM_MODEL", "NOVEL_LLM_MODEL"),
+    )
 
     # ── 按角色路由的 provider（2026.6 横评结论）──
     # DeepSeek 逻辑强但"文风理工味重"，只适合结构化/大纲类阶段；
     # Kimi 文风偏文学性，适合需要"味道"的细节生成；
     # MiniMax 走 Lightning Attention 长窗口、国内服务不需代理，适合一致性复核。
     # 某个角色没配置 key 时自动退回 llm_provider，不强制要求三个都配置。
-    deepseek_api_base: str = "https://api.deepseek.com/v1"
-    deepseek_api_key: str = ""
+    deepseek_api_base: str = Field(
+        default="https://api.deepseek.com/v1",
+        validation_alias=AliasChoices("DEEPSEEK_API_BASE", "NOVEL_DEEPSEEK_API_BASE"),
+    )
+    deepseek_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("DEEPSEEK_API_KEY", "NOVEL_DEEPSEEK_API_KEY"),
+    )
     deepseek_model: str = "deepseek-chat"
 
-    kimi_api_base: str = "https://api.moonshot.cn/v1"
-    kimi_api_key: str = ""
+    kimi_api_base: str = Field(
+        default="https://api.moonshot.cn/v1",
+        validation_alias=AliasChoices("KIMI_API_BASE", "NOVEL_KIMI_API_BASE"),
+    )
+    kimi_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("KIMI_API_KEY", "NOVEL_KIMI_API_KEY"),
+    )
     kimi_model: str = "kimi-k2"
 
     # 迭代 #52: 之前默认 "https://api.minimax.chat/v1" 是旧版 endpoint，
     # 现在 MiniMax M3 用 api.minimaxi.com（per iter #32 router.py 注释）。
-    minimax_api_base: str = "https://api.minimaxi.com/v1"
-    minimax_api_key: str = ""
+    # 2026-08-19 修（用户报告 401）：之前没 validation_alias，用户设裸名
+    # `MINIMAX_API_KEY` env 时 settings 读不到 → Authorization 用空 key → 401。
+    # 补 AliasChoices 让 MINIMAX_API_KEY / NOVEL_MINIMAX_API_KEY 都能识别。
+    minimax_api_base: str = Field(
+        default="https://api.minimaxi.com/v1",
+        validation_alias=AliasChoices("MINIMAX_API_BASE", "NOVEL_MINIMAX_API_BASE"),
+    )
+    minimax_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("MINIMAX_API_KEY", "NOVEL_MINIMAX_API_KEY"),
+    )
     minimax_model: str = "MiniMax-M3"
 
     # ── Embedding provider ──
@@ -76,8 +111,14 @@ class Settings(BaseSettings):
     # 可选值：qwen3 | bge_m3 | openai_compatible | mock
     # 真实实战选项参考 backend/app/rag/embedding.py 顶部注释。
     embedding_provider: str = "qwen3"
-    embedding_api_base: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
-    embedding_api_key: str = ""
+    embedding_api_base: str = Field(
+        default="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        validation_alias=AliasChoices("EMBEDDING_API_BASE", "NOVEL_EMBEDDING_API_BASE"),
+    )
+    embedding_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("EMBEDDING_API_KEY", "NOVEL_EMBEDDING_API_KEY"),
+    )
     embedding_model: str = "text-embedding-v3"
 
     # ── 代理 ──
