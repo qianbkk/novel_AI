@@ -13,7 +13,7 @@ CLAUDE.md 红线：用户编辑 PUT 时强制 source='user'，不会被覆盖。
 */
 
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client";
 import type {
   GenreProfile, ThemeSpine, ThemeSpineIn,
@@ -35,16 +35,67 @@ const GENRE_KEYS = [
 
 export default function ThemeOpening() {
   const { projectId } = useParams();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<Tab>("theme");
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
+  // 2026-08-19（用户报告："主题与开篇完成后好像并没有开始的按钮，中间中断了"）：
+  // 进入页面就并发查 4 个产物是否存在，让 tab 头部带"已完成 ✓"标记，
+  // 并在 4/4 全完成后底部显示"下一步：世界构建 →"按钮（v1.0 Pre-Production 链路终结）。
+  // 单 Tab 自己 useEffect 也查一次（保持各 tab 自洽），这里只算"是否生成过"。
+  const [completed, setCompleted] = useState<Record<Tab, boolean>>({
+    genre: false, theme: false, opening: false, research: false,
+  });
+  useEffect(() => {
+    if (!projectId) return;
+    let cancelled = false;
+    Promise.allSettled([
+      api.getGenreProfile(projectId),
+      api.getTheme(projectId),
+      api.getOpening(projectId),
+      api.getResearchNotes(projectId),
+    ]).then((results) => {
+      if (cancelled) return;
+      const [g, t, o, r] = results;
+      setCompleted({
+        genre: g.status === "fulfilled",
+        theme: t.status === "fulfilled",
+        opening: o.status === "fulfilled",
+        research: r.status === "fulfilled",
+      });
+    });
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  const allDone = completed.genre && completed.theme && completed.opening && completed.research;
+
   return (
     <div className="page" style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
-      <h2 style={{ marginBottom: 8 }}>主题与开篇</h2>
-      <p style={{ color: "var(--text-secondary)", marginBottom: 24, fontSize: 14 }}>
-        v1.0 前期工程：4 个结构化产物。前期做足 → 写作阶段省心。
-      </p>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+        <div>
+          <h2 style={{ marginBottom: 8 }}>主题与开篇</h2>
+          <p style={{ color: "var(--text-secondary)", marginBottom: 24, fontSize: 14 }}>
+            v1.0 前期工程：4 个结构化产物。前期做足 → 写作阶段省心。
+          </p>
+        </div>
+        {/* 完成度芯片（右上角）— 用户一眼看到还差几个 */}
+        <div
+          aria-label="前期工程完成度"
+          style={{
+            padding: "6px 12px",
+            borderRadius: 6,
+            background: allDone ? "var(--success-bg, rgba(111,188,138,0.14))" : "var(--bg-card, #f5f1ea)",
+            border: `1px solid ${allDone ? "var(--success, #6FBC8A)" : "var(--border, #d8d2c4)"}`,
+            color: allDone ? "var(--success, #6FBC8A)" : "var(--text-secondary, #6a6a6a)",
+            fontSize: 13,
+            fontWeight: 600,
+            whiteSpace: "nowrap",
+          }}
+        >
+          {allDone ? "✓ 4/4 已完成" : `前期工程 ${[completed.genre, completed.theme, completed.opening, completed.research].filter(Boolean).length}/4`}
+        </div>
+      </div>
 
       {/* 2026-08-18：4 个 tab 都需要 LLM，统一显示状态 banner。
           用户报告 #3 架构修复：进入页面就知道 LLM 是否就绪。 */}
@@ -65,10 +116,10 @@ export default function ThemeOpening() {
               fontWeight: tab === t ? 600 : 400,
             }}
           >
-            {t === "genre" && "① 题材画像"}
-            {t === "theme" && "② 共性主题"}
-            {t === "opening" && "③ 黄金三章"}
-            {t === "research" && "④ 资料助手"}
+            {t === "genre" && (completed.genre ? "① 题材画像 ✓ " : "① 题材画像 ")}
+            {t === "theme" && (completed.theme ? "② 共性主题 ✓ " : "② 共性主题 ")}
+            {t === "opening" && (completed.opening ? "③ 黄金三章 ✓ " : "③ 黄金三章 ")}
+            {t === "research" && (completed.research ? "④ 资料助手 ✓ " : "④ 资料助手 ")}
           </button>
         ))}
       </div>
@@ -76,10 +127,52 @@ export default function ThemeOpening() {
       {error && <div style={{ padding: 12, background: "var(--error-bg)", color: "var(--error)", borderRadius: 6, marginBottom: 16 }}>{error}</div>}
       {success && <div style={{ padding: 12, background: "var(--success-bg)", color: "var(--success)", borderRadius: 6, marginBottom: 16 }}>{success}</div>}
 
-      {tab === "genre" && <GenreTab projectId={projectId!} onError={setError} onSuccess={setSuccess} />}
-      {tab === "theme" && <ThemeTab projectId={projectId!} onError={setError} onSuccess={setSuccess} />}
-      {tab === "opening" && <OpeningTab projectId={projectId!} onError={setError} onSuccess={setSuccess} />}
-      {tab === "research" && <ResearchTab projectId={projectId!} onError={setError} onSuccess={setSuccess} />}
+      {tab === "genre" && <GenreTab projectId={projectId!} onError={setError} onSuccess={setSuccess} onComplete={() => setCompleted((c) => ({ ...c, genre: true }))} />}
+      {tab === "theme" && <ThemeTab projectId={projectId!} onError={setError} onSuccess={setSuccess} onComplete={() => setCompleted((c) => ({ ...c, theme: true }))} />}
+      {tab === "opening" && <OpeningTab projectId={projectId!} onError={setError} onSuccess={setSuccess} onComplete={() => setCompleted((c) => ({ ...c, opening: true }))} />}
+      {tab === "research" && <ResearchTab projectId={projectId!} onError={setError} onSuccess={setSuccess} onComplete={() => setCompleted((c) => ({ ...c, research: true }))} />}
+
+      {/* v1.0 链路终结按钮：4/4 全完成后给"下一步：世界构建 →"。
+          之前没这个按钮，用户反馈"做完主题与开篇就卡住了，不知道去哪"。
+          部分完成时仍显示，但禁用 + 提示差几个，避免用户以为按钮坏了。 */}
+      <div
+        style={{
+          marginTop: 24,
+          padding: "16px 20px",
+          borderRadius: 8,
+          border: `1px solid ${allDone ? "var(--success, #6FBC8A)" : "var(--border, #d8d2c4)"}`,
+          background: allDone ? "var(--success-bg, rgba(111,188,138,0.10))" : "transparent",
+          display: "flex",
+          alignItems: "center",
+          gap: 16,
+        }}
+      >
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 600, fontSize: 14 }}>
+            {allDone ? "✓ 前期工程全部完成" : "前期工程进行中"}
+          </div>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
+            {allDone
+              ? "可以进入下一步：10 阶段世界构建（生成世界观 / 角色 / 势力 / 地图）"
+              : `还差 ${4 - [completed.genre, completed.theme, completed.opening, completed.research].filter(Boolean).length} 个产物：${[
+                  !completed.genre && "① 题材画像",
+                  !completed.theme && "② 共性主题",
+                  !completed.opening && "③ 黄金三章",
+                  !completed.research && "④ 资料助手",
+                ].filter(Boolean).join("、")}`}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={() => navigate(`/projects/${projectId}/worldbuild`)}
+          disabled={!allDone}
+          title={allDone ? "去世界构建（10 阶段流水线）" : "完成全部 4 个产物后才能继续"}
+          style={{ whiteSpace: "nowrap" }}
+        >
+          下一步：世界构建 →
+        </button>
+      </div>
     </div>
   );
 }
@@ -88,7 +181,7 @@ export default function ThemeOpening() {
 // ① 题材画像
 // ════════════════════════════════════════════════════
 
-function GenreTab({ projectId, onError, onSuccess }: { projectId: string; onError: (e: string) => void; onSuccess: (s: string) => void }) {
+function GenreTab({ projectId, onError, onSuccess, onComplete }: { projectId: string; onError: (e: string) => void; onSuccess: (s: string) => void; onComplete?: () => void }) {
   const [profile, setProfile] = useState<GenreProfile | null>(null);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
@@ -104,6 +197,7 @@ function GenreTab({ projectId, onError, onSuccess }: { projectId: string; onErro
       const result = await api.generateGenreProfile(projectId, { genre_key: genreKey, use_llm: useLlm });
       setProfile(result);
       onSuccess("题材画像已生成");
+      onComplete?.();
     } catch (e: unknown) {
       onError(String(e));
     }
@@ -166,7 +260,7 @@ function GenreTab({ projectId, onError, onSuccess }: { projectId: string; onErro
 // ② 共性主题
 // ════════════════════════════════════════════════════
 
-function ThemeTab({ projectId, onError, onSuccess }: { projectId: string; onError: (e: string) => void; onSuccess: (s: string) => void }) {
+function ThemeTab({ projectId, onError, onSuccess, onComplete }: { projectId: string; onError: (e: string) => void; onSuccess: (s: string) => void; onComplete?: () => void }) {
   const [theme, setTheme] = useState<ThemeSpine | null>(null);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
@@ -183,6 +277,7 @@ function ThemeTab({ projectId, onError, onSuccess }: { projectId: string; onErro
       const result = await api.generateTheme(projectId, { concept, use_llm: useLlm });
       setTheme(result);
       onSuccess("共性主题已生成");
+      onComplete?.();
     } catch (e: unknown) {
       onError(String(e));
     }
@@ -213,6 +308,7 @@ function ThemeTab({ projectId, onError, onSuccess }: { projectId: string; onErro
       setTheme({ ...parsed, source: "user" });
       setEditing(false);
       onSuccess("主题已保存（source=user）");
+      onComplete?.();
     } catch (e: unknown) {
       onError(String(e));
     } finally {
@@ -291,7 +387,7 @@ function ThemeTab({ projectId, onError, onSuccess }: { projectId: string; onErro
 // ③ 黄金三章
 // ════════════════════════════════════════════════════
 
-function OpeningTab({ projectId, onError, onSuccess }: { projectId: string; onError: (e: string) => void; onSuccess: (s: string) => void }) {
+function OpeningTab({ projectId, onError, onSuccess, onComplete }: { projectId: string; onError: (e: string) => void; onSuccess: (s: string) => void; onComplete?: () => void }) {
   const [opening, setOpening] = useState<OpeningDesign | null>(null);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
@@ -308,6 +404,7 @@ function OpeningTab({ projectId, onError, onSuccess }: { projectId: string; onEr
       const result = await api.generateOpening(projectId, { concept, use_llm: useLlm });
       setOpening(result);
       onSuccess("黄金三章已生成");
+      onComplete?.();
     } catch (e: unknown) {
       onError(String(e));
     }
@@ -338,6 +435,7 @@ function OpeningTab({ projectId, onError, onSuccess }: { projectId: string; onEr
       setOpening({ ...parsed, source: "user" });
       setEditing(false);
       onSuccess("黄金三章已保存（source=user）");
+      onComplete?.();
     } catch (e: unknown) {
       onError(String(e));
     } finally {
@@ -433,7 +531,7 @@ function ChapterView({ title, ch }: { title: string; ch: { scene: { where: strin
 // ④ 资料助手
 // ════════════════════════════════════════════════════
 
-function ResearchTab({ projectId, onError, onSuccess }: { projectId: string; onError: (e: string) => void; onSuccess: (s: string) => void }) {
+function ResearchTab({ projectId, onError, onSuccess, onComplete }: { projectId: string; onError: (e: string) => void; onSuccess: (s: string) => void; onComplete?: () => void }) {
   const [notes, setNotes] = useState<ResearchNotes | null>(null);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
@@ -450,6 +548,7 @@ function ResearchTab({ projectId, onError, onSuccess }: { projectId: string; onE
       const result = await api.initializeResearchNotes(projectId, { concept, use_llm: useLlm });
       setNotes(result);
       onSuccess(`资料助手已初始化（${result.research_strength}）`);
+      onComplete?.();
     } catch (e: unknown) {
       onError(String(e));
     }
@@ -480,6 +579,7 @@ function ResearchTab({ projectId, onError, onSuccess }: { projectId: string; onE
       setNotes({ ...parsed, source: "user" });
       setEditing(false);
       onSuccess("资料已保存");
+      onComplete?.();
     } catch (e: unknown) {
       onError(String(e));
     } finally {
