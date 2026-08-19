@@ -270,7 +270,52 @@ export default function WorldBuild() {
         )}
       </div>
 
-      {error && <div className="banner banner-danger">{error}</div>}
+      {error && (
+        <div className="banner banner-danger" role="alert">
+          <div style={{ fontWeight: 600, marginBottom: 6 }}>{error}</div>
+          {/* 2026-08-19（用户报告："v1.0 之后 WorldBuild LLM 调用失败 — 'Failed to fetch' 反复报错"）：
+              401/403 是最常见的"key 无效"信号，但错误消息里只有英文堆栈，
+              用户找不到修法。检测 401/403 → 直接给"去供应商设置"按钮 +
+              一行中文解释（key 被吊销 / 过期 / 写错 / 余额不足 / 账号异常）。
+              其它错误只显示原文，避免过度解读（400 可能是 prompt schema 错，
+              不是 key 问题）。 */}
+          {/401|403|Unauthorized|Forbidden|API[ _-]?key|login fail/i.test(error) && (
+            <div style={{ marginTop: 8, fontSize: 12.5 }}>
+              <strong style={{ color: "var(--stamp, #E06C5F)" }}>极可能是供应商 API key 无效</strong>
+              （被吊销 / 过期 / 写错 / 账号异常）。
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                style={{ marginLeft: 12 }}
+                onClick={() => navigate("/settings/providers")}
+                aria-label="去供应商设置检查 key"
+              >
+                去供应商设置 →
+              </button>
+              <button
+                type="button"
+                className="btn btn-sm"
+                style={{ marginLeft: 6 }}
+                onClick={async () => {
+                  try {
+                    const ps = await api.listProviders();
+                    const real = ps.find((p) => p.provider_type === "minimax") ?? ps[0];
+                    if (!real) return;
+                    const r = await api.testProvider(real.id);
+                    alert(`✓ ${real.name} 连通正常：${r.message ?? ""}`);
+                  } catch (e: unknown) {
+                    alert(`✗ 连通测试失败：${String(e)}`);
+                  }
+                }}
+                aria-label="立即测试 minimax 连通"
+                title="实际发一条最小请求到供应商，验证 key + 网络"
+              >
+                立即测试连通
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 2026-08-18：LLM 状态 banner — 进入页面立即显示，避免点了开始构建 30 秒才发现失败。
           顺便用 onStateChange 回调把 llmReady 状态透传给「开始构建」按钮的禁用逻辑。 */}

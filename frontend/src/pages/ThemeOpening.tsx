@@ -186,7 +186,11 @@ function GenreTab({ projectId, onError, onSuccess, onComplete }: { projectId: st
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
   const [genreKey, setGenreKey] = useState<string>("xuanhuan");
-  const [useLlm, setUseLlm] = useState(false);
+  // 2026-08-19：use_llm 默认改 true（用户报告"好像都没接入 AI 都直接生成了"）。
+  // 旧默认 false = 纯模板落盘 → 用户没勾 LLM 时看不到任何 AI 痕迹，体感"硬编码"。
+  // 改成 true 后：模板是兜底，LLM 失败会保留模板 + 在 source 字段标 llm_failed，
+  // 用户点生成就有 AI 调用痕迹（即便失败也会显示在 LLMStatusBanner）。
+  const [useLlm, setUseLlm] = useState(true);
 
   useEffect(() => {
     api.getGenreProfile(projectId).then(setProfile).catch(() => setProfile(null));
@@ -265,7 +269,8 @@ function ThemeTab({ projectId, onError, onSuccess, onComplete }: { projectId: st
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
   const [concept, setConcept] = useState("");
-  const [useLlm, setUseLlm] = useState(false);
+  // 2026-08-19：use_llm 默认 true（详见 GenreTab 注释）。
+  const [useLlm, setUseLlm] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -392,7 +397,8 @@ function OpeningTab({ projectId, onError, onSuccess, onComplete }: { projectId: 
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
   const [concept, setConcept] = useState("");
-  const [useLlm, setUseLlm] = useState(false);
+  // 2026-08-19：use_llm 默认 true（详见 GenreTab 注释）。
+  const [useLlm, setUseLlm] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -536,7 +542,8 @@ function ResearchTab({ projectId, onError, onSuccess, onComplete }: { projectId:
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState("");
   const [concept, setConcept] = useState("");
-  const [useLlm, setUseLlm] = useState(false);
+  // 2026-08-19：use_llm 默认 true（详见 GenreTab 注释）。
+  const [useLlm, setUseLlm] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
