@@ -34,7 +34,66 @@ ROLE_DEFAULTS: dict[str, str] = {
 }
 
 
+def _db_provider_configs() -> dict[str, ProviderConfig] | None:
+    """从 Provider DB 表 + RoleAssignment 读 provider 配置。
+    返回 None 表示 DB 没配（mock 模式或用户没建 provider）。
+
+    2026-08-19 修（用户报告 401）：之前 resolve_provider 只读 settings/env，
+    但 .env 文件里 key 可能过期（用户在 Provider 页更新过 key，但 .env 没同步）→
+    settings.minimax_api_key 是无效 key → 401 但 Provider 页 test_provider 通过。
+    修法：DB Provider 表优先，env 只作 fallback。
+    """
+    from .database import SessionLocal
+    from .models import Provider, RoleAssignment
+    from .security import decrypt_api_key
+
+    db = SessionLocal()
+    try:
+        rows = db.query(Provider).all()
+        if not rows:
+            return None
+        result: dict[str, ProviderConfig] = {}
+        for p in rows:
+            key = ""
+            if p.api_key_encrypted:
+                try:
+                    key = decrypt_api_key(p.api_key_encrypted)
+                except Exception:
+                    pass
+            if not key or not p.api_base:
+                continue
+            cfg = ProviderConfig(
+                provider=p.provider_type,
+                api_base=p.api_base,
+                api_key=key,
+                model=p.default_model or "",
+            )
+            # 同一 provider_type 可能多个，**第一个有效的覆盖**之前的（保持简单）。
+            if p.provider_type not in result:
+                result[p.provider_type] = cfg
+        # RoleAssignment 映射：role → provider type
+        ra_rows = db.query(RoleAssignment).all()
+        for ra in ra_rows:
+            if ra.provider_id and ra.provider_id in [p.id for p in rows]:
+                p = db.query(Provider).filter_by(id=ra.provider_id).first()
+                if p and p.provider_type in result:
+                    # 让该 role 直接指向配过的 provider（覆盖 ROLE_DEFAULTS 默认）
+                    result[ra.role_key] = ProviderConfig(
+                        provider=p.provider_type,
+                        api_base=p.api_base,
+                        api_key=result[p.provider_type].api_key,
+                        model=ra.model_override or p.default_model or "",
+                    )
+        return result if result else None
+    finally:
+        db.close()
+
+
 def _provider_configs() -> dict[str, ProviderConfig]:
+    """优先级：DB Provider 表 > env/settings。"""
+    db_cfg = _db_provider_configs()
+    if db_cfg:
+        return db_cfg
     return {
         "deepseek": ProviderConfig("deepseek", settings.deepseek_api_base, settings.deepseek_api_key, settings.deepseek_model),
         "kimi": ProviderConfig("kimi", settings.kimi_api_base, settings.kimi_api_key, settings.kimi_model),
@@ -50,11 +109,11 @@ def resolve_provider(role: str) -> ProviderConfig | None:
         return None
 
     providers = _provider_configs()
-    provider_name = ROLE_DEFAULTS.get(role, "default")
-    cfg = providers.get(provider_name)
+    # 优先看 RoleAssignment 是否直接把该 role 映射到了具体 provider（即便 provider_type 不在 ROLE_DEFAULTS 里）
+    cfg = providers.get(role)
 
     # 角色对应的 provider 没配 key，退回全局默认 provider，而不是直接报错——
     # 这样用户只配一个 provider 也能先跑起来，模型路由是"锦上添花"不是"硬依赖"。
     if cfg and not cfg.api_key:
-        cfg = providers["default"]
+        cfg = providers.get("default")
     return cfg
