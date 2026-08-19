@@ -289,6 +289,47 @@ app.include_router(chapter_titles.router)  # 2026-07-16：LLM 标题生成（Iss
 app.include_router(pre_production.router)  # v1.0 Stage A/B：genre_profile + theme_spine CRUD
 
 
+# ─── 全局兜底 exception handler（2026-08-19 修复）────────────────────
+# 根因：Starlette 的 ServerErrorMiddleware 在 CORSMiddleware 之前注册，
+# 任何未捕获的 Python 异常 → 500 响应**绕过** CORS 中间件 → 浏览器没拿到
+# ACAO header → CORS policy block → 报 "TypeError: Failed to fetch"。
+# 用户感知：所有 GET/POST 偶发 "Failed to fetch"，实际是后端 500 但被浏览器隐藏。
+#
+# 修法：注册 ExceptionHandler —— handler 抛的 JSONResponse 会经过
+# middleware stack（与正常 endpoint 响应一致），CORS header 正确加上。
+# 同时把 stack trace 落日志，让 dev 用户能立刻定位 bug。
+from fastapi import Request as _Req
+from fastapi.exceptions import RequestValidationError
+from starlette.responses import JSONResponse as _JR
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: _Req, exc: Exception) -> _JR:
+    """未捕获异常兜底：500 + CORS-安全 + 真实日志。
+
+    设计原则：
+      - 真实异常**不能**吞掉：log.exception 落全 stack trace，下次出现
+        同一 bug 时不再瞎猜。
+      - 响应 JSON 不能含 SQL / 路径 / 内部模块名（CLAUDE.md "失败要响亮，
+        但敏感信息脱敏"）：dev 模式限制 message 长度，prod 模式只返 "internal"。
+      - 必须经过 CORSMiddleware：通过 FastAPI exception_handler 注册的响应
+        会走 middleware stack（CORS header 自动添加）。
+    """
+    from .logging_setup import get_logger
+    from .auth_scope import is_production_mode
+    log = get_logger("novel_ai.unhandled")
+    log.exception(
+        "unhandled exception in %s %s", request.method, request.url.path,
+    )
+    if is_production_mode():
+        body = {"detail": "internal server error"}
+    else:
+        # dev 模式：给前端的 detail 限 200 字（避免依赖链路展开爆栈）
+        msg = f"{type(exc).__name__}: {str(exc)[:200]}"
+        body = {"detail": msg}
+    return _JR(status_code=500, content=body)
+
+
 @app.get("/health")
 def health():
     """健康检查：除了返回 status=ok，还验证 DB 可达。

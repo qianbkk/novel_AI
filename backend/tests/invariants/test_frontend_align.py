@@ -64,35 +64,40 @@ class TestFrontendBackendPortConsistency:
         self.fe_env = fe / ".env"
 
     def test_frontend_default_url_is_valid(self):
-        """前端 client.ts 默认 fallback URL 必须是合法的 http://localhost:PORT。
+        """前端 client.ts 默认 fallback URL 必须是合法的 http://localhost:PORT 或 127.0.0.1:PORT。
+        2026-08-19 放宽：commit c9e961c 把前端默认从 localhost 改成 127.0.0.1
+        （避 Windows IPv6 Happy Eyeballs），但 invariant 测试 regex 仍硬编
+        `localhost` 导致 3 个测试全 fail。本测试既验证"形态合法"又不强制
+        字面 host = 让用户的本地 host 选择（localhost vs 127.0.0.1）独立。
         纯静态检查（不联网），CI 无需起服务即可跑。
         """
         import re
         client = (self.fe_src / "api" / "client.ts").read_text(encoding="utf-8")
-        m = re.search(r'\|\|\s*"(http://localhost:\d+)"', client)
+        m = re.search(r'\|\|\s*"(http://(?:localhost|127\.0\.0\.1):\d+)"', client)
         assert m, (
-            "client.ts 必须有 `|| \"http://localhost:XXXX\"` fallback。"
+            "client.ts 必须有 `|| \"http://localhost:XXXX\"` 或 `127.0.0.1:XXXX` fallback。"
             f"实际 client.ts 顶部 200 字: {client[:200]!r}"
         )
         default_url = m.group(1)
         # URL 形态必须合法
-        assert re.match(r"^http://localhost:\d{4,5}$", default_url), (
-            f"fallback URL 形态异常: {default_url!r}（期望 http://localhost:PORT，4-5 位端口）"
+        assert re.match(r"^http://(?:localhost|127\.0\.0\.1):\d{4,5}$", default_url), (
+            f"fallback URL 形态异常: {default_url!r}（期望 http://localhost|127.0.0.1:PORT，4-5 位端口）"
         )
 
     @pytest.mark.skipif(
-        not _backend_alive("http://localhost:8132", timeout=1.0),
+        not _backend_alive("http://127.0.0.1:8132", timeout=1.0),
         reason="需要本机 8132 后端在跑（start.sh 或 uvicorn app.main:app --port 8132）"
     )
     def test_frontend_default_url_reachable_at_runtime(self):
         """运行时验证：client.ts 默认 URL 真的能联通后端。
         跳过条件：8132 不可达（CI / 冷启动）。
         本地开发：跑 `uvicorn app.main:app --port 8132` 后此测试会真的 ping。
+        2026-08-19：探测用 127.0.0.1（与 default URL 同 host 避免 IPv6 解析干扰）。
         """
         import re
         import httpx
         client = (self.fe_src / "api" / "client.ts").read_text(encoding="utf-8")
-        m = re.search(r'\|\|\s*"(http://localhost:\d+)"', client)
+        m = re.search(r'\|\|\s*"(http://(?:localhost|127\.0\.0\.1):\d+)"', client)
         assert m
         default_url = m.group(1)
         r = httpx.get(f"{default_url}/health", timeout=2.0)

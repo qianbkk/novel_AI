@@ -70,7 +70,15 @@ def _resolve_novel_ai_dir(project_id: str, db: Session) -> Path:
     if env_dir:
         return Path(env_dir)
     # 终极 fallback：engine 默认目录（确保不抛，调用方拿默认）
-    from ..config.paths import novel_ai_dir
+    # 2026-08-19 修复（"Failed to fetch" 反复报错）：原来写的是
+    # `from ..config.paths import novel_ai_dir`（当成 app.config.paths 包），
+    # 但 app.config 是单文件 config.py，不存在 paths 子模块 → ModuleNotFoundError。
+    # Starlette 的 ServerErrorMiddleware 在 CORSMiddleware 之前注册，
+    # 未处理异常 → 500 响应**绕过** CORS 中间件 → 浏览器没拿到 ACAO header →
+    # CORS policy block → 报 "TypeError: Failed to fetch"（用户看到的现象）。
+    # 改用绝对 import `engine.config.paths`（uvicorn 从 backend/ 启动，
+    # engine 在 sys.path 上）—— 与 agents/genre_profiler.py 等所有 engine 模块一致。
+    from engine.config.paths import novel_ai_dir
     return Path(novel_ai_dir()) if hasattr(novel_ai_dir, "__call__") else Path(str(novel_ai_dir))
 
 

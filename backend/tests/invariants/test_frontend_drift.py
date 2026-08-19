@@ -269,8 +269,10 @@ class TestNo8123HardcodedInUserFacingClient:
     def test_default_url_not_8123(self):
         client = (REPO_ROOT / "frontend" / "src" / "api" / "client.ts").read_text(
             encoding="utf-8")
-        # 找 `|| "http://localhost:PORT"` fallback
-        m = re.search(r'\|\|\s*"(http://localhost:(\d+))"', client)
+        # 找 `|| "http://localhost:PORT"` fallback（2026-08-19 也接受 127.0.0.1:PORT：
+        # commit c9e961c 把默认从 localhost 改成 127.0.0.1 避 IPv6 Happy Eyeballs，
+        # 不该因此让 invariant 测试 fail）
+        m = re.search(r'\|\|\s*"(http://(?:localhost|127\.0\.0\.1):(\d+))"', client)
         assert m, "client.ts 没有默认 baseUrl fallback"
         port = m.group(2)
         assert port != "8123", (
