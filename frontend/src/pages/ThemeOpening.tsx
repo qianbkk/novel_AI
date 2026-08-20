@@ -165,7 +165,17 @@ export default function ThemeOpening() {
 
       <LLMStatusBanner />
 
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, borderBottom: "1px solid var(--border)" }}>
+      <div
+        style={{
+          display: "inline-flex",
+          gap: 6,
+          padding: 4,
+          background: "rgba(15, 20, 32, 0.8)",
+          border: "1px solid rgba(255, 255, 255, 0.08)",
+          borderRadius: 10,
+          marginBottom: 20,
+        }}
+      >
         {(["genre", "theme", "opening", "research"] as Tab[]).map((t) => {
           const src = sources[t];
           const hasProd = src === "llm" || src === "user" || src === "template";
@@ -180,6 +190,7 @@ export default function ThemeOpening() {
             opening: "③ 黄金三章",
             research: "④ 资料助手",
           };
+          const isActive = tab === t;
           return (
             <button
               key={t}
@@ -187,11 +198,14 @@ export default function ThemeOpening() {
               style={{
                 padding: "8px 16px",
                 border: "none",
-                borderBottom: tab === t ? "2px solid var(--accent)" : "2px solid transparent",
-                background: "transparent",
-                color: tab === t ? "var(--accent)" : "var(--text-secondary)",
+                borderRadius: 8,
+                background: isActive ? "linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%)" : "transparent",
+                color: isActive ? "#FFFFFF" : "#94A3B8",
                 cursor: "pointer",
-                fontWeight: tab === t ? 600 : 400,
+                fontWeight: isActive ? 600 : 500,
+                fontSize: 13,
+                boxShadow: isActive ? "0 2px 8px rgba(99, 102, 241, 0.4)" : "none",
+                transition: "all 0.18s ease",
               }}
             >
               {labels[t]}{mark}
@@ -199,6 +213,7 @@ export default function ThemeOpening() {
           );
         })}
       </div>
+
 
       {error && <div style={{ padding: 12, background: "var(--error-bg)", color: "var(--error)", borderRadius: 6, marginBottom: 16 }}>{error}</div>}
       {success && <div style={{ padding: 12, background: "var(--success-bg)", color: "var(--success)", borderRadius: 6, marginBottom: 16 }}>{success}</div>}

@@ -5,65 +5,84 @@ import type { ChapterListItem, Project } from "../types";
 import { useReveal } from "../hooks/useReveal";
 import { useToast } from "../components/Toast";
 
-// 2026-07-25 抽离（修 P1-2 短板 inline style 收编）：
-// chipStyle(active) JS 函数生成 CSSProperties 模式改用 CSS class ——
-// .genre-chip + .genre-chip--active 已在 styles.css 定义。
-function statusBadge(status: Project["status"]) {
-  if (status === "ready") return <span className="badge-stamp">已就绪</span>;
-  if (status === "worldbuilding") return <span className="badge-soft">构建中</span>;
-  return <span className="badge-draft">草稿</span>;
+function getGenreColor(genre?: string): string {
+  switch (genre) {
+    case "玄幻": return "linear-gradient(180deg, #6366F1 0%, #8B5CF6 100%)";
+    case "仙侠": return "linear-gradient(180deg, #10B981 0%, #059669 100%)";
+    case "都市": return "linear-gradient(180deg, #F59E0B 0%, #D97706 100%)";
+    case "科幻": return "linear-gradient(180deg, #06B6D4 0%, #0284C7 100%)";
+    case "悬疑": return "linear-gradient(180deg, #8B5CF6 0%, #6D28D9 100%)";
+    case "历史": return "linear-gradient(180deg, #E11D48 0%, #BE123C 100%)";
+    default: return "linear-gradient(180deg, #6366F1 0%, #4F46E5 100%)";
+  }
 }
 
-// 2026-07-24 修复（运行态可见性）：Project.status 是 draft/worldbuilding/ready
-// 三态之一，但 bridge.run 跑时 status 不变 — 用户看不到"正在跑"。
-// 后端 /projects 现在带 active_run_command/status 字段：非空就显示"运行中" badge。
-// 点击直接跳到 BridgeConsole 看实时 SSE 日志。
-function runningBadge(p: Project) {
-  if (!p.active_run_command || !p.active_run_status) return null;
-  const cmdLabels: Record<string, string> = {
-    planner: "生成设定包",
-    bootstrap: "黄金三章",
-    init_arc: "初始化弧",
-    run: "写章节",
-    run_draft: "写章节(草稿)",
-    dashboard: "质量看板",
-    scan: "一致性扫描",
-    fingerprint: "文风指纹",
-    push: "推送",
-    pull: "拉取",
-    export: "导出",
-  };
-  const label = cmdLabels[p.active_run_command] || p.active_run_command;
-  const status = p.active_run_status === "running" ? "运行中" : "排队中";
+function statusBadge(status: Project["status"]) {
+  if (status === "ready") {
+    return (
+      <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: "rgba(16, 185, 129, 0.15)", border: "1px solid rgba(16, 185, 129, 0.35)", color: "#34D399", fontWeight: 600 }}>
+        ✓ 已就绪
+      </span>
+    );
+  }
+  if (status === "worldbuilding") {
+    return (
+      <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: "rgba(245, 158, 11, 0.15)", border: "1px solid rgba(245, 158, 11, 0.35)", color: "#FBBF24", fontWeight: 600 }}>
+        ⏳ 构建中
+      </span>
+    );
+  }
   return (
-    <span
-      className="badge-stamp running-pulse"
-      title={`${p.active_run_command} · ${status} · 开始于 ${p.active_run_started_at || "?"}`}
-      aria-label={`正在 ${label}`}
-    >
-      ⟳ {label}
+    <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 4, background: "rgba(255, 255, 255, 0.06)", border: "1px solid rgba(255, 255, 255, 0.12)", color: "#94A3B8" }}>
+      📝 草稿
     </span>
   );
 }
 
-// 6 大模块元数据：显示在顶栏罗盘
-const MODULES = [
-  { idx: "M01", title: "多重记忆防御", sub: "三道防线·可控推理", metric: "L1 弧段 + L2 衔接 + L3 压缩" },
-  { idx: "M02", title: "世界立法", sub: "GIS · 力量 · 物权", metric: "世界构建完成后即生效" },
-  { idx: "M03", title: "叙事工程", sub: "七要素 + 多模式大纲", metric: "欲望/阻碍/行动/结果/意外/转折/结局" },
-  { idx: "M04", title: "角色生命周期", sub: "数字实体 · 因果引擎", metric: "存续状态实时同步" },
-  { idx: "M05", title: "章节执行", sub: "实时人机协作", metric: "每章含场景+伏笔+状态" },
-  { idx: "M06", title: "AI 治理", sub: "规则中心 · 文笔指纹", metric: "毒舌模式 + 去味" },
-];
+function runningBadge(p: Project) {
+  if (!p.active_run_command || !p.active_run_status) return null;
+  const cmdLabels: Record<string, string> = {
+    planner: "设定包",
+    bootstrap: "黄金三章",
+    init_arc: "大纲规划",
+    run: "正文写作",
+    run_draft: "草稿写作",
+    dashboard: "质量扫描",
+    scan: "一致性校验",
+    fingerprint: "文风指纹",
+  };
+  const label = cmdLabels[p.active_run_command] || p.active_run_command;
+  return (
+    <span
+      className="running-pulse"
+      style={{
+        fontSize: 11,
+        padding: "2px 8px",
+        borderRadius: 4,
+        background: "rgba(99, 102, 241, 0.2)",
+        border: "1px solid #6366F1",
+        color: "#A5B4FC",
+        fontWeight: 600,
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+      }}
+      title={`${p.active_run_command} · 运行中`}
+    >
+      <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#818CF8", display: "inline-block", animation: "pulse 1.5s infinite" }} />
+      正在 {label}…
+    </span>
+  );
+}
 
 function WritingJourney({ p, chs, projectId }: { p: Project; chs: ChapterListItem[]; projectId: string }) {
   const navigate = useNavigate();
   const steps: { key: string; label: string; icon: string; path: string }[] = [
-    { key: "preprod",  label: "① 题材", icon: "🔮", path: `/projects/${projectId}/theme` },
-    { key: "world",    label: "② 设定", icon: "🌍", path: `/projects/${projectId}/worldbuild` },
-    { key: "outline",  label: "③ 大纲", icon: "📜", path: `/projects/${projectId}/outline` },
-    { key: "chapters", label: "④ 写作", icon: "✍️", path: `/projects/${projectId}/bridge` },
-    { key: "reader",   label: "⑤ 目录", icon: "📖", path: `/projects/${projectId}/chapters` },
+    { key: "preprod",  label: "① 题材开篇", icon: "🔮", path: `/projects/${projectId}/theme` },
+    { key: "world",    label: "② 世界设定", icon: "🌍", path: `/projects/${projectId}/worldbuild` },
+    { key: "outline",  label: "③ 故事大纲", icon: "📜", path: `/projects/${projectId}/outline` },
+    { key: "chapters", label: "④ 正文写作", icon: "✍️", path: `/projects/${projectId}/bridge` },
+    { key: "reader",   label: "⑤ 目录阅读", icon: "📖", path: `/projects/${projectId}/chapters` },
   ];
 
   const hasWorld = p.status === "ready";
@@ -74,15 +93,15 @@ function WritingJourney({ p, chs, projectId }: { p: Project; chs: ChapterListIte
   if (hasChapters) currentIdx = 3;
 
   return (
-    <div className="writing-journey" aria-label="创作旅程进度" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, margin: "12px 0 8px" }}>
+    <div className="modern-card-journey" aria-label="创作旅程进度">
       {steps.map((s, i) => {
         const done = i < currentIdx;
         const current = i === currentIdx;
         const cls = done
-          ? "writing-journey__step writing-journey__step--done"
+          ? "modern-journey-step is-done"
           : current
-          ? "writing-journey__step writing-journey__step--current"
-          : "writing-journey__step writing-journey__step--pending";
+          ? "modern-journey-step is-current"
+          : "modern-journey-step is-pending";
         return (
           <button
             type="button"
@@ -92,26 +111,10 @@ function WritingJourney({ p, chs, projectId }: { p: Project; chs: ChapterListIte
               e.stopPropagation();
               navigate(s.path);
             }}
-            title={`前往：${s.label}`}
-            style={{
-              background: current ? "var(--color-accent-soft)" : done ? "rgba(16, 185, 129, 0.08)" : "var(--color-bg-0)",
-              border: `1px solid ${current ? "var(--color-accent)" : done ? "rgba(16, 185, 129, 0.25)" : "var(--color-border-1)"}`,
-              borderRadius: "var(--radius-sm)",
-              padding: "5px 2px",
-              cursor: "pointer",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: 2,
-              transition: "all var(--duration-fast) var(--ease-out)",
-            }}
+            title={`前往步骤：${s.label}`}
           >
-            <span className="writing-journey__icon" style={{ fontSize: 12 }}>
-              {done ? "✓" : s.icon}
-            </span>
-            <span className="writing-journey__label" style={{ fontSize: 10, color: current ? "var(--color-accent-strong)" : done ? "var(--color-moss)" : "var(--color-fg-4)" }}>
-              {s.label}
-            </span>
+            <span style={{ fontSize: 12, lineHeight: 1 }}>{done ? "✓" : s.icon}</span>
+            <span style={{ fontSize: 10, letterSpacing: "-0.01em" }}>{s.label}</span>
           </button>
         );
       })}
@@ -119,143 +122,16 @@ function WritingJourney({ p, chs, projectId }: { p: Project; chs: ChapterListIte
   );
 }
 
-
-function ModuleCompass({ projects, chapterMap }: { projects: Project[]; chapterMap: Record<string, ChapterListItem[]> }) {
-  const totalChapters = Object.values(chapterMap).reduce((a, c) => a + c.length, 0);
-  const totalWords = Object.values(chapterMap)
-    .flat()
-    .reduce((a, c) => a + c.word_count, 0);
-  const ready = projects.filter((p) => p.status === "ready").length;
-  // 罗盘进度 = 已构建项目比例 * 0.4 + 已写章节比例 * 0.4 + 字数比例 * 0.2
-  const arcPct = Math.min(
-    100,
-    Math.round(
-      (ready / Math.max(1, projects.length)) * 40 +
-        Math.min(40, (totalChapters / 200) * 40) +
-        Math.min(20, (Math.log10(Math.max(1, totalWords)) / 6) * 20),
-    ),
-  );
-  const R = 76;
-  const C = 2 * Math.PI * R;
-  const offset = C * (1 - arcPct / 100);
-
-  return (
-    <div className="module-compass reveal">
-      {/* 背景墨滴 SVG 装饰 */}
-      <div className="ink-drop-bg ink-drop-bg--soft">
-        <svg viewBox="0 0 600 200" preserveAspectRatio="xMidYMid slice">
-          <defs>
-            <radialGradient id="ink-grad" cx="50%" cy="50%" r="50%">
-              <stop offset="0%" stopColor="#E06C5F" stopOpacity="0.18" />
-              <stop offset="100%" stopColor="#E06C5F" stopOpacity="0" />
-            </radialGradient>
-          </defs>
-          <circle cx="540" cy="40" r="120" fill="url(#ink-grad)" />
-          <circle cx="60" cy="180" r="90" fill="url(#ink-grad)" opacity="0.6" />
-          <path
-            d="M 480 30 q 10 20 0 40 q -10 -20 0 -40 z"
-            fill="#6B8AFD"
-            opacity="0.10"
-          />
-        </svg>
-      </div>
-
-      <div className="module-compass__title">
-        落笔 · FirstDraft
-        <span className="module-compass__sub">6 大模块导览 · 长篇工业化</span>
-      </div>
-
-      <div className="module-compass__grid">
-        <div className="module-compass__dial" aria-label="整体进度">
-          <svg viewBox="0 0 200 200">
-            <defs>
-              <linearGradient id="dial-grad" x1="0%" y1="0%" x2="100%" y2="100%">
-                <stop offset="0%" stopColor="#6B8AFD" />
-                <stop offset="50%" stopColor="#93A9FF" />
-                <stop offset="100%" stopColor="#E06C5F" />
-              </linearGradient>
-            </defs>
-            {/* 刻度环 */}
-            {Array.from({ length: 36 }).map((_, i) => {
-              const a = (i / 36) * Math.PI * 2 - Math.PI / 2;
-              const x1 = 100 + Math.cos(a) * 88;
-              const y1 = 100 + Math.sin(a) * 88;
-              const x2 = 100 + Math.cos(a) * 92;
-              const y2 = 100 + Math.sin(a) * 92;
-              return (
-                <line
-                  key={i}
-                  x1={x1} y1={y1} x2={x2} y2={y2}
-                  stroke={i % 9 === 0 ? "var(--accent-strong)" : "var(--border-strong)"}
-                  strokeWidth={i % 9 === 0 ? 1.4 : 0.6}
-                  strokeLinecap="round"
-                  opacity={i % 9 === 0 ? 0.9 : 0.4}
-                />
-              );
-            })}
-            <circle cx="100" cy="100" r={R} className="dial-arc-bg" />
-            <circle
-              cx="100"
-              cy="100"
-              r={R}
-              className="dial-arc-fg"
-              strokeDasharray={C}
-              strokeDashoffset={offset}
-              transform="rotate(-90 100 100)"
-            />
-            {/* 4 个方位文字 */}
-            {[
-              { x: 100, y: 18, t: "主线" },
-              { x: 182, y: 104, t: "立法" },
-              { x: 100, y: 192, t: "执行" },
-              { x: 18, y: 104, t: "治理" },
-            ].map((p) => (
-              <text key={p.t} x={p.x} y={p.y} textAnchor="middle" className="dial-tick-text">
-                {p.t}
-              </text>
-            ))}
-            {/* 中心读数 */}
-            <text x="100" y="96" textAnchor="middle" className="dial-label">整体</text>
-            <text x="100" y="116" textAnchor="middle" fill="var(--text)" fontFamily="var(--font-display)" fontSize="22" fontWeight={700}>
-              {arcPct}%
-            </text>
-            {/* 中心小光点 */}
-            <circle cx="100" cy="138" r="3" className="dial-pulse" />
-          </svg>
-        </div>
-
-        <div className="module-compass__cells">
-          {MODULES.map((m) => (
-            <div className="compass-cell" key={m.idx}>
-              <div className="compass-cell__head">
-                <span className="compass-cell__index">{m.idx}</span>
-                {m.title}
-              </div>
-              <div className="compass-cell__sub">{m.sub}</div>
-              <div className="compass-cell__metric">{m.metric}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 export default function Dashboard() {
   const [projects, setProjects] = useState<Project[] | null>(null);
   const [chapterMap, setChapterMap] = useState<Record<string, ChapterListItem[]>>({});
-  const [chapterLoadFailures, setChapterLoadFailures] = useState<Record<string, boolean>>({});
+  const [, setChapterLoadFailures] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
   const [q, setQ] = useState(searchParams.get("q") || "");
   const [genre, setGenre] = useState(searchParams.get("genre") || "");
-  // 2026-08-08 任务 #12：多选 + 删除 + 置顶。
-  // selectedIds: 当前多选中的项目 id。selectedCount > 0 时 toolbar 显示"已选 N 项"+ 操作按钮。
-  // bulkBusy: 批量删除进行中（防双击重复发请求）。
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
-  // 2026-08-18：全量题材池（独立于筛选条件），让 genre chip 始终展示完整题材列表，
-  // 避免「筛了 genre1 之后就看不到 genre2 切回去」这种用户报告的逻辑漏洞。
   const [availableGenres, setAvailableGenres] = useState<string[]>([]);
   const navigate = useNavigate();
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -264,10 +140,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     mountedRef.current = true;
-    // 2026-08-18：Esc 键统一清除搜索 + 多选（最直观的「撤销」入口）
     function onKey(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
-      // 如果焦点在 input 内由 input 自身 onKeyDown 处理；这里处理 input 外的 Esc
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
       if (selectedIds.size > 0) {
@@ -293,10 +167,7 @@ export default function Dashboard() {
       const ps = await api.listProjects({ q, genre });
       if (!mountedRef.current) return;
       setProjects(ps);
-      // 2026-08-18 修复（用户报告「筛选逻辑漏洞百出」）：
-      // 同时拉一次 "全部项目"（不带 q/genre）来填充"题材池"。
-      // 否则当 genre 切到 X 后，前端 chip 列表只显示 X，
-      // 用户再也点不回 Y。素材池独立于筛选，互不干扰。
+
       try {
         const allPs = await api.listProjects({});
         if (mountedRef.current) {
@@ -305,25 +176,17 @@ export default function Dashboard() {
           );
         }
       } catch {
-        // 拉全量失败 → fallback 到当前结果里的题材（保守但可用）
         if (mountedRef.current) {
           setAvailableGenres(
             Array.from(new Set(ps.map((p) => p.genre).filter(Boolean))).sort()
           );
         }
       }
-      // 审计 #2（2026-07-22）：串行 + 4 并发限制，避免全量并发导致
-      // 2026-07-25 接入 client.withConcurrency 替换手写 chunk 循环（4 并发）。
-      // helper 是本 commit (ad9d8f2) 为收编这块而抽的；现在实际接入。
-      // withConcurrency 用 sliding window（不是固定 chunk），语义更优：
-      // worker 完成后立即取下一个任务，4 个 worker 始终满载。
+
       const results = await withConcurrency(4,
         ...ps.map((p) => () => api.listChapters(p.id).then(
           (chs) => ({ id: p.id, chs, failed: false }),
           (e: unknown) => {
-            // 审计 #1（2026-07-22）：不再静默吞单个项目章节加载失败，
-            // console.warn 让开发者看到，同时 hasError=true 让 UI 能区分
-            // 「真的没有章节」与「加载失败」（前端用 hasError 标灰）。
             console.warn(`[Dashboard] listChapters failed for ${p.id}:`, e);
             return { id: p.id, chs: [] as ChapterListItem[], failed: true };
           }
@@ -334,7 +197,6 @@ export default function Dashboard() {
           r.ok ? r.value : { id: "", chs: [], failed: true }
         );
       if (!mountedRef.current) return;
-      // chapterMap: id -> chapters；failures: id -> true（前端可标灰）
       setChapterMap(Object.fromEntries(entries.map(({ id, chs }) => [id, chs])));
       setChapterLoadFailures(Object.fromEntries(
         entries.map(({ id, failed }) => [id, failed])
@@ -345,7 +207,6 @@ export default function Dashboard() {
     }
   }
 
-  // debounce 300ms：当 q/genre 变化时同步到 URL 并重新拉取
   useEffect(() => {
     const t = setTimeout(() => {
       const next = new URLSearchParams();
@@ -355,7 +216,6 @@ export default function Dashboard() {
       loadAll();
     }, 300);
     return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, genre]);
 
   const totalWords = useMemo(
@@ -363,8 +223,11 @@ export default function Dashboard() {
     [chapterMap],
   );
 
-  // 2026-08-08 任务 #12 — 选中切换（复选框回调，阻止冒泡到卡片导航）
-  // 用 Set 而不是数组：toggle O(1)，selectedIds.size 算已选数量 O(1)。
+  const totalChapters = useMemo(
+    () => Object.values(chapterMap).reduce((a, c) => a + c.length, 0),
+    [chapterMap],
+  );
+
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -374,22 +237,22 @@ export default function Dashboard() {
     });
   }
 
-  // 2026-08-18：全选 / 反选当前可见项目（保持 UI 整洁 + 批量操作高效）
   function selectAllVisible() {
     if (!projects) return;
     setSelectedIds(new Set(projects.map((p) => p.id)));
   }
+
   function clearSelection() {
     setSelectedIds(new Set());
   }
 
   async function bulkDeleteSelected() {
     if (selectedIds.size === 0) return;
-    if (!window.confirm(`确认删除已选 ${selectedIds.size} 个项目？此操作不可撤销。`)) return;
+    if (!window.confirm(`确认删除已选 ${selectedIds.size} 个小说项目？此操作不可撤销。`)) return;
     setBulkBusy(true);
     try {
       const res = await api.bulkDeleteProjects(Array.from(selectedIds));
-      toast.success(`已删除 ${res.deleted.length} 个项目${res.skipped.length ? `（${res.skipped.length} 个无权跳过）` : ""}`);
+      toast.success(`已删除 ${res.deleted.length} 个项目`);
       setSelectedIds(new Set());
       await loadAll();
     } catch (e) {
@@ -403,8 +266,6 @@ export default function Dashboard() {
     if (selectedIds.size === 0) return;
     setBulkBusy(true);
     try {
-      // 顺序 POST：每个项目单独 PUT /pin（后端无 batch 接口）。
-      // 失败用 Promise.allSettled 收集，不让一条失败 abort 全部。
       const results = await Promise.allSettled(
         Array.from(selectedIds).map((id) => api.pinProject(id, { pinned })),
       );
@@ -420,7 +281,7 @@ export default function Dashboard() {
   }
 
   async function togglePinOne(p: Project, e: React.MouseEvent) {
-    e.stopPropagation();  // 不触发卡片 onClick 导航
+    e.stopPropagation();
     try {
       await api.pinProject(p.id, { pinned: !p.pinned, pin_order: (p.pin_order || 0) + 1 });
       await loadAll();
@@ -430,51 +291,72 @@ export default function Dashboard() {
   }
 
   return (
-    <div ref={rootRef}>
-      <div className="page-header">
-        <div>
-          <h1 className="page-header__title">我的项目</h1>
-          <div className="page-header__sub">
-            {error
-              ? "项目加载失败"
-              : projects
-                ? `共 ${projects.length} 个项目 · ${Object.values(chapterMap).flat().length} 章 · ${totalWords.toLocaleString()} 字`
-                : "加载中…"}
+    <div ref={rootRef} style={{ maxWidth: 1360, margin: "0 auto" }}>
+      {/* 现代化 Hero Studio 看板顶栏 */}
+      <div className="studio-hero">
+        <div className="studio-hero__info">
+          <div className="studio-hero__tag">
+            <span>✨</span>
+            <span>AI 长篇网络小说创作工坊 · v1.0</span>
           </div>
+          <h1 className="studio-hero__title">
+            落笔 · 创作者空间
+          </h1>
+          <p className="studio-hero__sub">
+            题材画像 · 深度世界构建 · 多弧大纲规划 · 全自动人机协作连贯正文写作
+          </p>
         </div>
-        <div className="page-header__actions">
+
+        <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+          <div className="studio-hero__metrics">
+            <div className="studio-metric-card">
+              <span className="studio-metric-card__val">{projects ? projects.length : "—"}</span>
+              <span className="studio-metric-card__label">📚 我的作品</span>
+            </div>
+            <div className="studio-metric-card">
+              <span className="studio-metric-card__val">{totalChapters}</span>
+              <span className="studio-metric-card__label">📖 累计章节</span>
+            </div>
+            <div className="studio-metric-card">
+              <span className="studio-metric-card__val">
+                {totalWords > 10000 ? `${(totalWords / 10000).toFixed(1)}万` : totalWords.toLocaleString()}
+              </span>
+              <span className="studio-metric-card__label">📝 总字数</span>
+            </div>
+          </div>
+
           <button
             type="button"
             className="btn btn-primary"
+            style={{ padding: "11px 22px", fontSize: 14, fontWeight: 700, borderRadius: 10 }}
             onClick={() => navigate("/new")}
-            aria-label="新建小说"
           >
-            + 新建小说
+            + 新建小说作品
           </button>
         </div>
       </div>
 
       {error && (
-        <div className="banner banner-danger" role="alert">
-          <div>{error} — 后端没起来？默认地址 <span className="text-mono">http://127.0.0.1:8132</span></div>
+        <div className="banner banner-danger" role="alert" style={{ marginBottom: 20 }}>
+          <div>{error} — 后端服务连接异常，默认地址 <span className="text-mono">http://127.0.0.1:8132</span></div>
           <button
             type="button"
-            className="btn"
-            style={{ marginTop: 10 }}  /* 2026-07-25：单一 inline style（margin-top 没法 className 化） */
+            className="btn btn-sm"
+            style={{ marginTop: 8 }}
             onClick={loadAll}
-            aria-label="重试加载项目"
           >
-            重试
+            重试连接
           </button>
         </div>
       )}
 
-      {/* 搜索 + 筛选区 */}
-      <div className="dashboard-toolbar" style={{ display: "flex", gap: 12, alignItems: "center", margin: "16px 0", flexWrap: "wrap" }}>
-        <div style={{ position: "relative", flex: "1 1 240px", maxWidth: 360 }}>
+      {/* 搜索与题材快速筛选栏 */}
+      <div className="studio-toolbar">
+        <div className="studio-search-box">
+          <span className="studio-search-icon">🔍</span>
           <input
             type="text"
-            placeholder="搜索项目名 / 主角名…"
+            placeholder="搜索小说作品名 / 主角名 (Esc 清空)…"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => {
@@ -483,398 +365,295 @@ export default function Dashboard() {
                 setQ("");
               }
             }}
-            className="dashboard-search-input"
-            style={{ width: "100%", paddingRight: q ? 32 : 12 }}
-            aria-label="搜索项目"
+            className="studio-search-input"
           />
           {q && (
             <button
               type="button"
               onClick={() => setQ("")}
-              aria-label="清除搜索"
-              title="清除搜索（Esc）"
               style={{
                 position: "absolute",
-                right: 6,
+                right: 8,
                 top: "50%",
                 transform: "translateY(-50%)",
                 background: "transparent",
                 border: "none",
+                color: "#94A3B8",
                 cursor: "pointer",
                 fontSize: 16,
-                color: "var(--text-muted)",
-                padding: 4,
-                lineHeight: 1,
               }}
             >
               ×
             </button>
           )}
         </div>
-        <div className="dashboard-genre-chips" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-          {/* 2026-08-18 修复：全部 chip 总是显示，避免切 genre 后失去回退入口 */}
+
+        <div className="studio-genre-chips">
           <button
-            className={`genre-chip ${!genre ? "genre-chip--active" : ""}`}
+            type="button"
+            className={`studio-chip ${!genre ? "is-active" : ""}`}
             onClick={() => setGenre("")}
-            aria-pressed={!genre}
-            title="显示所有题材"
           >
-            全部
+            全部题材
           </button>
-          {/* 2026-08-18 修复：chip 列表展示用户**已配置**的所有题材，
-             不能用 (projects || []) — 那只能看到当前筛选命中的题材，
-             一旦切到 genre1 就再也点不回去 genre2（用户报告的逻辑漏洞）。
-             这里改成读一个独立的"全量题材池"，避免 client side 漏列。 */}
           {availableGenres.map((g) => (
             <button
               key={g}
-              className={`genre-chip ${genre === g ? "genre-chip--active" : ""}`}
+              type="button"
+              className={`studio-chip ${genre === g ? "is-active" : ""}`}
               onClick={() => setGenre(genre === g ? "" : g)}
-              aria-pressed={genre === g}
-              title={genre === g ? `点击取消「${g}」筛选` : `只显示「${g}」题材的项目`}
             >
               {g}
             </button>
           ))}
         </div>
-        {(q || genre) && (
-          <button
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => { setQ(""); setGenre(""); }}
-            aria-label="清除所有筛选"
-          >
-            清除筛选
-          </button>
-        )}
       </div>
 
-      {/* 2026-08-08 任务 #12：选中条（多选 + 批量操作）。
-          selectedIds 非空时才显示，避免每页都有一条空 toolbar 干扰视觉。
-          设计：放工具栏右侧（不影响搜索输入框），半透明背景 + 边框提示"现在是批量模式"。
-          2026-08-18 修复（用户反馈「批量管理逻辑粗糙」）：
-          - 显示 已选 N/M（M=当前可见项目数），用户能直观看到「全选当前」的目标数
-          - 加「全选当前」「清除选中」两个快捷按钮 + Esc 键清除选中
-          - 已选数 = 当前可见数时「全选当前」禁用，已选数 = 0 时显示一个轻量的提示 */}
-      {projects && projects.length > 0 && (
+      {/* 批量操作工具栏 */}
+      {selectedIds.size > 0 && (
         <div
-          className="bulk-toolbar"
-          role="region"
-          aria-label="批量操作栏"
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 10,
-            padding: "8px 14px",
-            margin: "8px 0 16px",
-            background: selectedIds.size > 0 ? "var(--surface-soft, #f5f1ea)" : "transparent",
-            border: selectedIds.size > 0 ? "1px solid var(--accent, #6B8AFD)" : "1px dashed var(--border-2)",
-            borderRadius: 10,
+            gap: 12,
+            padding: "10px 18px",
+            marginBottom: 20,
+            background: "rgba(99, 102, 241, 0.12)",
+            border: "1px solid rgba(99, 102, 241, 0.35)",
+            borderRadius: 12,
           }}
         >
-          {selectedIds.size > 0 ? (
-            <>
-              <span style={{ fontSize: 13, color: "var(--ink, #2b2b2b)" }}>
-                已选 <strong style={{ color: "var(--accent, #6B8AFD)" }}>{selectedIds.size}</strong>
-                <span style={{ color: "var(--text-muted, #9098B0)" }}> / {projects.length}</span> 项
-              </span>
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={clearSelection}
-                disabled={bulkBusy}
-                aria-label="取消多选（Esc）"
-                title="取消多选（Esc）"
-              >
-                取消选择
-              </button>
-            </>
-          ) : (
-            <>
-              <span style={{ fontSize: 12, color: "var(--text-muted, #9098B0)" }}>
-                💡 勾选项目卡片可批量操作（置顶 / 删除）
-              </span>
-              <button
-                type="button"
-                className="btn btn-sm btn-ghost"
-                onClick={selectAllVisible}
-                aria-label="全选当前可见项目"
-              >
-                全选当前
-              </button>
-            </>
-          )}
-          <div style={{ flex: 1 }} />
+          <span style={{ fontSize: 13, color: "#F8FAFC" }}>
+            已勾选 <strong style={{ color: "#A5B4FC" }}>{selectedIds.size}</strong> 本作品
+          </span>
           <button
             type="button"
-            className="btn"
-            onClick={() => pinSelected(true)}
-            disabled={bulkBusy || selectedIds.size === 0}
-            aria-label="置顶选中项"
+            className="btn btn-sm btn-ghost"
+            onClick={clearSelection}
+            disabled={bulkBusy}
           >
-            📌 置顶选中
+            取消选择 (Esc)
           </button>
           <button
             type="button"
-            className="btn"
+            className="btn btn-sm btn-ghost"
+            onClick={selectAllVisible}
+            disabled={bulkBusy}
+          >
+            全选当前
+          </button>
+          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            className="btn btn-sm"
+            onClick={() => pinSelected(true)}
+            disabled={bulkBusy}
+          >
+            📌 批量置顶
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm"
             onClick={() => pinSelected(false)}
-            disabled={bulkBusy || selectedIds.size === 0}
-            aria-label="取消置顶选中项"
+            disabled={bulkBusy}
           >
             📍 取消置顶
           </button>
           <button
             type="button"
-            className="btn btn-danger"
+            className="btn btn-sm btn-danger"
             onClick={bulkDeleteSelected}
-            disabled={bulkBusy || selectedIds.size === 0}
-            aria-label="删除选中项"
+            disabled={bulkBusy}
           >
-            🗑 删除选中
+            🗑 批量删除
           </button>
         </div>
       )}
 
-      {/* 五期：罗盘折叠为可选装饰，主体项目列表上移到首屏 */}
-      {projects && projects.length > 0 && (
-        <details style={{ marginTop: 12 }}>
-          <summary style={{ cursor: "pointer", fontSize: 13, color: "var(--text-muted)" }}>
-            模块罗盘（装饰性概览 · 点击展开）
-          </summary>
-          <div style={{ marginTop: 12 }}>
-            <ModuleCompass projects={projects} chapterMap={chapterMap} />
-          </div>
-        </details>
-      )}
-
-      {projects && projects.length === 0 && (q || genre) && (
-        <div className="card">
-          <div className="empty-state">
-            <div className="empty-state__title">没找到匹配的项目</div>
-            <div className="empty-state__hint">
-              {q && <>搜索 &quot;{q}&quot; </>}
-              {genre && <>· 类型 &quot;{genre}&quot; </>}
-              没有结果
-            </div>
-            <div className="empty-state__action">
-              <button
-                className="btn"
-                onClick={() => { setQ(""); setGenre(""); }}
-              >
-                清除筛选
-              </button>
-            </div>
-          </div>
+      {/* 空状态提示 */}
+      {projects && projects.length === 0 && (
+        <div
+          style={{
+            textAlign: "center",
+            padding: "60px 20px",
+            background: "#131724",
+            border: "1px dashed rgba(255, 255, 255, 0.15)",
+            borderRadius: 16,
+            marginTop: 20,
+          }}
+        >
+          <div style={{ fontSize: 36, marginBottom: 12 }}>✍️</div>
+          <h3 style={{ margin: "0 0 8px", color: "#F8FAFC" }}>
+            {q || genre ? "没有找到符合条件的小说作品" : "书库里还没有作品"}
+          </h3>
+          <p style={{ margin: "0 0 20px", color: "#94A3B8", fontSize: 14 }}>
+            {q || genre ? "尝试清空搜索条件或切换其他题材分类" : "点击下方按钮创建第一本长篇小说，开启专属 AI 创作旅程"}
+          </p>
+          {q || genre ? (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => { setQ(""); setGenre(""); }}
+            >
+              清空搜索与筛选
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => navigate("/new")}
+            >
+              + 新建第一本小说
+            </button>
+          )}
         </div>
       )}
 
-      {projects && projects.length === 0 && !q && !genre && (
-        <div className="card">
-          <div className="empty-state">
-            <div className="empty-state__icon" aria-hidden="true">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none"
-                stroke="currentColor" strokeWidth="1.5"
-                strokeLinecap="round" strokeLinejoin="round">
-                <path d="M12 5v14M5 12h14" />
-              </svg>
-            </div>
-            <div className="empty-state__title">还没有项目</div>
-            <div className="empty-state__hint">
-              点右上角「新建小说」，填个标题和题材，从世界构建开始
-            </div>
-            <div className="empty-state__action">
-              <button
-                className="btn btn-primary"
-                onClick={() => navigate("/new")}
-              >
-                + 新建小说
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
+      {/* 小说卡片网格 */}
       {projects && projects.length > 0 && (
-        <div className="grid-cards">
-          {projects.map((p, i) => {
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))",
+            gap: 20,
+          }}
+        >
+          {projects.map((p) => {
             const chs = chapterMap[p.id] || [];
-            const recent = chs.slice(-3).reverse();
             const projectWords = chs.reduce((a, c) => a + c.word_count, 0);
-            const arcPct = Math.min(100, Math.round((chs.length / 200) * 100));
-            // 弧曲线数据：取最近 12 章的累计字数
-            const lastN = chs.slice(-12);
-            const wps = lastN.map((c, idx) => ({ x: idx, y: c.word_count }));
+            const spineGrad = getGenreColor(p.genre);
+
             return (
               <div
                 key={p.id}
-                className={`project-card reveal reveal--delay-${Math.min(5, i + 1)}`}
-                onClick={() =>
-                  navigate(
-                    // 2026-08-18（架构修复 #7）：点击跳「当前所在步骤」对应页，
-                    // 让小白用户点开项目卡就到该做的下一步。
-                    p.active_run_command
-                      ? `/projects/${p.id}/bridge`  // 2026-07-24：跑中跳 BridgeConsole 看 SSE
-                      : p.status === "ready"
-                      ? `/projects/${p.id}/outline`
-                      : `/projects/${p.id}/theme`,
-                  )
-                }
+                className="modern-project-card"
+                style={{ "--card-spine": spineGrad } as React.CSSProperties}
+                onClick={() => {
+                  if (p.active_run_command) {
+                    navigate(`/projects/${p.id}/bridge`);
+                  } else if (p.status === "ready") {
+                    navigate(`/projects/${p.id}/outline`);
+                  } else {
+                    navigate(`/projects/${p.id}/theme`);
+                  }
+                }}
               >
-                {/* 2026-08-08 任务 #12：复选框 + 置顶状态指示。
-                    两者放左上角同一区域，避免和右上 runningBadge 冲突。
-                    复选框 stopPropagation 不触发卡片导航。
-                    置顶图标点击切换置顶，pinned=true 时高亮。 */}
-                <div
+                {/* 顶部标签栏与控制 */}
+                <div className="modern-card-head">
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(p.id)}
+                      onChange={() => toggleSelect(p.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#6366F1" }}
+                    />
+                    <button
+                      type="button"
+                      onClick={(e) => togglePinOne(p, e)}
+                      title={p.pinned ? "取消置顶" : "置顶小说"}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        cursor: "pointer",
+                        fontSize: 16,
+                        lineHeight: 1,
+                        padding: 0,
+                        opacity: p.pinned ? 1 : 0.4,
+                      }}
+                    >
+                      {p.pinned ? "📌" : "📍"}
+                    </button>
+                    <div className="modern-card-tags">
+                      <span className="modern-card-tag" style={{ color: "#A5B4FC", fontWeight: 600 }}>
+                        {p.genre || "综合题材"}
+                      </span>
+                      {p.audience && <span className="modern-card-tag">{p.audience}</span>}
+                    </div>
+                  </div>
+
+                  <div>
+                    {runningBadge(p) || statusBadge(p.status)}
+                  </div>
+                </div>
+
+                {/* 小说标题 */}
+                <h3 className="modern-card-title">
+                  {p.title || "未命名长篇小说"}
+                </h3>
+
+                {/* 创作冲突 / 核心设定简介 */}
+                <p
                   style={{
-                    position: "absolute",
-                    top: 10,
-                    left: 10,
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 6,
-                    zIndex: 2,
+                    fontSize: 12.5,
+                    color: "#94A3B8",
+                    lineHeight: 1.5,
+                    margin: 0,
+                    overflow: "hidden",
+                    display: "-webkit-box",
+                    WebkitLineClamp: 2,
+                    WebkitBoxOrient: "vertical",
+                    minHeight: 38,
                   }}
                 >
-                  <input
-                    type="checkbox"
-                    checked={selectedIds.has(p.id)}
-                    onChange={() => toggleSelect(p.id)}
-                    onClick={(e) => e.stopPropagation()}
-                    aria-label={`选中项目 ${p.title || p.id.slice(0, 8)}`}
-                    style={{ width: 18, height: 18, cursor: "pointer" }}
-                  />
-                  <button
-                    type="button"
-                    onClick={(e) => togglePinOne(p, e)}
-                    title={p.pinned ? "取消置顶" : "置顶"}
-                    aria-label={p.pinned ? `取消置顶 ${p.title || p.id.slice(0, 8)}` : `置顶 ${p.title || p.id.slice(0, 8)}`}
-                    style={{
-                      background: "transparent",
-                      border: "none",
-                      padding: 2,
-                      cursor: "pointer",
-                      fontSize: 18,
-                      lineHeight: 1,
-                      color: p.pinned ? "var(--accent, #6B8AFD)" : "var(--ink-soft, #b0a89a)",
-                    }}
-                  >
-                    {p.pinned ? "📌" : "📍"}
-                  </button>
-                </div>
+                  {p.config_json?.main_conflict || "已配置长篇网络小说核心架构，可快速进入题材画像与世界观设定…"}
+                </p>
 
-                {/* 卡片装饰羽毛笔 SVG */}
-                <svg className="ink-splash-corner" viewBox="0 0 64 64" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M50 8c-7 0-17 5-26 14-7 7-12 17-12 24l12-12c10-10 14-19 14-26z" stroke="var(--accent-strong)" />
-                  <path d="M12 46l12-12" stroke="var(--stamp)" />
-                  <path d="M22 36l2 2" stroke="var(--stamp)" />
-                </svg>
-
-                <div className="project-card__title">
-                  {p.title || "未命名小说"}
-                </div>
-                <div className="project-card__meta">
-                  {p.genre || "未分类"}
-                  {p.audience ? ` · ${p.audience}` : ""}
-                </div>
-                {/* 2026-07-23 修复（问题 #7）：项目创建/修改时间。
-                    之前后端 ProjectOut schema 没暴露 created_at/updated_at，
-                    前端项目列表没法区分先后；现在 schema + types 已加，
-                    卡片标题下方加一行小字显示时间。 */}
-                <div className="project-card__time" style={{ fontSize: 11, color: "var(--ink-soft)", marginTop: 4 }}>
-                  {p.created_at ? `创建 ${new Date(p.created_at).toLocaleString("zh-CN", { hour12: false })}` : ""}
-                  {p.updated_at && p.updated_at !== p.created_at && p.updated_at !== null
-                    ? ` · 更新 ${new Date(p.updated_at).toLocaleString("zh-CN", { hour12: false })}`
-                    : ""}
-                </div>
-
+                {/* 5 步创作旅程指示器 */}
                 <WritingJourney p={p} chs={chs} projectId={p.id} />
 
-                {/* 项目产出与状态摘要 */}
-                <div style={{ display: "flex", gap: 8, marginTop: 10, fontSize: 12 }}>
-                  <div style={{ padding: "4px 8px", borderRadius: "var(--radius-sm)", background: "var(--color-bg-0)", border: "1px solid var(--color-border-1)", color: "var(--color-fg-2)" }}>
-                    📖 <strong>{chs.length}</strong> 章
-                  </div>
-                  <div style={{ padding: "4px 8px", borderRadius: "var(--radius-sm)", background: "var(--color-bg-0)", border: "1px solid var(--color-border-1)", color: "var(--color-fg-2)" }}>
-                    📝 <strong>{projectWords.toLocaleString()}</strong> 字
-                  </div>
+                {/* 核心数据概览 */}
+                <div className="modern-card-metrics">
+                  <div>已写 <strong>{chs.length}</strong> 章</div>
+                  <div>累计 <strong>{projectWords.toLocaleString()}</strong> 字</div>
                   {chs.length > 0 && (
-                    <div style={{ padding: "4px 8px", borderRadius: "var(--radius-sm)", background: "var(--color-bg-0)", border: "1px solid var(--color-border-1)", color: "var(--color-fg-3)" }}>
-                      均 {Math.round(projectWords / chs.length).toLocaleString()} 字/章
-                    </div>
+                    <div>均 <strong>{Math.round(projectWords / chs.length)}</strong> 字/章</div>
                   )}
-                </div>
-
-                {/* 弧进度条 */}
-                <div className="project-card__progress" style={{ marginTop: 10 }}>
-                  <div className="arc-pill" style={{ marginBottom: 4, display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--color-fg-4)" }}>
-                    <span>弧写作进度</span>
-                    <span>{arcPct}%</span>
-                  </div>
-                  <div className="progress-track" style={{ height: 4, margin: 0 }}>
-                    <div className="progress-fill" style={{ width: `${arcPct}%` }} />
+                  <div style={{ marginLeft: "auto", fontSize: 11, color: "#64748B" }}>
+                    ID: {p.id.slice(0, 8)}
                   </div>
                 </div>
 
-                {/* 卡片快捷操作工具栏 */}
-                <div
-                  className="project-card__foot"
-                  style={{
-                    marginTop: 14,
-                    paddingTop: 10,
-                    borderTop: "1px solid var(--color-border-1)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    gap: 8,
-                    flexWrap: "wrap",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                    {runningBadge(p) || statusBadge(p.status)}
-                    <span className="text-faint text-mono" style={{ fontSize: 11 }}>{p.id.slice(0, 8)}</span>
-                  </div>
+                {/* 底部动作 Dock */}
+                <div className="modern-card-actions">
+                  <button
+                    type="button"
+                    className="modern-card-actions__primary"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      navigate(`/projects/${p.id}/bridge`);
+                    }}
+                  >
+                    <span>▶</span>
+                    <span>立即写作</span>
+                  </button>
 
-                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <div className="modern-card-actions__quick">
                     <button
                       type="button"
-                      className="btn btn-sm btn-primary"
-                      style={{ fontSize: 11.5, padding: "3px 10px" }}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        navigate(`/projects/${p.id}/bridge`);
-                      }}
-                      title="打开写作控制台"
-                    >
-                      ▶ 写作
-                    </button>
-                    <button
-                      type="button"
-                      className="btn btn-sm btn-ghost"
-                      style={{ fontSize: 11.5, padding: "3px 8px" }}
+                      className="modern-quick-btn"
                       onClick={(e) => {
                         e.stopPropagation();
                         navigate(`/projects/${p.id}/outline`);
                       }}
-                      title="大纲编排"
+                      title="故事大纲"
                     >
                       📜 大纲
                     </button>
                     <button
                       type="button"
-                      className="btn btn-sm btn-ghost"
-                      style={{ fontSize: 11.5, padding: "3px 8px" }}
+                      className="modern-quick-btn"
                       onClick={(e) => {
                         e.stopPropagation();
                         navigate(`/projects/${p.id}/worldbuild`);
                       }}
-                      title="世界观与设定"
+                      title="世界设定"
                     >
                       🌍 设定
                     </button>
                     <button
                       type="button"
-                      className="btn btn-sm btn-ghost"
-                      style={{ fontSize: 11.5, padding: "3px 8px" }}
+                      className="modern-quick-btn"
                       onClick={(e) => {
                         e.stopPropagation();
                         navigate(`/projects/${p.id}/chapters`);
@@ -883,6 +662,17 @@ export default function Dashboard() {
                     >
                       📖 目录
                     </button>
+                    <button
+                      type="button"
+                      className="modern-quick-btn"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/projects/${p.id}/characters`);
+                      }}
+                      title="角色档案"
+                    >
+                      👤 角色
+                    </button>
                   </div>
                 </div>
               </div>
@@ -890,7 +680,6 @@ export default function Dashboard() {
           })}
         </div>
       )}
-
     </div>
   );
 }
