@@ -119,6 +119,43 @@ class TestProjectPin:
         r = client.put(f"/projects/{uuid.uuid4().hex}/pin", json={"pinned": True})
         assert r.status_code == 404
 
+    def test_bulk_pin_projects(self, client):
+        """POST /projects/bulk-pin 原子批量置顶/取消置顶。"""
+        p1 = client.post("/projects", json={"title": "bulk-pin-1", "genre": "test", "config_json": {}}).json()["id"]
+        p2 = client.post("/projects", json={"title": "bulk-pin-2", "genre": "test", "config_json": {}}).json()["id"]
+
+        r = client.post("/projects/bulk-pin", json={"ids": [p1, p2], "pinned": True})
+        assert r.status_code == 200
+        assert set(r.json()["updated"]) == {p1, p2}
+        assert r.json()["pinned"] is True
+
+        # 检查两个项目都置顶了
+        assert client.get(f"/projects/{p1}").json()["pinned"] is True
+        assert client.get(f"/projects/{p2}").json()["pinned"] is True
+
+        # 批量取消置顶
+        r_unpin = client.post("/projects/bulk-pin", json={"ids": [p1, p2], "pinned": False})
+        assert r_unpin.status_code == 200
+        assert client.get(f"/projects/{p1}").json()["pinned"] is False
+        assert client.get(f"/projects/{p2}").json()["pinned"] is False
+
+    def test_list_projects_filters_and_sorting(self, client):
+        """GET /projects 支持 status, pinned_only, sort_by 过滤。"""
+        p = client.post("/projects", json={"title": "filter-test-sci", "genre": "科幻", "config_json": {}}).json()
+        pid = p["id"]
+        client.put(f"/projects/{pid}/pin", json={"pinned": True})
+
+        # 仅置顶
+        r = client.get("/projects?pinned_only=true")
+        assert r.status_code == 200
+        assert any(x["id"] == pid for x in r.json())
+
+        # 题材筛选
+        r_genre = client.get("/projects?genre=科幻")
+        assert r_genre.status_code == 200
+        assert all(x["genre"] == "科幻" for x in r_genre.json())
+
+
 
 class TestProjectDelete:
     """DELETE 端点契约 + 级联清空。"""

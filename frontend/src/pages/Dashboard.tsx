@@ -13,6 +13,12 @@ function getGenreColor(genre?: string): string {
     case "科幻": return "linear-gradient(180deg, #06B6D4 0%, #0284C7 100%)";
     case "悬疑": return "linear-gradient(180deg, #8B5CF6 0%, #6D28D9 100%)";
     case "历史": return "linear-gradient(180deg, #E11D48 0%, #BE123C 100%)";
+    case "奇幻": return "linear-gradient(180deg, #EC4899 0%, #BE185D 100%)";
+    case "末世": return "linear-gradient(180deg, #EF4444 0%, #B91C1C 100%)";
+    case "游戏": return "linear-gradient(180deg, #3B82F6 0%, #1D4ED8 100%)";
+    case "武侠": return "linear-gradient(180deg, #14B8A6 0%, #0F766E 100%)";
+    case "言情": return "linear-gradient(180deg, #F43F5E 0%, #E11D48 100%)";
+    case "军事": return "linear-gradient(180deg, #84CC16 0%, #4D7C0F 100%)";
     default: return "linear-gradient(180deg, #6366F1 0%, #4F46E5 100%)";
   }
 }
@@ -124,15 +130,23 @@ function WritingJourney({ p, chs, projectId }: { p: Project; chs: ChapterListIte
 
 export default function Dashboard() {
   const [projects, setProjects] = useState<Project[] | null>(null);
+  const [allProjects, setAllProjects] = useState<Project[]>([]);
   const [chapterMap, setChapterMap] = useState<Record<string, ChapterListItem[]>>({});
   const [, setChapterLoadFailures] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [searchParams, setSearchParams] = useSearchParams();
+
+  // 筛选与检索状态
   const [q, setQ] = useState(searchParams.get("q") || "");
   const [genre, setGenre] = useState(searchParams.get("genre") || "");
+  const [statusFilter, setStatusFilter] = useState(searchParams.get("status") || "all");
+  const [pinnedOnly, setPinnedOnly] = useState(searchParams.get("pinned") === "1");
+  const [sortBy, setSortBy] = useState(searchParams.get("sort") || "pinned_first");
+
+  // 选择与批量状态
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
-  const [availableGenres, setAvailableGenres] = useState<string[]>([]);
+
   const navigate = useNavigate();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const mountedRef = useRef(true);
@@ -141,15 +155,17 @@ export default function Dashboard() {
   useEffect(() => {
     mountedRef.current = true;
     function onKey(e: KeyboardEvent) {
-      if (e.key !== "Escape") return;
       const tag = (e.target as HTMLElement | null)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
-      if (selectedIds.size > 0) {
-        e.preventDefault();
-        clearSelection();
-      } else if (q || genre) {
-        e.preventDefault();
-        setQ(""); setGenre("");
+
+      if (e.key === "Escape") {
+        if (selectedIds.size > 0) {
+          e.preventDefault();
+          setSelectedIds(new Set());
+        } else if (q || genre || statusFilter !== "all" || pinnedOnly) {
+          e.preventDefault();
+          resetFilters();
+        }
       }
     }
     window.addEventListener("keydown", onKey);
@@ -157,32 +173,45 @@ export default function Dashboard() {
       mountedRef.current = false;
       window.removeEventListener("keydown", onKey);
     };
-  }, [selectedIds.size, q, genre]);
+  }, [selectedIds.size, q, genre, statusFilter, pinnedOnly]);
 
   useReveal(rootRef);
+
+  function resetFilters() {
+    setQ("");
+    setGenre("");
+    setStatusFilter("all");
+    setPinnedOnly(false);
+    setSortBy("pinned_first");
+  }
 
   async function loadAll() {
     setError(null);
     try {
-      const ps = await api.listProjects({ q, genre });
+      // 1. 获取根据筛选条件过滤的项目列表
+      const ps = await api.listProjects({
+        q: q.trim() || undefined,
+        genre: genre || undefined,
+        status: statusFilter !== "all" ? statusFilter : undefined,
+        pinned_only: pinnedOnly ? true : undefined,
+        sort_by: sortBy,
+      });
       if (!mountedRef.current) return;
       setProjects(ps);
 
+      // 2. 获取全局项目列表用于统计题材与总数
       try {
-        const allPs = await api.listProjects({});
+        const fullList = await api.listProjects({});
         if (mountedRef.current) {
-          setAvailableGenres(
-            Array.from(new Set(allPs.map((p) => p.genre).filter(Boolean))).sort()
-          );
+          setAllProjects(fullList);
         }
       } catch {
         if (mountedRef.current) {
-          setAvailableGenres(
-            Array.from(new Set(ps.map((p) => p.genre).filter(Boolean))).sort()
-          );
+          setAllProjects(ps);
         }
       }
 
+      // 3. 并发拉取章节信息
       const results = await withConcurrency(4,
         ...ps.map((p) => () => api.listChapters(p.id).then(
           (chs) => ({ id: p.id, chs, failed: false }),
@@ -207,16 +236,35 @@ export default function Dashboard() {
     }
   }
 
+  // 依赖防抖触发加载与同步 URL 参数
   useEffect(() => {
     const t = setTimeout(() => {
       const next = new URLSearchParams();
       if (q) next.set("q", q);
       if (genre) next.set("genre", genre);
+      if (statusFilter !== "all") next.set("status", statusFilter);
+      if (pinnedOnly) next.set("pinned", "1");
+      if (sortBy !== "pinned_first") next.set("sort", sortBy);
       setSearchParams(next, { replace: true });
       loadAll();
-    }, 300);
+    }, 250);
     return () => clearTimeout(t);
-  }, [q, genre]);
+  }, [q, genre, statusFilter, pinnedOnly, sortBy]);
+
+  // 统计题材分布
+  const genreCounts = useMemo(() => {
+    const counts: Record<string, number> = {};
+    for (const p of allProjects) {
+      if (p.genre) {
+        counts[p.genre] = (counts[p.genre] || 0) + 1;
+      }
+    }
+    return counts;
+  }, [allProjects]);
+
+  const availableGenres = useMemo(() => {
+    return Object.keys(genreCounts).sort((a, b) => genreCounts[b] - genreCounts[a]);
+  }, [genreCounts]);
 
   const totalWords = useMemo(
     () => Object.values(chapterMap).flat().reduce((a, c) => a + c.word_count, 0),
@@ -228,6 +276,7 @@ export default function Dashboard() {
     [chapterMap],
   );
 
+  // 选择控制
   function toggleSelect(id: string) {
     setSelectedIds((prev) => {
       const next = new Set(prev);
@@ -242,17 +291,29 @@ export default function Dashboard() {
     setSelectedIds(new Set(projects.map((p) => p.id)));
   }
 
+  function invertSelection() {
+    if (!projects) return;
+    setSelectedIds((prev) => {
+      const next = new Set<string>();
+      for (const p of projects) {
+        if (!prev.has(p.id)) next.add(p.id);
+      }
+      return next;
+    });
+  }
+
   function clearSelection() {
     setSelectedIds(new Set());
   }
 
+  // 批量操作
   async function bulkDeleteSelected() {
     if (selectedIds.size === 0) return;
-    if (!window.confirm(`确认删除已选 ${selectedIds.size} 个小说项目？此操作不可撤销。`)) return;
+    if (!window.confirm(`确认删除已选 ${selectedIds.size} 个小说项目？此操作将永久移除相关世界观与已写章节。`)) return;
     setBulkBusy(true);
     try {
       const res = await api.bulkDeleteProjects(Array.from(selectedIds));
-      toast.success(`已删除 ${res.deleted.length} 个项目`);
+      toast.success(`已删除 ${res.deleted.length} 个小说项目`);
       setSelectedIds(new Set());
       await loadAll();
     } catch (e) {
@@ -262,36 +323,43 @@ export default function Dashboard() {
     }
   }
 
-  async function pinSelected(pinned: boolean) {
+  async function bulkPinSelected(pinned: boolean) {
     if (selectedIds.size === 0) return;
     setBulkBusy(true);
     try {
-      const results = await Promise.allSettled(
-        Array.from(selectedIds).map((id) => api.pinProject(id, { pinned })),
-      );
-      const ok = results.filter((r) => r.status === "fulfilled").length;
-      toast.success(`${pinned ? "置顶" : "取消置顶"} ${ok}/${selectedIds.size} 个项目`);
+      const res = await api.bulkPinProjects(Array.from(selectedIds), pinned);
+      toast.success(`已成功${pinned ? "置顶" : "取消置顶"} ${res.updated.length} 个项目`);
       setSelectedIds(new Set());
       await loadAll();
     } catch (e) {
-      toast.error("置顶操作失败", String(e));
+      toast.error("批量置顶操作失败", String(e));
     } finally {
       setBulkBusy(false);
     }
   }
 
+  // 单个置顶切换（带乐观 UI 响应）
   async function togglePinOne(p: Project, e: React.MouseEvent) {
     e.stopPropagation();
+    const newPinned = !p.pinned;
+    // 乐观更新 UI
+    setProjects((prev) =>
+      prev ? prev.map((item) => (item.id === p.id ? { ...item, pinned: newPinned } : item)) : prev
+    );
     try {
-      await api.pinProject(p.id, { pinned: !p.pinned, pin_order: (p.pin_order || 0) + 1 });
+      await api.pinProject(p.id, { pinned: newPinned });
+      toast.success(newPinned ? `已置顶《${p.title || "未命名小说"}》` : `已取消置顶《${p.title || "未命名小说"}》`);
       await loadAll();
     } catch (err) {
       toast.error("置顶切换失败", String(err));
+      await loadAll();
     }
   }
 
+  const isFiltering = Boolean(q || genre || statusFilter !== "all" || pinnedOnly);
+
   return (
-    <div ref={rootRef} style={{ maxWidth: 1360, margin: "0 auto" }}>
+    <div ref={rootRef} style={{ maxWidth: 1360, margin: "0 auto", paddingBottom: 80 }}>
       {/* 现代化 Hero Studio 看板顶栏 */}
       <div className="studio-hero">
         <div className="studio-hero__info">
@@ -310,7 +378,7 @@ export default function Dashboard() {
         <div style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
           <div className="studio-hero__metrics">
             <div className="studio-metric-card">
-              <span className="studio-metric-card__val">{projects ? projects.length : "—"}</span>
+              <span className="studio-metric-card__val">{allProjects.length || (projects ? projects.length : "—")}</span>
               <span className="studio-metric-card__label">📚 我的作品</span>
             </div>
             <div className="studio-metric-card">
@@ -350,51 +418,129 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* 搜索与题材快速筛选栏 */}
-      <div className="studio-toolbar">
-        <div className="studio-search-box">
-          <span className="studio-search-icon">🔍</span>
-          <input
-            type="text"
-            placeholder="搜索小说作品名 / 主角名 (Esc 清空)…"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape" && q) {
-                e.preventDefault();
-                setQ("");
-              }
+      {/* 现代化搜索、筛选与多维排序控制台 */}
+      <div
+        style={{
+          background: "#131724",
+          border: "1px solid rgba(255, 255, 255, 0.08)",
+          borderRadius: 14,
+          padding: "16px 20px",
+          marginBottom: 20,
+          display: "flex",
+          flexDirection: "column",
+          gap: 12,
+        }}
+      >
+        {/* 第一行：搜索框 + 状态筛选 + 仅置顶 + 排序下拉 */}
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          {/* 搜索框 */}
+          <div className="studio-search-box" style={{ flex: 1, minWidth: 260 }}>
+            <span className="studio-search-icon">🔍</span>
+            <input
+              type="text"
+              placeholder="搜索小说作品名 / 主角名 (Esc 清空)…"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              className="studio-search-input"
+            />
+            {q && (
+              <button
+                type="button"
+                onClick={() => setQ("")}
+                style={{
+                  position: "absolute",
+                  right: 8,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  background: "transparent",
+                  border: "none",
+                  color: "#94A3B8",
+                  cursor: "pointer",
+                  fontSize: 16,
+                }}
+              >
+                ×
+              </button>
+            )}
+          </div>
+
+          {/* 状态分段选择 */}
+          <div style={{ display: "inline-flex", background: "#0D1019", border: "1px solid rgba(255,255,255,0.08)", borderRadius: 8, padding: 3 }}>
+            {[
+              { key: "all", label: "全部状态" },
+              { key: "ready", label: "✓ 已就绪" },
+              { key: "worldbuilding", label: "⏳ 构建中" },
+              { key: "draft", label: "📝 草稿" },
+            ].map((st) => (
+              <button
+                key={st.key}
+                type="button"
+                onClick={() => setStatusFilter(st.key)}
+                style={{
+                  background: statusFilter === st.key ? "rgba(99, 102, 241, 0.25)" : "transparent",
+                  color: statusFilter === st.key ? "#A5B4FC" : "#94A3B8",
+                  border: `1px solid ${statusFilter === st.key ? "#6366F1" : "transparent"}`,
+                  borderRadius: 6,
+                  padding: "5px 10px",
+                  fontSize: 12,
+                  cursor: "pointer",
+                  fontWeight: statusFilter === st.key ? 600 : 400,
+                  transition: "all 0.15s ease",
+                }}
+              >
+                {st.label}
+              </button>
+            ))}
+          </div>
+
+          {/* 仅看置顶开关 */}
+          <button
+            type="button"
+            onClick={() => setPinnedOnly(!pinnedOnly)}
+            style={{
+              padding: "6px 12px",
+              borderRadius: 8,
+              fontSize: 12.5,
+              cursor: "pointer",
+              background: pinnedOnly ? "rgba(245, 158, 11, 0.2)" : "#0D1019",
+              border: `1px solid ${pinnedOnly ? "#F59E0B" : "rgba(255, 255, 255, 0.12)"}`,
+              color: pinnedOnly ? "#FBBF24" : "#94A3B8",
+              fontWeight: pinnedOnly ? 600 : 400,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              transition: "all 0.15s ease",
             }}
-            className="studio-search-input"
-          />
-          {q && (
-            <button
-              type="button"
-              onClick={() => setQ("")}
-              style={{
-                position: "absolute",
-                right: 8,
-                top: "50%",
-                transform: "translateY(-50%)",
-                background: "transparent",
-                border: "none",
-                color: "#94A3B8",
-                cursor: "pointer",
-                fontSize: 16,
-              }}
+          >
+            <span>📌</span>
+            <span>仅看置顶</span>
+          </button>
+
+          {/* 排序方式下拉 */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ fontSize: 12, color: "#64748B" }}>排序:</span>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="studio-filter-select"
             >
-              ×
-            </button>
-          )}
+              <option value="pinned_first">📌 置顶优先 (默认)</option>
+              <option value="updated_at">🕒 最近修改</option>
+              <option value="created_at">📅 创建时间</option>
+              <option value="title">🔤 作品名称</option>
+            </select>
+          </div>
         </div>
 
-        <div className="studio-genre-chips">
+        {/* 第二行：题材胶囊筛选 */}
+        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, color: "#64748B", marginRight: 4 }}>题材分类:</span>
           <button
             type="button"
             className={`studio-chip ${!genre ? "is-active" : ""}`}
             onClick={() => setGenre("")}
           >
-            全部题材
+            全部 ({allProjects.length || 0})
           </button>
           {availableGenres.map((g) => (
             <button
@@ -403,59 +549,115 @@ export default function Dashboard() {
               className={`studio-chip ${genre === g ? "is-active" : ""}`}
               onClick={() => setGenre(genre === g ? "" : g)}
             >
-              {g}
+              {g} ({genreCounts[g] || 0})
             </button>
           ))}
         </div>
+
+        {/* 当有筛选生效时，展示已生效筛选气泡与一键重置 */}
+        {isFiltering && (
+          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", paddingTop: 8, borderTop: "1px solid rgba(255, 255, 255, 0.05)" }}>
+            <span style={{ fontSize: 11.5, color: "#64748B" }}>当前筛选条件：</span>
+            {q && (
+              <span style={{ fontSize: 11.5, padding: "2px 8px", borderRadius: 999, background: "rgba(99, 102, 241, 0.18)", color: "#A5B4FC", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                🔍 "{q}"
+                <button type="button" onClick={() => setQ("")} style={{ background: "transparent", border: "none", color: "#A5B4FC", cursor: "pointer", padding: 0 }}>×</button>
+              </span>
+            )}
+            {genre && (
+              <span style={{ fontSize: 11.5, padding: "2px 8px", borderRadius: 999, background: "rgba(99, 102, 241, 0.18)", color: "#A5B4FC", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                题材: {genre}
+                <button type="button" onClick={() => setGenre("")} style={{ background: "transparent", border: "none", color: "#A5B4FC", cursor: "pointer", padding: 0 }}>×</button>
+              </span>
+            )}
+            {statusFilter !== "all" && (
+              <span style={{ fontSize: 11.5, padding: "2px 8px", borderRadius: 999, background: "rgba(99, 102, 241, 0.18)", color: "#A5B4FC", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                状态: {statusFilter}
+                <button type="button" onClick={() => setStatusFilter("all")} style={{ background: "transparent", border: "none", color: "#A5B4FC", cursor: "pointer", padding: 0 }}>×</button>
+              </span>
+            )}
+            {pinnedOnly && (
+              <span style={{ fontSize: 11.5, padding: "2px 8px", borderRadius: 999, background: "rgba(245, 158, 11, 0.2)", color: "#FBBF24", display: "inline-flex", alignItems: "center", gap: 4 }}>
+                📌 仅置顶
+                <button type="button" onClick={() => setPinnedOnly(false)} style={{ background: "transparent", border: "none", color: "#FBBF24", cursor: "pointer", padding: 0 }}>×</button>
+              </span>
+            )}
+            <button
+              type="button"
+              onClick={resetFilters}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#94A3B8",
+                fontSize: 11.5,
+                cursor: "pointer",
+                textDecoration: "underline",
+                marginLeft: "auto",
+              }}
+            >
+              重置所有筛选
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* 批量操作工具栏 */}
+      {/* 悬浮式批量操作 Dock (选中项目时优雅浮现) */}
       {selectedIds.size > 0 && (
-        <div
-          style={{
-            display: "flex",
-            alignItems: "center",
-            gap: 12,
-            padding: "10px 18px",
-            marginBottom: 20,
-            background: "rgba(99, 102, 241, 0.12)",
-            border: "1px solid rgba(99, 102, 241, 0.35)",
-            borderRadius: 12,
-          }}
-        >
-          <span style={{ fontSize: 13, color: "#F8FAFC" }}>
-            已勾选 <strong style={{ color: "#A5B4FC" }}>{selectedIds.size}</strong> 本作品
-          </span>
-          <button
-            type="button"
-            className="btn btn-sm btn-ghost"
-            onClick={clearSelection}
-            disabled={bulkBusy}
-          >
-            取消选择 (Esc)
-          </button>
+        <div className="studio-floating-dock">
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#6366F1" }} />
+            <span style={{ fontSize: 13, color: "#F8FAFC", fontWeight: 600 }}>
+              已选择 <strong>{selectedIds.size}</strong> 本作品
+            </span>
+          </div>
+
+          <div style={{ width: 1, height: 18, background: "rgba(255, 255, 255, 0.15)" }} />
+
           <button
             type="button"
             className="btn btn-sm btn-ghost"
             onClick={selectAllVisible}
             disabled={bulkBusy}
+            style={{ fontSize: 12 }}
           >
-            全选当前
+            ☑️ 全选
           </button>
-          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            onClick={invertSelection}
+            disabled={bulkBusy}
+            style={{ fontSize: 12 }}
+          >
+            🔄 反选
+          </button>
+          <button
+            type="button"
+            className="btn btn-sm btn-ghost"
+            onClick={clearSelection}
+            disabled={bulkBusy}
+            style={{ fontSize: 12 }}
+          >
+            ✖ 取消 (Esc)
+          </button>
+
+          <div style={{ width: 1, height: 18, background: "rgba(255, 255, 255, 0.15)" }} />
+
           <button
             type="button"
             className="btn btn-sm"
-            onClick={() => pinSelected(true)}
+            onClick={() => bulkPinSelected(true)}
             disabled={bulkBusy}
+            style={{ fontSize: 12 }}
           >
             📌 批量置顶
           </button>
           <button
             type="button"
             className="btn btn-sm"
-            onClick={() => pinSelected(false)}
+            onClick={() => bulkPinSelected(false)}
             disabled={bulkBusy}
+            style={{ fontSize: 12 }}
           >
             📍 取消置顶
           </button>
@@ -464,6 +666,7 @@ export default function Dashboard() {
             className="btn btn-sm btn-danger"
             onClick={bulkDeleteSelected}
             disabled={bulkBusy}
+            style={{ fontSize: 12 }}
           >
             🗑 批量删除
           </button>
@@ -484,18 +687,18 @@ export default function Dashboard() {
         >
           <div style={{ fontSize: 36, marginBottom: 12 }}>✍️</div>
           <h3 style={{ margin: "0 0 8px", color: "#F8FAFC" }}>
-            {q || genre ? "没有找到符合条件的小说作品" : "书库里还没有作品"}
+            {isFiltering ? "没有找到符合条件的小说作品" : "书库里还没有作品"}
           </h3>
           <p style={{ margin: "0 0 20px", color: "#94A3B8", fontSize: 14 }}>
-            {q || genre ? "尝试清空搜索条件或切换其他题材分类" : "点击下方按钮创建第一本长篇小说，开启专属 AI 创作旅程"}
+            {isFiltering ? "尝试调整搜索关键词、切换题材分类或重置筛选条件" : "点击下方按钮创建第一本长篇小说，开启专属 AI 创作旅程"}
           </p>
-          {q || genre ? (
+          {isFiltering ? (
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => { setQ(""); setGenre(""); }}
+              onClick={resetFilters}
             >
-              清空搜索与筛选
+              清空搜索与筛选条件
             </button>
           ) : (
             <button
@@ -522,11 +725,12 @@ export default function Dashboard() {
             const chs = chapterMap[p.id] || [];
             const projectWords = chs.reduce((a, c) => a + c.word_count, 0);
             const spineGrad = getGenreColor(p.genre);
+            const isSelected = selectedIds.has(p.id);
 
             return (
               <div
                 key={p.id}
-                className="modern-project-card"
+                className={`modern-project-card ${isSelected ? "is-selected" : ""} ${p.pinned ? "is-pinned" : ""}`}
                 style={{ "--card-spine": spineGrad } as React.CSSProperties}
                 onClick={() => {
                   if (p.active_run_command) {
@@ -540,30 +744,52 @@ export default function Dashboard() {
               >
                 {/* 顶部标签栏与控制 */}
                 <div className="modern-card-head">
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    <input
-                      type="checkbox"
-                      checked={selectedIds.has(p.id)}
-                      onChange={() => toggleSelect(p.id)}
-                      onClick={(e) => e.stopPropagation()}
-                      style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#6366F1" }}
-                    />
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    {/* 选择 Checkbox */}
+                    <div
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        toggleSelect(p.id);
+                      }}
+                      style={{
+                        padding: "4px",
+                        cursor: "pointer",
+                        display: "flex",
+                        alignItems: "center",
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => {}}
+                        style={{ width: 16, height: 16, cursor: "pointer", accentColor: "#6366F1", margin: 0 }}
+                      />
+                    </div>
+
+                    {/* 置顶切换按钮 */}
                     <button
                       type="button"
                       onClick={(e) => togglePinOne(p, e)}
-                      title={p.pinned ? "取消置顶" : "置顶小说"}
+                      title={p.pinned ? "已置顶（点击取消置顶）" : "置顶此作品"}
                       style={{
-                        background: "transparent",
-                        border: "none",
+                        background: p.pinned ? "rgba(245, 158, 11, 0.2)" : "rgba(255, 255, 255, 0.05)",
+                        border: `1px solid ${p.pinned ? "#F59E0B" : "rgba(255, 255, 255, 0.1)"}`,
+                        borderRadius: 6,
                         cursor: "pointer",
-                        fontSize: 16,
+                        fontSize: 13,
                         lineHeight: 1,
-                        padding: 0,
-                        opacity: p.pinned ? 1 : 0.4,
+                        padding: "4px 7px",
+                        color: p.pinned ? "#FBBF24" : "#64748B",
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 3,
+                        transition: "all 0.15s ease",
                       }}
                     >
-                      {p.pinned ? "📌" : "📍"}
+                      <span>{p.pinned ? "📌" : "📍"}</span>
+                      {p.pinned && <span style={{ fontSize: 11, fontWeight: 600 }}>置顶</span>}
                     </button>
+
                     <div className="modern-card-tags">
                       <span className="modern-card-tag" style={{ color: "#A5B4FC", fontWeight: 600 }}>
                         {p.genre || "综合题材"}

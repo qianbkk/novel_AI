@@ -63,6 +63,8 @@ class Project(Base):
     pinned = Column(Boolean, default=False, nullable=False)
     pin_order = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=_utcnow)
+    updated_at = Column(DateTime, default=_utcnow, onupdate=_utcnow)
+
 
     world_setting = relationship("WorldSetting", back_populates="project", uselist=False)
     characters = relationship("Character", back_populates="project")

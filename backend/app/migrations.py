@@ -75,6 +75,8 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     # 两条都 idempotent，老项目默认 0/False，行为与之前完全一致。
     ("projects", "pinned", "BOOLEAN"),
     ("projects", "pin_order", "INTEGER"),
+    ("projects", "updated_at", "DATETIME"),
+
     # Provider 表：api_key → api_key_encrypted + api_key_suffix（commit 历史 bug 修复）
     ("providers", "api_key_encrypted", "TEXT"),
     ("providers", "api_key_suffix", "VARCHAR(8)"),

@@ -236,9 +236,18 @@ async function handleResponse<T>(resp: Response, path: string): Promise<T> {
 }
 
 export const api = {
-  listProjects: (params?: { q?: string; genre?: string }) => {
+  listProjects: (params?: {
+    q?: string;
+    genre?: string;
+    status?: string;
+    pinned_only?: boolean;
+    sort_by?: string;
+    sort_order?: string;
+  }) => {
     const search = params ? new URLSearchParams(
-      Object.entries(params).filter(([_, v]) => v != null && v !== "") as [string, string][]
+      Object.entries(params)
+        .filter(([_, v]) => v != null && v !== "")
+        .map(([k, v]) => [k, String(v)])
     ).toString() : "";
     return request<Project[]>(`/projects${search ? `?${search}` : ""}`);
   },
@@ -256,11 +265,17 @@ export const api = {
       body: JSON.stringify(payload),
     }),
 
-  // 2026-08-08 任务 #12：Dashboard 列表置顶 / 单个删除 / 批量删除。
+  // 置顶 / 单个删除 / 批量置顶 / 批量删除
   pinProject: (id: string, payload: { pinned: boolean; pin_order?: number }) =>
     request<Project>(`/projects/${id}/pin`, {
       method: "PUT",
-      body: JSON.stringify({ pin_order: 0, ...payload }),
+      body: JSON.stringify(payload),
+    }),
+
+  bulkPinProjects: (ids: string[], pinned: boolean) =>
+    request<{ updated: string[]; pinned: boolean }>("/projects/bulk-pin", {
+      method: "POST",
+      body: JSON.stringify({ ids, pinned }),
     }),
 
   deleteProject: (id: string) =>
@@ -271,6 +286,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ ids }),
     }),
+
 
   startWorldbuild: (projectId: string) =>
     request<JobStatus>(`/projects/${projectId}/worldbuild/start`, { method: "POST" }),

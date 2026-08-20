@@ -4085,3 +4085,55 @@ dialog.ink-dialog__actions {
   border-color: rgba(255, 255, 255, 0.2);
 }
 
+/* 浮动批量操作栏 */
+.studio-floating-dock {
+  position: fixed;
+  bottom: 28px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: rgba(17, 20, 32, 0.94);
+  border: 1px solid rgba(99, 102, 241, 0.45);
+  border-radius: 999px;
+  padding: 10px 22px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65), 0 0 24px rgba(99, 102, 241, 0.3);
+  backdrop-filter: blur(16px);
+  animation: slideUpFade 0.22s var(--ease-out);
+}
+
+@keyframes slideUpFade {
+  from { opacity: 0; transform: translate(-50%, 16px); }
+  to { opacity: 1; transform: translate(-50%, 0); }
+}
+
+.modern-project-card.is-selected {
+  border-color: #6366F1 !important;
+  box-shadow: 0 0 0 2px #6366F1, 0 12px 32px rgba(99, 102, 241, 0.25) !important;
+  background: #141828 !important;
+}
+
+.modern-project-card.is-pinned {
+  border-color: rgba(245, 158, 11, 0.35);
+}
+
+.studio-filter-select {
+  background: #0D1019;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  color: #F1F5F9;
+  cursor: pointer;
+  outline: none;
+  transition: all 0.15s ease;
+}
+
+.studio-filter-select:focus {
+  border-color: #6366F1;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.25);
+}
+
+

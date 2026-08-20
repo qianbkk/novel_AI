@@ -1,8 +1,9 @@
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, func
 from sqlalchemy.orm import Session
 
 from ..auth import User
@@ -11,6 +12,7 @@ from ..database import get_db
 from ..models import Character, Project
 from ..schemas import ProjectCreate, ProjectOut
 import logging
+
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -148,19 +150,12 @@ def list_projects(
     db: Session = Depends(get_db),
     q: str | None = Query(None, description="模糊匹配 title 或主角名"),
     genre: str | None = Query(None, description="精确匹配 genre"),
+    status: str | None = Query(None, description="按状态过滤 (draft | worldbuilding | ready)"),
+    pinned_only: bool | None = Query(None, description="仅显示置顶项目"),
+    sort_by: str = Query("pinned_first", description="排序方式 (pinned_first | updated_at | created_at | title)"),
+    sort_order: str = Query("desc", description="排序方向 (desc | asc)"),
 ):
-    """列出项目。
-
-    ─── Phase 4: owner 过滤 ───
-    已登录 user：仅看 owner_id == self.id 或 owner_id IS NULL；
-    未登录 + dev 模式：看全部；
-    未登录 + production 模式：401（authrouter 会拦截）。
-
-    ─── 2026-07-24 运行态可见性 ───
-    返回每条 ProjectOut 带 active_run_command/status 字段：当前
-    pending/running 的最新一条 BridgeRun。Dashboard 用它显示
-    "运行中" badge，否则用户看不到正在跑的小说（status 字段不会变）。
-    """
+    """列出项目，支持丰富过滤与排序。"""
     from ..auth import get_current_user_optional
     from ..auth_scope import is_production_mode
     from ..models import BridgeRun
@@ -173,8 +168,11 @@ def list_projects(
     query = query.filter(owner_filter_clause(current_user))
     if genre:
         query = query.filter(Project.genre == genre)
+    if status and status != "all":
+        query = query.filter(Project.status == status)
+    if pinned_only:
+        query = query.filter(Project.pinned.is_(True))
     if q:
-        # 模糊匹配 title 或主角名（Character.role == '主角'）
         like = f"%{q}%"
         protagonist_ids = db.query(Character.project_id).filter(
             Character.role == "主角",
@@ -182,16 +180,34 @@ def list_projects(
         ).subquery()
         query = query.filter(or_(
             Project.title.like(like),
+            Project.audience.like(like),
+            Project.genre.like(like),
             Project.id.in_(select(protagonist_ids.c.project_id)),
         ))
-    projects = query.order_by(
-        # 2026-08-08 任务 #12：置顶项目排前面。
-        # pinned DESC + pin_order DESC + created_at DESC：
-        # 多个置顶中 pin_order 大的更靠前；都 0 时按 created_at desc。
-        Project.pinned.desc(),
-        Project.pin_order.desc(),
-        Project.created_at.desc(),
-    ).all()
+
+    # 多维排序逻辑
+    if sort_by == "pinned_first":
+        query = query.order_by(
+            Project.pinned.desc(),
+            Project.pin_order.desc(),
+            Project.updated_at.desc(),
+            Project.created_at.desc(),
+        )
+    elif sort_by == "updated_at":
+        query = query.order_by(Project.updated_at.desc() if sort_order == "desc" else Project.updated_at.asc())
+    elif sort_by == "created_at":
+        query = query.order_by(Project.created_at.desc() if sort_order == "desc" else Project.created_at.asc())
+    elif sort_by == "title":
+        query = query.order_by(Project.title.asc() if sort_order == "asc" else Project.title.desc())
+    else:
+        query = query.order_by(
+            Project.pinned.desc(),
+            Project.pin_order.desc(),
+            Project.updated_at.desc(),
+            Project.created_at.desc(),
+        )
+
+    projects = query.all()
 
     # 取所有相关项目的 active BridgeRun（一次性查避免 N+1）
     project_ids = [p.id for p in projects]
@@ -202,15 +218,13 @@ def list_projects(
             BridgeRun.status.in_(["pending", "running"]),
         ).all():
             existing = active_by_pid.get(run.project_id)
-            # 同 project 多条 → 取最新 started_at
             if existing is None or (run.started_at and run.started_at > existing.started_at):
                 active_by_pid[run.project_id] = run
 
     out = []
     for p in projects:
         ar = active_by_pid.get(p.id)
-        # Project model 当前没有 updated_at 列（schema 已预留），用 getattr 容错
-        updated_at = getattr(p, "updated_at", None)
+        updated_at = getattr(p, "updated_at", None) or p.created_at
         out.append(ProjectOut(
             id=p.id, title=p.title, genre=p.genre, audience=p.audience,
             status=p.status, budget_limit_usd=p.budget_limit_usd,
@@ -227,17 +241,11 @@ def list_projects(
 
 
 # ════════════════════════════════════════════════════════════════════════
-# 2026-08-08 用户需求（任务 #12）：Dashboard 项目列表多选 + 删除 + 置顶
-# 三个端点：PUT /pin、DELETE 单个、POST /bulk-delete。
-# 设计原则：
-# - DELETE 用 FK ondelete="CASCADE" 级联清掉 world_setting/character/faction/
-#   chapter 等所有关联表 + novel_ai_dir 目录文件（避免留 zombie 文件）。
-# - owner 校验走 require_owned_project（与 GET/PATCH 一致）。
-# - 不引入异步任务或软删除：原型阶段硬删够用，未来若要软删再加 deleted_at 列。
+# 置顶 / 批量置顶 / 删除端点
 # ════════════════════════════════════════════════════════════════════════
 class ProjectPinIn(BaseModel):
     pinned: bool
-    pin_order: int = 0
+    pin_order: int | None = None
 
 
 @router.put("/{project_id}/pin", response_model=ProjectOut)
@@ -247,30 +255,89 @@ def pin_project(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    """置顶 / 取消置顶单个项目。pin_order 用于多个置顶项目之间的相对顺序。
-    失败：404（project 不存在）+ 跨用户 403（已登录但 owner 不匹配）。"""
-    project = require_owned_project(db, project_id, _current_user(request))
-    project.pinned = payload.pinned
-    project.pin_order = payload.pin_order
+    """置顶 / 取消置顶单个项目。自动分配最高优先级，确保新置顶排在最前。"""
+    current_user = _current_user(request)
+    project = require_owned_project(db, project_id, current_user)
+    if payload.pinned:
+        project.pinned = True
+        if payload.pin_order is not None and payload.pin_order > 0:
+            project.pin_order = payload.pin_order
+        else:
+            # 自动分配最高 pin_order，让新置顶的项目立即可见排在最前
+            max_order = db.query(func.coalesce(func.max(Project.pin_order), 0)).filter(
+                owner_filter_clause(current_user),
+                Project.pinned.is_(True),
+            ).scalar() or 0
+            project.pin_order = max_order + 1
+    else:
+        project.pinned = False
+        project.pin_order = 0
+
+    project.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(project)
-    # 不带 active_run 信息（pin 操作不需要 BridgeRun join）；直接返回 ProjectOut
     return ProjectOut(
         id=project.id, title=project.title, genre=project.genre,
         audience=project.audience, status=project.status,
         budget_limit_usd=project.budget_limit_usd,
         novel_ai_status=project.novel_ai_status,
         created_at=project.created_at,
-        updated_at=getattr(project, "updated_at", None),
+        updated_at=getattr(project, "updated_at", None) or project.created_at,
         pinned=bool(project.pinned),
         pin_order=project.pin_order or 0,
     )
+
+
+class BulkPinIn(BaseModel):
+    ids: list[str]
+    pinned: bool
+
+
+@router.post("/bulk-pin", status_code=200)
+def bulk_pin_projects(
+    payload: BulkPinIn,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    """原子化批量置顶 / 取消置顶项目。"""
+    current_user = _current_user(request)
+    updated: list[str] = []
+    now = datetime.now(timezone.utc)
+
+    if payload.pinned:
+        max_order = db.query(func.coalesce(func.max(Project.pin_order), 0)).filter(
+            owner_filter_clause(current_user),
+            Project.pinned.is_(True),
+        ).scalar() or 0
+        for i, pid in enumerate(payload.ids):
+            try:
+                project = require_owned_project(db, pid, current_user)
+            except HTTPException:
+                continue
+            project.pinned = True
+            project.pin_order = max_order + i + 1
+            project.updated_at = now
+            updated.append(pid)
+    else:
+        for pid in payload.ids:
+            try:
+                project = require_owned_project(db, pid, current_user)
+            except HTTPException:
+                continue
+            project.pinned = False
+            project.pin_order = 0
+            project.updated_at = now
+            updated.append(pid)
+
+    db.commit()
+    return {"updated": updated, "pinned": payload.pinned}
 
 
 def _current_user(request: Request):
     """PUT /pin / DELETE / POST /bulk-delete 共用：拿当前用户（None = dev 未登录）。"""
     from ..auth import get_current_user_optional
     return get_current_user_optional(request)
+
 
 
 @router.delete("/{project_id}", status_code=204)
