@@ -600,122 +600,245 @@ export default function BridgeConsole() {
         </div>
       </div>
 
-      {/* ============ 命令区（保留） ============ */}
-      <div className="card mt-24">
-        <h3 className="card__title">命令</h3>
-        <div className="command-grid">
-          <button
-            type="button"
-            className="btn btn-primary"
-            disabled={running}
-            onClick={() => runControl("推送设定", () => api.pushConcept(projectId))}
-            aria-label="推送设定到 NovelAI"
-          >
-            推送设定
-          </button>
-          {RUN_COMMANDS.map((item) => (
-            <button
-              type="button"
-              key={item.label}
-              className="btn"
-              disabled={running}
-              onClick={() => runBridge(item.label, item.command, item.args)}
-              aria-label={`运行 ${item.label}`}
-            >
-              {running && activeLabel === item.label ? "运行中…" : item.label}
-            </button>
-          ))}
-          <button
-            type="button"
-            className="btn"
-            disabled={running}
-            onClick={() => runControl("查看状态", () => api.getBridgeStatus(projectId))}
-            aria-label="查看 bridge 状态"
-          >
-            查看状态
-          </button>
-          <button
-            type="button"
-            className="btn"
-            disabled={running || budgetLoading}
-            onClick={fetchBudget}
-            aria-label="拉取预算报告"
-          >
-            {budgetLoading ? "拉取中…" : "预算报告"}
-          </button>
-          <button
-            type="button"
-            className="btn"
-            disabled={running}
-            onClick={() => runControl("待审核", () => api.getBridgePending(projectId))}
-            aria-label="查看待审核"
-          >
-            待审核
-          </button>
-          <button
-            type="button"
-            className="btn"
-            disabled={running}
-            onClick={() => runControl("拉取设定", () => api.pullSetting(projectId))}
-            aria-label="拉取设定"
-          >
-            拉取设定
-          </button>
-          <button
-            type="button"
-            className="btn"
-            disabled={running}
-            onClick={() => runControl("导入章节", () => api.importChapters(projectId))}
-            aria-label="导入章节"
-          >
-            导入章节
-          </button>
+      {/* ============ 命令控制中心 ============ */}
+      <div
+        style={{
+          background: "#131724",
+          border: "1px solid rgba(255, 255, 255, 0.08)",
+          borderRadius: 16,
+          padding: "20px 24px",
+          marginTop: 24,
+          boxShadow: "0 8px 24px rgba(0,0,0,0.3)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 16 }}>
+          <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: "#F8FAFC", display: "flex", alignItems: "center", gap: 8 }}>
+            <span>⚡</span>
+            <span>AI 写作执行工作台</span>
+          </h3>
+          {running && (
+            <span style={{ fontSize: 12, color: "#A5B4FC", display: "flex", alignItems: "center", gap: 6, fontWeight: 600 }}>
+              <span style={{ width: 8, height: 8, borderRadius: "50%", background: "#6366F1", animation: "pulse 1.2s infinite" }} />
+              正在执行：{activeLabel}…
+            </span>
+          )}
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
+          {/* ① 核心正文写作 */}
+          <div style={{ background: "#0D1019", border: "1px solid rgba(99, 102, 241, 0.25)", borderRadius: 12, padding: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#A5B4FC", textTransform: "uppercase", marginBottom: 10, letterSpacing: "0.06em" }}>
+              ① 核心正文写作
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              <button
+                type="button"
+                className="btn btn-primary"
+                disabled={running}
+                onClick={() => runBridge("写10章", "run", ["10"])}
+                style={{ padding: "10px 14px", fontWeight: 700, fontSize: 13 }}
+              >
+                ✍️ 写10章 (正式连贯模式)
+              </button>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={running}
+                  onClick={() => runBridge("写10章 (草稿)", "run_draft", ["10"])}
+                  style={{ fontSize: 12 }}
+                >
+                  📝 写10章(草稿)
+                </button>
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={running}
+                  onClick={() => runBridge("黄金三章", "bootstrap", [])}
+                  style={{ fontSize: 12 }}
+                >
+                  ⚡ 黄金三章
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* ② 结构与大纲规划 */}
+          <div style={{ background: "#0D1019", border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: 12, padding: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#94A3B8", textTransform: "uppercase", marginBottom: 10, letterSpacing: "0.06em" }}>
+              ② 设定与大纲
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+              <button
+                type="button"
+                className="btn"
+                disabled={running}
+                onClick={() => runBridge("生成设定包", "planner", [])}
+                style={{ fontSize: 12 }}
+              >
+                📋 生成设定包
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={running}
+                onClick={() => runBridge("初始化剧情弧", "init_arc", [])}
+                style={{ fontSize: 12 }}
+              >
+                🌐 初始化大纲弧
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={running}
+                onClick={() => runControl("推送设定", () => api.pushConcept(projectId!))}
+                style={{ fontSize: 12 }}
+              >
+                📤 推送设定
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={running}
+                onClick={() => runControl("拉取设定", () => api.pullSetting(projectId!))}
+                style={{ fontSize: 12 }}
+              >
+                📥 拉取设定
+              </button>
+            </div>
+          </div>
+
+          {/* ③ AI 治理与状态 */}
+          <div style={{ background: "#0D1019", border: "1px solid rgba(255, 255, 255, 0.08)", borderRadius: 12, padding: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: "#94A3B8", textTransform: "uppercase", marginBottom: 10, letterSpacing: "0.06em" }}>
+              ③ 质量检测与管理
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+              <button
+                type="button"
+                className="btn"
+                disabled={running}
+                onClick={() => runBridge("质量看板", "dashboard", [])}
+                style={{ fontSize: 12 }}
+              >
+                📊 质量看板
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={running}
+                onClick={() => runBridge("一致性扫描", "scan", [])}
+                style={{ fontSize: 12 }}
+              >
+                🔍 一致性扫描
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={running}
+                onClick={() => runBridge("文风指纹", "fingerprint", [])}
+                style={{ fontSize: 12 }}
+              >
+                🎨 文风指纹
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={running}
+                onClick={() => runControl("导入章节", () => api.importChapters(projectId!))}
+                style={{ fontSize: 12 }}
+              >
+                📥 导入章节
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={running}
+                onClick={() => runControl("待审核", () => api.getBridgePending(projectId!))}
+                style={{ fontSize: 12 }}
+              >
+                👁️ 待审核
+              </button>
+              <button
+                type="button"
+                className="btn"
+                disabled={running || budgetLoading}
+                onClick={fetchBudget}
+                style={{ fontSize: 12 }}
+              >
+                {budgetLoading ? "拉取中…" : "💰 预算报告"}
+              </button>
+            </div>
+          </div>
         </div>
       </div>
 
-      {/* ============ 实时日志 ============ */}
-      <div className="card mt-24">
-        <div className="flex-between" style={{ marginBottom: 14 }}>
-          <h3 className="card__title" style={{ margin: 0 }}>
-            实时日志
-            {logs.length > 0 && (
-              <span className="text-mono text-faint" style={{ fontSize: 11, fontWeight: 400, marginLeft: 8 }}>
-                {logs.length} 行
-              </span>
-            )}
-          </h3>
-          <div className="button-row">
-            <label className="check-row" style={{ minHeight: 0, margin: 0, fontSize: 12, color: "var(--text-muted)", cursor: "pointer" }}>
+      {/* ============ 现代化实时日志终端 ============ */}
+      <div className="studio-terminal">
+        <div className="studio-terminal__header">
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <div className="studio-terminal__dots">
+              <span className="studio-terminal__dot studio-terminal__dot--red" />
+              <span className="studio-terminal__dot studio-terminal__dot--yellow" />
+              <span className="studio-terminal__dot studio-terminal__dot--green" />
+            </div>
+            <span className="studio-terminal__title">
+              Execution Terminal Log Stream · {logs.length} 行输出
+            </span>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "#94A3B8", cursor: "pointer", margin: 0 }}>
               <input
                 type="checkbox"
                 checked={autoscroll}
                 onChange={(e) => setAutoscroll(e.target.checked)}
-                style={{ width: "auto" }}
+                style={{ width: "auto", accentColor: "#6366F1" }}
               />
               自动滚动
             </label>
             <button
-            type="button"
-            className="btn btn-sm"
-            onClick={() => setLogs([])}
-            aria-label="清空日志"
-          >清空</button>
+              type="button"
+              className="btn btn-sm btn-ghost"
+              style={{ fontSize: 11, padding: "2px 8px" }}
+              onClick={() => {
+                navigator.clipboard.writeText(logs.join("\n"));
+                toast.success("已复制完整日志");
+              }}
+              title="复制日志到剪贴板"
+            >
+              📋 复制
+            </button>
+            <button
+              type="button"
+              className="btn btn-sm btn-ghost"
+              style={{ fontSize: 11, padding: "2px 8px" }}
+              onClick={() => setLogs([])}
+            >
+              清空
+            </button>
           </div>
         </div>
+
         <div className="log-stream" onClick={() => setAutoscroll(false)}>
           {logs.length === 0 ? (
-            <div className="text-faint" style={{ fontSize: 12, padding: "8px 0" }}>等待命令…</div>
+            <div style={{ color: "#64748B", fontSize: 12.5, padding: "16px 0", textAlign: "center" }}>
+              终端就绪，点击上方命令开始执行流式输出…
+            </div>
           ) : (
             logs.map((raw, i) => {
-              // 解析 JSON 行（来自 appendLogLine）
               let parsed: { ts?: string; event?: string; body?: string; level?: "info" | "ok" | "warn" | "err" } | null = null;
-              try { parsed = JSON.parse(raw); } catch { /* 旧 plain 行兼容 */ }
+              try { parsed = JSON.parse(raw); } catch { /* plain log fallback */ }
               if (parsed && parsed.ts) {
                 return (
                   <div key={i} className={`log-line log-line--${parsed.level || "info"}`}>
                     <span className="log-line__ts">{(parsed.ts || "").slice(11, 19)}</span>
                     <span className="log-line__body">
-                      {parsed.event && <span className="text-faint text-mono" style={{ marginRight: 8 }}>[{parsed.event}]</span>}
+                      {parsed.event && (
+                        <span style={{ color: "#818CF8", marginRight: 8, fontWeight: 600 }}>
+                          [{parsed.event}]
+                        </span>
+                      )}
                       {parsed.body}
                     </span>
                   </div>
@@ -732,6 +855,7 @@ export default function BridgeConsole() {
           <div ref={logEndRef} />
         </div>
       </div>
+
 
       {/* ============ 数据面板（保留） ============ */}
       {panelTitle && !(budget && panelTitle === "预算报告") && (
