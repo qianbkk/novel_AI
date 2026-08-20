@@ -56,65 +56,69 @@ const MODULES = [
   { idx: "M06", title: "AI 治理", sub: "规则中心 · 文笔指纹", metric: "毒舌模式 + 去味" },
 ];
 
-// 2026-08-18（架构修复 #7）：
-// 把项目从"功能卡"改为"写作旅程"。小白用户进入 Dashboard 后
-// 看到的不再是「这个项目有多少章/多少字」，而是「我现在在哪一步、下一步是什么」。
-//
-// 5 步旅程对应用户实际操作链路：
-//   1. 创建项目（已创建项目必经过）
-//   2. 题材画像 + 主题（v1.0 Pre-Production）
-//   3. 世界构建（10 阶段）
-//   4. 大纲（弧级）
-//   5. 写章节（每章 + 上下文）
-//
-// 当前 step 从真实数据推断：project.status / outline 数量 / 章节数。
-// 不拉额外接口：用已加载的 chapterMap 推断「写章节」是否开始；
-// 题材画像+主题是否就绪暂用 project.status 兜底（status=ready 表明已完成世界构建；
-// 严格 v1.0 拆开后端需要补 endpoint，但那是另一任务范围）。
-function WritingJourney({ p, chs }: { p: Project; chs: ChapterListItem[] }) {
-  // 推断 5 步完成度
-  const steps: { key: string; label: string; icon: string }[] = [
-    { key: "created",  label: "创建", icon: "📝" },
-    { key: "preprod",  label: "题材+主题", icon: "🎭" },
-    { key: "world",    label: "世界观", icon: "🌍" },
-    { key: "outline",  label: "大纲", icon: "📜" },
-    { key: "chapters", label: "写章节", icon: "✍️" },
+function WritingJourney({ p, chs, projectId }: { p: Project; chs: ChapterListItem[]; projectId: string }) {
+  const navigate = useNavigate();
+  const steps: { key: string; label: string; icon: string; path: string }[] = [
+    { key: "preprod",  label: "① 题材", icon: "🔮", path: `/projects/${projectId}/theme` },
+    { key: "world",    label: "② 设定", icon: "🌍", path: `/projects/${projectId}/worldbuild` },
+    { key: "outline",  label: "③ 大纲", icon: "📜", path: `/projects/${projectId}/outline` },
+    { key: "chapters", label: "④ 写作", icon: "✍️", path: `/projects/${projectId}/bridge` },
+    { key: "reader",   label: "⑤ 目录", icon: "📖", path: `/projects/${projectId}/chapters` },
   ];
-  // 1. 创建 — 项目存在 = done
-  // 2. 题材+主题 — 项目 status 已是 ready 时认为完成（更精细需要查 genre/theme endpoint；
-  //    这里保守先用 status；后续补 endpoint 后再细化）
-  // 3. 世界观 — project.status === "ready"
-  // 4. 大纲 — outline 数 > 0（前端无 outline 缓存，先用 hasOutline placeholder）
-  //    但 WorldBuild ready 后通常会 run bootstrap 落 arc_plans；
-  //    在前端加载大纲前粗略判断 = status===ready
-  // 5. 写章节 — chapters.length > 0
+
   const hasWorld = p.status === "ready";
   const hasChapters = chs.length > 0;
 
-  // 当前 step index（高亮）
-  let currentIdx = 1; // 默认在 preprod
-  if (hasWorld) currentIdx = 3;  // 大纲
-  if (hasChapters) currentIdx = 4; // 写章节
-  if (!hasWorld && !hasChapters) currentIdx = 1; // 还在 preprod
+  let currentIdx = 0;
+  if (hasWorld) currentIdx = 2;
+  if (hasChapters) currentIdx = 3;
 
   return (
-    <div className="writing-journey" aria-label="写作旅程进度">
+    <div className="writing-journey" aria-label="创作旅程进度" style={{ display: "grid", gridTemplateColumns: "repeat(5, 1fr)", gap: 6, margin: "12px 0 8px" }}>
       {steps.map((s, i) => {
-        const done = i < currentIdx || (i === 0); // 创建永远 done
+        const done = i < currentIdx;
         const current = i === currentIdx;
-        const cls = done ? "writing-journey__step writing-journey__step--done"
-                       : current ? "writing-journey__step writing-journey__step--current"
-                                 : "writing-journey__step writing-journey__step--pending";
+        const cls = done
+          ? "writing-journey__step writing-journey__step--done"
+          : current
+          ? "writing-journey__step writing-journey__step--current"
+          : "writing-journey__step writing-journey__step--pending";
         return (
-          <div key={s.key} className={cls}>
-            <span className="writing-journey__icon">{done ? "✓" : s.icon}</span>
-            <span className="writing-journey__label">{s.label}</span>
-          </div>
+          <button
+            type="button"
+            key={s.key}
+            className={cls}
+            onClick={(e) => {
+              e.stopPropagation();
+              navigate(s.path);
+            }}
+            title={`前往：${s.label}`}
+            style={{
+              background: current ? "var(--color-accent-soft)" : done ? "rgba(16, 185, 129, 0.08)" : "var(--color-bg-0)",
+              border: `1px solid ${current ? "var(--color-accent)" : done ? "rgba(16, 185, 129, 0.25)" : "var(--color-border-1)"}`,
+              borderRadius: "var(--radius-sm)",
+              padding: "5px 2px",
+              cursor: "pointer",
+              display: "flex",
+              flexDirection: "column",
+              alignItems: "center",
+              gap: 2,
+              transition: "all var(--duration-fast) var(--ease-out)",
+            }}
+          >
+            <span className="writing-journey__icon" style={{ fontSize: 12 }}>
+              {done ? "✓" : s.icon}
+            </span>
+            <span className="writing-journey__label" style={{ fontSize: 10, color: current ? "var(--color-accent-strong)" : done ? "var(--color-moss)" : "var(--color-fg-4)" }}>
+              {s.label}
+            </span>
+          </button>
         );
       })}
     </div>
   );
 }
+
 
 function ModuleCompass({ projects, chapterMap }: { projects: Project[]; chapterMap: Record<string, ChapterListItem[]> }) {
   const totalChapters = Object.values(chapterMap).reduce((a, c) => a + c.length, 0);
@@ -783,180 +787,110 @@ export default function Dashboard() {
                     : ""}
                 </div>
 
-                {/* 2026-08-18：写作旅程 stepper（架构修复 #7）。
-                    用户报告「前端布局不合理，要让小白打开就知道项目内容/如何用」。
-                    把"功能清单"改为"用户旅程" — 5 步从创建到写章节，
-                    当前所在步骤高亮（蓝色），已完成步骤打勾（绿色），
-                    未开始步骤灰显。点击项目卡即跳到当前步骤对应页面。 */}
-                <WritingJourney p={p} chs={chs} />
+                <WritingJourney p={p} chs={chs} projectId={p.id} />
 
-                {/* 项目产出概览。
-                    这里原本是三行标着 L1/L2/L3 的"三道记忆防线"，分母还是
-                    /5、/12 —— 但本项目的记忆只有 L2（热/冷/约束）和 L5（弧归档），
-                    L1/L3 根本不存在，那三行的数值全是拿 chapters.length 和
-                    log10(字数) 硬算的。列表页给每张卡片拉一次真实记忆不划算，
-                    所以改成如实展示已有数据；真实分层记忆看写作控制台的
-                    「分层记忆快照」面板。 */}
-                <div className="memory-stack" style={{ marginTop: 10, gap: 4 }}>
-                  <div className="memory-row memory-row--l2" style={{ padding: "6px 10px 6px 12px" }}>
-                    <span className="memory-row__layer">章</span>
-                    <span className="memory-row__title" style={{ fontSize: 11.5 }}>
-                      已写 {chs.length} 章
-                    </span>
-                    <span className="memory-row__count">{p.status === "ready" ? "设定已建立" : "设定草拟中"}</span>
+                {/* 项目产出与状态摘要 */}
+                <div style={{ display: "flex", gap: 8, marginTop: 10, fontSize: 12 }}>
+                  <div style={{ padding: "4px 8px", borderRadius: "var(--radius-sm)", background: "var(--color-bg-0)", border: "1px solid var(--color-border-1)", color: "var(--color-fg-2)" }}>
+                    📖 <strong>{chs.length}</strong> 章
                   </div>
-                  <div className="memory-row memory-row--l3" style={{ padding: "6px 10px 6px 12px" }}>
-                    <span className="memory-row__layer">字</span>
-                    <span className="memory-row__title" style={{ fontSize: 11.5 }}>
-                      累计 {projectWords.toLocaleString()} 字
-                    </span>
-                    <span className="memory-row__count">
-                      {chs.length ? `均 ${Math.round(projectWords / chs.length).toLocaleString()}/章` : "—"}
-                    </span>
+                  <div style={{ padding: "4px 8px", borderRadius: "var(--radius-sm)", background: "var(--color-bg-0)", border: "1px solid var(--color-border-1)", color: "var(--color-fg-2)" }}>
+                    📝 <strong>{projectWords.toLocaleString()}</strong> 字
                   </div>
-                </div>
-
-                {/* 弧进度条 + 弧曲线 */}
-                <div className="project-card__progress">
-                  <div className="arc-pill" style={{ marginBottom: 4 }}>
-                    <span>弧进度</span>
-                    <span className="arc-pill__bar"><span style={{ transform: `scaleX(${arcPct / 100})` }} /></span>
-                    <span>{arcPct}%</span>
-                  </div>
-                  <div className="progress-track" style={{ height: 3, margin: 0 }}>
-                    <div className="progress-fill" style={{ width: `${arcPct}%` }} />
-                  </div>
-                  {wps.length > 1 && (
-                    <div className="arc-curve" aria-hidden="true">
-                      <svg viewBox={`0 0 ${Math.max(40, wps.length * 12)} 64`} preserveAspectRatio="none">
-                        <defs>
-                          <linearGradient id={`arc-grad-${p.id}`} x1="0" x2="1" y1="0" y2="0">
-                            <stop offset="0%" stopColor="var(--accent)" />
-                            <stop offset="100%" stopColor="var(--accent-strong)" />
-                          </linearGradient>
-                        </defs>
-                        <line
-                          x1="0" y1="32" x2={Math.max(40, wps.length * 12)} y2="32"
-                          className="arc-curve__bg-line"
-                        />
-                        {(() => {
-                          const W = Math.max(40, wps.length * 12);
-                          const max = Math.max(1, ...wps.map((d) => d.y));
-                          const pts = wps.map((d, i) => {
-                            const x = (i / Math.max(1, wps.length - 1)) * W;
-                            const y = 60 - (d.y / max) * 50;
-                            return `${x.toFixed(1)},${y.toFixed(1)}`;
-                          });
-                          const path = `M ${pts.join(" L ")}`;
-                          return (
-                            <>
-                              <path d={path} className="arc-curve__fg-line" stroke={`url(#arc-grad-${p.id})`} />
-                              {wps.map((d, i) => {
-                                const x = (i / Math.max(1, wps.length - 1)) * W;
-                                const y = 60 - (d.y / max) * 50;
-                                return <circle key={i} cx={x} cy={y} r="2" className="arc-curve__dot" />;
-                              })}
-                            </>
-                          );
-                        })()}
-                      </svg>
+                  {chs.length > 0 && (
+                    <div style={{ padding: "4px 8px", borderRadius: "var(--radius-sm)", background: "var(--color-bg-0)", border: "1px solid var(--color-border-1)", color: "var(--color-fg-3)" }}>
+                      均 {Math.round(projectWords / chs.length).toLocaleString()} 字/章
                     </div>
                   )}
                 </div>
 
-                {/* 章节预览 fan（3D 叠层） */}
-                {recent.length > 0 && (
-                  // 审计 #11 (2026-07-20)：纯视觉装饰，禁止吞掉鼠标事件，
-                  // 否则点击预览会冒泡到父级 project card 触发导航。
-                  <div
-                    className="chapter-fan"
-                    aria-hidden="true"
-                    style={{ pointerEvents: "none" }}
-                  >
-                    {recent.map((c, idx) => (
-                      <div
-                        key={c.id}
-                        className="chapter-fan__card"
-                        style={{
-                          transform: `translateY(${idx * 4}px) scale(${1 - idx * 0.04})`,
-                          zIndex: recent.length - idx,
-                          opacity: 1 - idx * 0.18,
-                        }}
-                      >
-                        <span className="chapter-fan__card__no">第{c.chapter_no}章</span>
-                        <span className="chapter-fan__card__title">{c.title || "（无标题）"}</span>
-                        <span className="chapter-fan__card__preview">{c.content_preview}</span>
-                      </div>
-                    ))}
+                {/* 弧进度条 */}
+                <div className="project-card__progress" style={{ marginTop: 10 }}>
+                  <div className="arc-pill" style={{ marginBottom: 4, display: "flex", justifyContent: "space-between", fontSize: 11, color: "var(--color-fg-4)" }}>
+                    <span>弧写作进度</span>
+                    <span>{arcPct}%</span>
                   </div>
-                )}
+                  <div className="progress-track" style={{ height: 4, margin: 0 }}>
+                    <div className="progress-fill" style={{ width: `${arcPct}%` }} />
+                  </div>
+                </div>
 
-                <div className="project-card__foot" style={{ marginTop: 14 }}>
-                  {runningBadge(p) || statusBadge(p.status)}
-                  <span className="text-faint text-mono">{p.id.slice(0, 8)}</span>
-                  {/* 2026-07-25 修复（前端入口缺失）：
-                      之前 ready 项目只有一个"打开 N 章"按钮，worldbuild / outline /
-                      character card 都没直跳入口，用户反馈"前端里没用大纲没有角色卡"。
-                      现在加 3 个并列按钮：世界观/大纲/角色，点哪个跳哪个页。 */}
-                  {p.status === "ready" && (
-                    <>
-                      <button
-                        className="btn btn-ghost"
-                        style={{ marginLeft: 4, fontSize: 11.5, padding: "2px 8px" }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/projects/${p.id}/worldbuild`);
-                        }}
-                        aria-label={`查看 ${p.title} 世界观`}
-                        title="7 段世界观 + 卷级骨架 + 历史时间线"
-                      >
-                        🌍 世界观
-                      </button>
-                      <button
-                        className="btn btn-ghost"
-                        style={{ marginLeft: 4, fontSize: 11.5, padding: "2px 8px" }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/projects/${p.id}/outline`);
-                        }}
-                        aria-label={`查看 ${p.title} 大纲`}
-                        title="弧级大纲（点开可生成）"
-                      >
-                        📜 大纲
-                      </button>
-                      <button
-                        className="btn btn-ghost"
-                        style={{ marginLeft: 4, fontSize: 11.5, padding: "2px 8px" }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          navigate(`/projects/${p.id}/characters`);
-                        }}
-                        aria-label={`查看 ${p.title} 角色列表`}
-                        title="角色列表 + 点击进 8 段详情"
-                      >
-                        👤 角色
-                      </button>
-                    </>
-                  )}
-                  {recent.length > 0 && (
+                {/* 卡片快捷操作工具栏 */}
+                <div
+                  className="project-card__foot"
+                  style={{
+                    marginTop: 14,
+                    paddingTop: 10,
+                    borderTop: "1px solid var(--color-border-1)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
+                    gap: 8,
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {runningBadge(p) || statusBadge(p.status)}
+                    <span className="text-faint text-mono" style={{ fontSize: 11 }}>{p.id.slice(0, 8)}</span>
+                  </div>
+
+                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
                     <button
-                      className="btn btn-ghost"
-                      style={{ marginLeft: 4, fontSize: 12, padding: "2px 10px" }}
+                      type="button"
+                      className="btn btn-sm btn-primary"
+                      style={{ fontSize: 11.5, padding: "3px 10px" }}
                       onClick={(e) => {
-                        e.stopPropagation();  // 不触发 project card onClick
+                        e.stopPropagation();
+                        navigate(`/projects/${p.id}/bridge`);
+                      }}
+                      title="打开写作控制台"
+                    >
+                      ▶ 写作
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      style={{ fontSize: 11.5, padding: "3px 8px" }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/projects/${p.id}/outline`);
+                      }}
+                      title="大纲编排"
+                    >
+                      📜 大纲
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      style={{ fontSize: 11.5, padding: "3px 8px" }}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        navigate(`/projects/${p.id}/worldbuild`);
+                      }}
+                      title="世界观与设定"
+                    >
+                      🌍 设定
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-sm btn-ghost"
+                      style={{ fontSize: 11.5, padding: "3px 8px" }}
+                      onClick={(e) => {
+                        e.stopPropagation();
                         navigate(`/projects/${p.id}/chapters`);
                       }}
-                      aria-label={`查看 ${p.title} 全部 ${chs.length} 章`}
+                      title="章节目录"
                     >
-                      打开 {chs.length} 章
+                      📖 目录
                     </button>
-                  )}
+                  </div>
                 </div>
               </div>
             );
           })}
         </div>
       )}
+
     </div>
   );
 }

@@ -27,30 +27,35 @@ const GLOBAL_LINKS = [
 
 export default function App() {
   const location = useLocation();
-  // Detect "in a project" route for sub-nav
   const projectMatch = location.pathname.match(/^\/projects\/([^/]+)/);
   const projectId = projectMatch?.[1];
+  const [projectTitle, setProjectTitle] = useState<string | null>(null);
 
-  // 2026-08-18：后端实时健康（每 5s 探测 /health）
-  // sidebar footer 展示，让用户随时知道后端在不在
+  useEffect(() => {
+    if (!projectId) {
+      setProjectTitle(null);
+      return;
+    }
+    let cancelled = false;
+    api.getProject(projectId).then((p) => {
+      if (!cancelled) setProjectTitle(p.title || "未命名小说");
+    }).catch(() => {
+      if (!cancelled) setProjectTitle("作品空间");
+    });
+    return () => { cancelled = true; };
+  }, [projectId]);
+
   const backend = useBackendHealth();
-
-  // ─── 登录态管理 ───
-  // 优先从 localStorage 恢复；没有 token 时显示"匿名"。
-  // 暴露 meOrNull 检查真有效性（token 存在但失效会清掉并显示"匿名"）。
   const [authEmail, setAuthEmail] = useState<string | null>(null);
   const [authDialogOpen, setAuthDialogOpen] = useState(false);
 
   useEffect(() => {
-    // mount 时：若 localStorage 有 token 就静默验签 (/auth/me)。
-    // 失败则清掉；成功则把 email 显示在侧栏。
     if (!getStoredToken()) {
       setAuthEmail(null);
       return;
     }
     api.meOrNull().then((u) => setAuthEmail(u?.email ?? null));
 
-    // 监听后端 401 事件（仅 production 模式会真正发）
     const onAuthRequired = () => setAuthDialogOpen(true);
     window.addEventListener("novel_ai:auth_required", onAuthRequired);
     return () => window.removeEventListener("novel_ai:auth_required", onAuthRequired);
@@ -69,57 +74,102 @@ export default function App() {
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
-              strokeWidth="1.4"
+              strokeWidth="1.6"
               strokeLinecap="round"
               strokeLinejoin="round"
               aria-hidden="true"
             >
-              {/* 羽毛笔 quill */}
               <path d="M20 3c-3 0-7 2-11 6-3 3-5 7-5 10l5-5c4-4 6-8 6-11z" />
               <path d="M4 19l5-5" />
               <path d="M9 14l1 1" />
               <path d="M13 10l1 1" />
               <path d="M16 7l1 1" />
             </svg>
-            落笔
+            落笔 · Studio
           </div>
-          <div className="sidebar-brand__sub">FirstDraft · AI 写小说</div>
+          <div className="sidebar-brand__sub">FirstDraft · AI 创作者空间</div>
         </div>
 
+        {/* 全局书库与系统配置 */}
         <div className="sidebar-section">
-          <div className="sidebar-section__label">导航</div>
-          {GLOBAL_LINKS.map((l) => (
-            <NavLink
-              key={l.to}
-              to={l.to}
-              end={l.to === "/"}
-              className={({ isActive }) =>
-                `sidebar-link${isActive ? " is-active" : ""}`
-              }
-            >
-              <span className="sidebar-link__dot" />
-              {l.label}
+          <div className="sidebar-section__label">全局中心</div>
+          <NavLink to="/" end className={({ isActive }) => `sidebar-link${isActive ? " is-active" : ""}`}>
+            <span className="sidebar-link__icon">📚</span>
+            <span>我的作品库</span>
+          </NavLink>
+          <NavLink to="/settings/providers" className={({ isActive }) => `sidebar-link${isActive ? " is-active" : ""}`}>
+            <span className="sidebar-link__icon">⚡</span>
+            <span>模型供应商</span>
+          </NavLink>
+          <NavLink to="/settings/roles" className={({ isActive }) => `sidebar-link${isActive ? " is-active" : ""}`}>
+            <span className="sidebar-link__icon">🎭</span>
+            <span>角色模型绑定</span>
+          </NavLink>
+        </div>
+
+        {/* 当前作品工作流 */}
+        {projectId && (
+          <div className="sidebar-section">
+            <div className="sidebar-section__label">
+              <span title={projectTitle || ""}>当前作品</span>
+              <span style={{ fontSize: 10, color: "var(--color-accent-strong)", opacity: 0.85, maxWidth: 100, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {projectTitle || "创作空间"}
+              </span>
+            </div>
+
+            <div className="sidebar-group-title">① 设定筹备</div>
+            <NavLink to={`/projects/${projectId}/theme`} className={({ isActive }) => `sidebar-link${isActive ? " is-active" : ""}`}>
+              <span className="sidebar-link__icon">🔮</span>
+              <span>题材与开篇</span>
             </NavLink>
-          ))}
-        </div>
+            <NavLink to={`/projects/${projectId}/worldbuild`} className={({ isActive }) => `sidebar-link${isActive ? " is-active" : ""}`}>
+              <span className="sidebar-link__icon">🌍</span>
+              <span>世界观构建</span>
+            </NavLink>
 
-        {/* 登录态指示器 — 用户主动登录 / 匿名标记 */}
-        <div className="sidebar-section">
-          <div className="sidebar-section__label">账号</div>
+            <div className="sidebar-group-title" style={{ marginTop: 8 }}>② 结构与正文</div>
+            <NavLink to={`/projects/${projectId}/outline`} className={({ isActive }) => `sidebar-link${isActive ? " is-active" : ""}`}>
+              <span className="sidebar-link__icon">📜</span>
+              <span>故事大纲</span>
+            </NavLink>
+            <NavLink to={`/projects/${projectId}/bridge`} className={({ isActive }) => `sidebar-link${isActive ? " is-active" : ""}`}>
+              <span className="sidebar-link__icon">✍️</span>
+              <span>写作控制台</span>
+            </NavLink>
+
+            <div className="sidebar-group-title" style={{ marginTop: 8 }}>③ 目录与资产</div>
+            <NavLink to={`/projects/${projectId}/chapters`} className={({ isActive }) => `sidebar-link${isActive ? " is-active" : ""}`}>
+              <span className="sidebar-link__icon">📖</span>
+              <span>章节目录</span>
+            </NavLink>
+            <NavLink to={`/projects/${projectId}/characters`} className={({ isActive }) => `sidebar-link${isActive ? " is-active" : ""}`}>
+              <span className="sidebar-link__icon">👤</span>
+              <span>角色档案库</span>
+            </NavLink>
+            <NavLink to={`/projects/${projectId}/rules`} className={({ isActive }) => `sidebar-link${isActive ? " is-active" : ""}`}>
+              <span className="sidebar-link__icon">⚖️</span>
+              <span>AI 规则中心</span>
+            </NavLink>
+          </div>
+        )}
+
+        {/* 登录态指示器 */}
+        <div className="sidebar-section" style={{ marginTop: "auto" }}>
+          <div className="sidebar-section__label">账户</div>
           {authEmail ? (
-            <>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "4px 8px" }}>
               <div
                 title={authEmail}
                 style={{
-                  padding: "4px 0",
-                  fontSize: 13,
-                  color: "var(--fg, #000)",
+                  fontSize: 12,
+                  color: "var(--color-fg-2)",
                   overflow: "hidden",
                   textOverflow: "ellipsis",
                   whiteSpace: "nowrap",
+                  maxWidth: 140,
                 }}
               >
-                {authEmail}
+                👤 {authEmail}
               </div>
               <a
                 href="#"
@@ -128,84 +178,30 @@ export default function App() {
                   api.logout();
                   setAuthEmail(null);
                 }}
-                className="sidebar-link"
-                style={{ fontSize: 12, opacity: 0.7 }}
+                style={{ fontSize: 11, color: "var(--color-fg-4)", textDecoration: "none" }}
               >
-                <span className="sidebar-link__dot" />
                 登出
               </a>
-            </>
+            </div>
           ) : (
             <a
               href="#"
               onClick={(e) => { e.preventDefault(); setAuthDialogOpen(true); }}
               className="sidebar-link"
+              style={{ fontSize: 12.5 }}
             >
-              <span className="sidebar-link__dot" />
-              登录 / 注册
+              <span className="sidebar-link__icon">🔑</span>
+              <span>登录 / 注册</span>
             </a>
           )}
         </div>
 
-        {projectId && (
-          <div className="sidebar-section">
-            <div className="sidebar-section__label">当前项目</div>
-            <NavLink
-              to={`/projects/${projectId}/worldbuild`}
-              className={({ isActive }) =>
-                `sidebar-link${isActive ? " is-active" : ""}`
-              }
-            >
-              <span className="sidebar-link__dot" />
-              世界构建
-            </NavLink>
-            {/* 弧级大纲管理 */}
-            <NavLink
-              to={`/projects/${projectId}/outline`}
-              className={({ isActive }) =>
-                `sidebar-link${isActive ? " is-active" : ""}`
-              }
-            >
-              <span className="sidebar-link__dot" />
-              大纲管理
-            </NavLink>
-            <NavLink
-              to={`/projects/${projectId}/bridge`}
-              className={({ isActive }) =>
-                `sidebar-link${isActive ? " is-active" : ""}`
-              }
-            >
-              <span className="sidebar-link__dot" />
-              写作控制台
-            </NavLink>
-            <NavLink
-              to={`/projects/${projectId}/chapters`}
-              className={({ isActive }) =>
-                `sidebar-link${isActive ? " is-active" : ""}`
-              }
-            >
-              <span className="sidebar-link__dot" />
-              章节管理
-            </NavLink>
-            <NavLink
-              to={`/projects/${projectId}/rules`}
-              className={({ isActive }) =>
-                `sidebar-link${isActive ? " is-active" : ""}`
-              }
-            >
-              <span className="sidebar-link__dot" />
-              规则中心
-            </NavLink>
-          </div>
-        )}
-
         <div className="sidebar-footer">
-          {/* 2026-08-18：后端实时状态灯（用户报告 #6：WorldBuild 看不到，
-              怀疑后端没起来；现在随时看得到）。三态：检测中/运行中/未响应。 */}
           <BackendStatusBadge state={backend} />
-          <div style={{ fontSize: 11, opacity: 0.65 }}>frontend :5293</div>
+          <div style={{ fontSize: 11, color: "var(--color-fg-4)" }}>frontend :5293 · v1.0</div>
         </div>
       </aside>
+
 
       <main className="app-main" id="main-content" tabIndex={-1}>
         <div className="page-fade" key={location.pathname}>
