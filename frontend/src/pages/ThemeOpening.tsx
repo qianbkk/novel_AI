@@ -235,6 +235,8 @@ function GenreTab({ projectId, onError, onSuccess, onComplete }: { projectId: st
   // 改成 true 后：模板是兜底，LLM 失败会保留模板 + 在 source 字段标 llm_failed，
   // 用户点生成就有 AI 调用痕迹（即便失败也会显示在 LLMStatusBanner）。
   const [useLlm, setUseLlm] = useState(true);
+  // 2026-08-19：见 ThemeTab 同名字段。已有产物时给"换题材/重新生成"入口。
+  const [regenerateOpen, setRegenerateOpen] = useState(false);
 
   useEffect(() => {
     api.getGenreProfile(projectId).then(setProfile).catch(() => setProfile(null));
@@ -271,7 +273,48 @@ function GenreTab({ projectId, onError, onSuccess, onComplete }: { projectId: st
         <Field label="禁忌">{profile.taboo.join(" / ")}</Field>
         <Field label="show-item 参考">{profile.show_item_examples.join(" / ")}</Field>
         <Field label="research_strength">{profile.research_strength}</Field>
-        <button onClick={() => setEditing(true)} style={btnStyle}>编辑（当前为只读，重新生成覆盖）</button>
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button onClick={() => setEditing(true)} style={btnStyle}>✏️ 编辑</button>
+          <button
+            onClick={() => setRegenerateOpen(!regenerateOpen)}
+            style={{ ...btnStyle, background: "var(--accent-soft, #fde6e1)", borderColor: "var(--accent, #E06C5F)", color: "var(--accent, #E06C5F)" }}
+          >
+            🔄 换题材/重新生成（LLM）
+          </button>
+        </div>
+        {regenerateOpen && (
+          <div style={{ marginTop: 12, padding: 12, background: "var(--bg-input, #faf8f3)", borderRadius: 6, border: "1px dashed var(--border, #d8d2c4)" }}>
+            <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>新题材（6 主流男频之一）：</label>
+            <select value={genreKey} onChange={(e) => setGenreKey(e.target.value)} style={{ ...selectStyle, width: "100%", marginTop: 4, marginBottom: 8 }}>
+              {GENRE_KEYS.map((g) => (
+                <option key={g.key} value={g.key}>{g.label}</option>
+              ))}
+            </select>
+            <label style={{ fontSize: 12 }}>
+              <input type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} />
+              使用 LLM 细化（取消勾选=用纯模板覆盖）
+            </label>
+            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+              <button
+                onClick={async () => {
+                  try {
+                    const result = await api.generateGenreProfile(projectId, { genre_key: genreKey, use_llm: useLlm });
+                    setProfile(result);
+                    onSuccess("已重新生成（LLM）");
+                    onComplete?.();
+                    setRegenerateOpen(false);
+                  } catch (e: unknown) {
+                    onError(String(e));
+                  }
+                }}
+                style={btnPrimary}
+              >
+                ⚡ 重新生成
+              </button>
+              <button onClick={() => setRegenerateOpen(false)} style={btnStyle}>取消</button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -316,6 +359,11 @@ function ThemeTab({ projectId, onError, onSuccess, onComplete }: { projectId: st
   // 2026-08-19：use_llm 默认 true（详见 GenreTab 注释）。
   const [useLlm, setUseLlm] = useState(true);
   const [saving, setSaving] = useState(false);
+  // 2026-08-19（用户报告："前端看到的内容仍是硬编码的"）：之前产物已存在时
+  // 只显示只读 view + "编辑 JSON"，没有"用新方向重新生成 LLM"的入口 —— 用户
+  // 看到的是磁盘旧内容，没法触发新 LLM 调用。regenerateOpen 控制展开
+  // "重新生成" 表单（concept 输入 + 重新生成按钮）。
+  const [regenerateOpen, setRegenerateOpen] = useState(false);
 
   useEffect(() => {
     api.getTheme(projectId).then(setTheme).catch(() => setTheme(null));
@@ -375,7 +423,50 @@ function ThemeTab({ projectId, onError, onSuccess, onComplete }: { projectId: st
         <Field label="theme_statement">{theme.theme_statement}</Field>
         <Field label="expectation_arc">seed ch{theme.expectation_arc.seed_chapter} → twist ch{theme.expectation_arc.twist_chapter} → payoff ch{theme.expectation_arc.payoff_chapter}<br />{theme.expectation_arc.description}</Field>
         <Field label="resonance_anchors">{theme.resonance_anchors.join(" / ")}</Field>
-        <button onClick={handleStartEdit} style={btnStyle}>编辑 JSON</button>
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button onClick={handleStartEdit} style={btnStyle}>✏️ 编辑 JSON</button>
+          <button
+            onClick={() => setRegenerateOpen(!regenerateOpen)}
+            style={{ ...btnStyle, background: "var(--accent-soft, #fde6e1)", borderColor: "var(--accent, #E06C5F)", color: "var(--accent, #E06C5F)" }}
+          >
+            🔄 用新方向重新生成（LLM）
+          </button>
+        </div>
+        {regenerateOpen && (
+          <div style={{ marginTop: 12, padding: 12, background: "var(--bg-input, #faf8f3)", borderRadius: 6, border: "1px dashed var(--border, #d8d2c4)" }}>
+            <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>用户初始概念（一句话，会被喂给 LLM）：</label>
+            <input
+              type="text"
+              value={concept}
+              onChange={(e) => setConcept(e.target.value)}
+              placeholder="例如：废土末世，主角是地下城维修工，发现水源净化器被篡改"
+              style={{ width: "100%", marginTop: 4, marginBottom: 8, ...inputStyle }}
+            />
+            <label style={{ fontSize: 12 }}>
+              <input type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} />
+              使用 LLM 改写（取消勾选=用纯模板覆盖现有产物）
+            </label>
+            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+              <button
+                onClick={async () => {
+                  try {
+                    const result = await api.generateTheme(projectId, { concept, use_llm: useLlm });
+                    setTheme(result);
+                    onSuccess("已重新生成（LLM）");
+                    onComplete?.();
+                    setRegenerateOpen(false);
+                  } catch (e: unknown) {
+                    onError(String(e));
+                  }
+                }}
+                style={btnPrimary}
+              >
+                ⚡ 重新生成
+              </button>
+              <button onClick={() => setRegenerateOpen(false)} style={btnStyle}>取消</button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -444,6 +535,8 @@ function OpeningTab({ projectId, onError, onSuccess, onComplete }: { projectId: 
   // 2026-08-19：use_llm 默认 true（详见 GenreTab 注释）。
   const [useLlm, setUseLlm] = useState(true);
   const [saving, setSaving] = useState(false);
+  // 2026-08-19：见 ThemeTab。
+  const [regenerateOpen, setRegenerateOpen] = useState(false);
 
   useEffect(() => {
     api.getOpening(projectId).then(setOpening).catch(() => setOpening(null));
@@ -503,7 +596,50 @@ function OpeningTab({ projectId, onError, onSuccess, onComplete }: { projectId: 
         <ChapterView title="ch1_anchor" ch={opening.chapter_1_anchor} />
         <ChapterView title="ch2_question" ch={opening.chapter_2_question} />
         <ChapterView title="ch3_escalation" ch={opening.chapter_3_escalation} />
-        <button onClick={handleStartEdit} style={btnStyle}>编辑 JSON</button>
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button onClick={handleStartEdit} style={btnStyle}>✏️ 编辑 JSON</button>
+          <button
+            onClick={() => setRegenerateOpen(!regenerateOpen)}
+            style={{ ...btnStyle, background: "var(--accent-soft, #fde6e1)", borderColor: "var(--accent, #E06C5F)", color: "var(--accent, #E06C5F)" }}
+          >
+            🔄 用新概念重新生成（LLM）
+          </button>
+        </div>
+        {regenerateOpen && (
+          <div style={{ marginTop: 12, padding: 12, background: "var(--bg-input, #faf8f3)", borderRadius: 6, border: "1px dashed var(--border, #d8d2c4)" }}>
+            <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>新概念（一句话，会被喂给 LLM）：</label>
+            <input
+              type="text"
+              value={concept}
+              onChange={(e) => setConcept(e.target.value)}
+              placeholder="例如：废土末世维修工，发现地下城水源净化器被篡改"
+              style={{ width: "100%", marginTop: 4, marginBottom: 8, ...inputStyle }}
+            />
+            <label style={{ fontSize: 12 }}>
+              <input type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} />
+              使用 LLM 改写（取消=纯模板覆盖）
+            </label>
+            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+              <button
+                onClick={async () => {
+                  try {
+                    const result = await api.generateOpening(projectId, { concept, use_llm: useLlm });
+                    setOpening(result);
+                    onSuccess("已重新生成（LLM）");
+                    onComplete?.();
+                    setRegenerateOpen(false);
+                  } catch (e: unknown) {
+                    onError(String(e));
+                  }
+                }}
+                style={btnPrimary}
+              >
+                ⚡ 重新生成
+              </button>
+              <button onClick={() => setRegenerateOpen(false)} style={btnStyle}>取消</button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
@@ -589,6 +725,8 @@ function ResearchTab({ projectId, onError, onSuccess, onComplete }: { projectId:
   // 2026-08-19：use_llm 默认 true（详见 GenreTab 注释）。
   const [useLlm, setUseLlm] = useState(true);
   const [saving, setSaving] = useState(false);
+  // 2026-08-19：见 ThemeTab。
+  const [regenerateOpen, setRegenerateOpen] = useState(false);
 
   useEffect(() => {
     api.getResearchNotes(projectId).then(setNotes).catch(() => setNotes(null));
@@ -653,7 +791,50 @@ function ResearchTab({ projectId, onError, onSuccess, onComplete }: { projectId:
         {Object.entries(notes.per_chapter_notes).map(([k, v]) => (
           <Field key={k} label={`第 ${k} 章`}>{v}</Field>
         ))}
-        <button onClick={handleStartEdit} style={btnStyle}>编辑 JSON</button>
+        <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+          <button onClick={handleStartEdit} style={btnStyle}>✏️ 编辑 JSON</button>
+          <button
+            onClick={() => setRegenerateOpen(!regenerateOpen)}
+            style={{ ...btnStyle, background: "var(--accent-soft, #fde6e1)", borderColor: "var(--accent, #E06C5F)", color: "var(--accent, #E06C5F)" }}
+          >
+            🔄 重新初始化（LLM）
+          </button>
+        </div>
+        {regenerateOpen && (
+          <div style={{ marginTop: 12, padding: 12, background: "var(--bg-input, #faf8f3)", borderRadius: 6, border: "1px dashed var(--border, #d8d2c4)" }}>
+            <label style={{ fontSize: 12, color: "var(--text-secondary)" }}>概念（可选，会被喂给 LLM）：</label>
+            <input
+              type="text"
+              value={concept}
+              onChange={(e) => setConcept(e.target.value)}
+              placeholder="例如：废土末世维修工，发现地下城水源净化器被篡改"
+              style={{ width: "100%", marginTop: 4, marginBottom: 8, ...inputStyle }}
+            />
+            <label style={{ fontSize: 12 }}>
+              <input type="checkbox" checked={useLlm} onChange={(e) => setUseLlm(e.target.checked)} />
+              使用 LLM 细化
+            </label>
+            <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
+              <button
+                onClick={async () => {
+                  try {
+                    const result = await api.initializeResearchNotes(projectId, { concept, use_llm: useLlm });
+                    setNotes(result);
+                    onSuccess(`已重新初始化（${result.research_strength}）`);
+                    onComplete?.();
+                    setRegenerateOpen(false);
+                  } catch (e: unknown) {
+                    onError(String(e));
+                  }
+                }}
+                style={btnPrimary}
+              >
+                ⚡ 重新初始化
+              </button>
+              <button onClick={() => setRegenerateOpen(false)} style={btnStyle}>取消</button>
+            </div>
+          </div>
+        )}
       </div>
     );
   }
