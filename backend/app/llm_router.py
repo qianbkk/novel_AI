@@ -34,14 +34,14 @@ ROLE_DEFAULTS: dict[str, str] = {
 }
 
 
+import logging
+
+_log = logging.getLogger("novel_ai.llm_router")
+
+
 def _db_provider_configs() -> dict[str, ProviderConfig] | None:
     """从 Provider DB 表 + RoleAssignment 读 provider 配置。
     返回 None 表示 DB 没配（mock 模式或用户没建 provider）。
-
-    2026-08-19 修（用户报告 401）：之前 resolve_provider 只读 settings/env，
-    但 .env 文件里 key 可能过期（用户在 Provider 页更新过 key，但 .env 没同步）→
-    settings.minimax_api_key 是无效 key → 401 但 Provider 页 test_provider 通过。
-    修法：DB Provider 表优先，env 只作 fallback。
     """
     from .database import SessionLocal
     from .models import Provider, RoleAssignment
@@ -58,8 +58,9 @@ def _db_provider_configs() -> dict[str, ProviderConfig] | None:
             if p.api_key_encrypted:
                 try:
                     key = decrypt_api_key(p.api_key_encrypted)
-                except Exception:
-                    pass
+                except Exception as exc:
+                    _log.warning("Provider %s (%s) decrypt_api_key 失败: %s", p.id, p.name, exc)
+                    key = ""
             if not key or not p.api_base:
                 continue
             cfg = ProviderConfig(
@@ -68,16 +69,15 @@ def _db_provider_configs() -> dict[str, ProviderConfig] | None:
                 api_key=key,
                 model=p.default_model or "",
             )
-            # 同一 provider_type 可能多个，**第一个有效的覆盖**之前的（保持简单）。
+            # 同一 provider_type 可能多个，第一个有效的优先
             if p.provider_type not in result:
                 result[p.provider_type] = cfg
-        # RoleAssignment 映射：role → provider type
+        # RoleAssignment 映射：role -> provider
         ra_rows = db.query(RoleAssignment).all()
         for ra in ra_rows:
             if ra.provider_id and ra.provider_id in [p.id for p in rows]:
                 p = db.query(Provider).filter_by(id=ra.provider_id).first()
                 if p and p.provider_type in result:
-                    # 让该 role 直接指向配过的 provider（覆盖 ROLE_DEFAULTS 默认）
                     result[ra.role_key] = ProviderConfig(
                         provider=p.provider_type,
                         api_base=p.api_base,
@@ -91,16 +91,20 @@ def _db_provider_configs() -> dict[str, ProviderConfig] | None:
 
 def _provider_configs() -> dict[str, ProviderConfig]:
     """优先级：DB Provider 表 > env/settings。"""
-    db_cfg = _db_provider_configs()
-    if db_cfg:
-        return db_cfg
-    return {
+    configs: dict[str, ProviderConfig] = {
         "deepseek": ProviderConfig("deepseek", settings.deepseek_api_base, settings.deepseek_api_key, settings.deepseek_model),
         "kimi": ProviderConfig("kimi", settings.kimi_api_base, settings.kimi_api_key, settings.kimi_model),
         "minimax": ProviderConfig("minimax", settings.minimax_api_base, settings.minimax_api_key, settings.minimax_model),
-        # 兜底：用全局默认 provider 配置（适配只想用一个 provider 跑通全流程的情况）
         "default": ProviderConfig(settings.llm_provider, settings.llm_api_base, settings.llm_api_key, settings.llm_model),
     }
+    db_cfg = _db_provider_configs()
+    if db_cfg:
+        configs.update(db_cfg)
+        if "default" not in db_cfg:
+            first_valid = next((c for c in db_cfg.values() if c.api_key), None)
+            if first_valid:
+                configs["default"] = first_valid
+    return configs
 
 
 def resolve_provider(role: str) -> ProviderConfig | None:
@@ -109,11 +113,17 @@ def resolve_provider(role: str) -> ProviderConfig | None:
         return None
 
     providers = _provider_configs()
-    # 优先看 RoleAssignment 是否直接把该 role 映射到了具体 provider（即便 provider_type 不在 ROLE_DEFAULTS 里）
+    # 1. 优先看 RoleAssignment 是否直接把该 role 映射到了具体 provider
     cfg = providers.get(role)
 
-    # 角色对应的 provider 没配 key，退回全局默认 provider，而不是直接报错——
-    # 这样用户只配一个 provider 也能先跑起来，模型路由是"锦上添花"不是"硬依赖"。
-    if cfg and not cfg.api_key:
+    # 2. 否则看 ROLE_DEFAULTS 里的默认映射
+    if not cfg or not cfg.api_key:
+        default_name = ROLE_DEFAULTS.get(role)
+        if default_name:
+            cfg = providers.get(default_name)
+
+    # 3. 角色对应的 provider 没配 key，退回全局默认 provider
+    if not cfg or not cfg.api_key:
         cfg = providers.get("default")
     return cfg
+

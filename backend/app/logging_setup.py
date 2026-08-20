@@ -19,12 +19,13 @@ _CONFIGURED = False
 def configure_root() -> None:
     """配置根 logger。可重入——重复调用不会重复挂 handler。"""
     global _CONFIGURED
-    if _CONFIGURED:
-        return
     root = logging.getLogger()
-    # 把已有的弱 handler 清掉，避免重复挂载
+    # 把已有的弱 handler 清掉，避免重复挂载（保留 pytest caplog）
     for h in list(root.handlers):
-        root.removeHandler(h)
+        if h.__class__.__name__ != "LogCaptureHandler":
+            root.removeHandler(h)
+
+
     root.setLevel(logging.INFO)
     fmt = logging.Formatter(
         "%(asctime)s [%(levelname)s] %(name)s: %(message)s",

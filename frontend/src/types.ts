@@ -20,7 +20,9 @@ export interface Project {
   // pinned=true 的项目由后端 list_projects 按 pinned DESC, pin_order DESC 排前面。
   pinned?: boolean;
   pin_order?: number;
+  config_json?: Record<string, any> | null;
 }
+
 
 // 2026-08-18：LLM provider 健康检查响应（用户报告 #3 + #5：生成失败前无可知性）
 export interface ProviderHealth {

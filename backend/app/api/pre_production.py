@@ -57,29 +57,39 @@ def _require_owned_or_dev(project_id: str, request: Request, db: Session) -> Pro
 
 
 def _resolve_novel_ai_dir(project_id: str, db: Session) -> Path:
-    """从 NovelAIBinding 表读 novel_ai_dir（与 push-concept / pull-setting 一致）。
-
-    若项目没绑定（dev 模式常见），返回 env NOVEL_AI_DIR（用于测试和单租户模式）。
-    """
+    """从 NovelAIBinding 表读 novel_ai_dir。若项目未绑定，自动初始化专属项目目录并建立绑定。"""
     from ..models import NovelAIBinding
     binding = db.query(NovelAIBinding).filter_by(project_id=project_id).first()
     if binding and binding.novel_ai_dir:
-        return Path(binding.novel_ai_dir)
+        p = Path(binding.novel_ai_dir)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
     # Fallback: NOVEL_AI_DIR env（dev 模式 + 测试路径）
     env_dir = os.environ.get("NOVEL_AI_DIR")
     if env_dir:
-        return Path(env_dir)
-    # 终极 fallback：engine 默认目录（确保不抛，调用方拿默认）
-    # 2026-08-19 修复（"Failed to fetch" 反复报错）：原来写的是
-    # `from ..config.paths import novel_ai_dir`（当成 app.config.paths 包），
-    # 但 app.config 是单文件 config.py，不存在 paths 子模块 → ModuleNotFoundError。
-    # Starlette 的 ServerErrorMiddleware 在 CORSMiddleware 之前注册，
-    # 未处理异常 → 500 响应**绕过** CORS 中间件 → 浏览器没拿到 ACAO header →
-    # CORS policy block → 报 "TypeError: Failed to fetch"（用户看到的现象）。
-    # 改用绝对 import `engine.config.paths`（uvicorn 从 backend/ 启动，
-    # engine 在 sys.path 上）—— 与 agents/genre_profiler.py 等所有 engine 模块一致。
+        p = Path(env_dir)
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
     from engine.config.paths import novel_ai_dir
-    return Path(novel_ai_dir()) if hasattr(novel_ai_dir, "__call__") else Path(str(novel_ai_dir))
+    base_dir = Path(novel_ai_dir()) if hasattr(novel_ai_dir, "__call__") else Path(str(novel_ai_dir))
+    project_scoped_dir = base_dir / "projects" / project_id
+    project_scoped_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        new_binding = NovelAIBinding(
+            project_id=project_id,
+            novel_ai_dir=str(project_scoped_dir),
+            novel_id=project_id,
+        )
+        db.add(new_binding)
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    return project_scoped_dir
+
 
 
 # ── Request/Response schemas ─────────────────────────

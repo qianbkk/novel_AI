@@ -203,8 +203,8 @@ LOREBOOK_BUDGET_CHARS = 900
 # docs/wiki/03-Writing-Engine.md:198-200 已自承 writer prompt 7k-10k 字
 # 时 LLM 守约束率塌方。6000 字高于常规 4-5k（留 buffer 给方法论 / 钩子等
 # 必有指令），但低于 7k 红线。超限时 build_writer_prompt 末尾强制截断 +
-# log.warning 留下信号（CLAUDE.md「失败要响亮」）。
-WRITER_PROMPT_BUDGET_CHARS = 6000
+# writer prompt 上限调整（宽容长设定并保护尾部格式）
+WRITER_PROMPT_BUDGET_CHARS = 8000
 
 # 任务 task-02：早期章节风格锚点激活阈值与黄金章节阈值
 #   - 前 5 章：项目样本为空时 style_block 不会注入，但还有【黄金章节写作要点】（结构向）
@@ -826,22 +826,25 @@ def build_writer_prompt(task: dict, context: dict, setting: dict) -> tuple[str, 
             "5. 禁止大段说教、世界观说明书、或超过3行的独白。"
         )
 
-    # P1-9（2026-08-17）：writer prompt 硬字符上限。
-    # 审计 + docs/wiki/03-Writing-Engine.md:198-200 已自承：
-    # recent_summaries 5→10 + RAG 900 + lorebook 900 + world 600 + style_samples
-    # 4500 + methodology 4 招 3500 堆叠 → 7k-10k 字，LLM 长 prompt 守约束率塌方
-    # （漏章节字数 / POV 锁 / ending_hook_type）。硬上限 + 超限 warning 防止
-    # 静默污染下游。预算选 6000 字：略高于常规 4-5k 留 buffer，但低于 7k 红线。
+    # 保证 prompt 超限时不丢失末尾 JSON 格式契约
     if len(user_prompt) > WRITER_PROMPT_BUDGET_CHARS:
         logging.getLogger("novel_ai.engine.agents.writer").warning(
             "writer prompt overflow budget: %d > %d (chapter %d)；"
-            "强制截断到预算长度（优先保留核心指令，砍末尾 methodology）",
+            "智能截断保留输出格式与任务契约",
             len(user_prompt), WRITER_PROMPT_BUDGET_CHARS,
             task.get("chapter_number", 0) if isinstance(task, dict) else 0,
         )
-        user_prompt = user_prompt[:WRITER_PROMPT_BUDGET_CHARS]
+        tail_marker = "【输出格式】严格 JSON"
+        if tail_marker in user_prompt:
+            head_part, tail_part = user_prompt.split(tail_marker, 1)
+            tail_full = tail_marker + tail_part
+            allowed_head = max(0, WRITER_PROMPT_BUDGET_CHARS - len(tail_full))
+            user_prompt = head_part[:allowed_head] + tail_full
+        else:
+            user_prompt = user_prompt[:WRITER_PROMPT_BUDGET_CHARS]
 
     return system_dynamic, user_prompt
+
 
 
 def _extract_title(raw: str, fallback_goal: str = "") -> tuple[str, str]:

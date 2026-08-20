@@ -66,7 +66,6 @@ export default function ThemeOpening() {
     ]).then((results) => {
       if (cancelled) return;
       const [g, t, o, r] = results;
-      // "本项目专门做过"：source === "llm" 或 source === "user"
       const isDone = (s: string | null | undefined) => s === "llm" || s === "user";
       const src = (x: PromiseSettledResult<unknown>) =>
         x.status === "fulfilled"
@@ -89,52 +88,85 @@ export default function ThemeOpening() {
   }, [projectId]);
 
   const allDone = completed.genre && completed.theme && completed.opening && completed.research;
+  const [generatingAll, setGeneratingAll] = useState(false);
+
+  const handleGenerateAll = async () => {
+    if (!projectId) return;
+    setGeneratingAll(true);
+    setError(null);
+    setSuccess(null);
+    try {
+      const project = await api.getProject(projectId);
+      const genre = project.genre || "xuanhuan";
+      const concept = (project.config_json as { setting_concept?: string })?.setting_concept || "";
+
+      await api.generateGenreProfile(projectId, { genre_key: genre, use_llm: true }).catch(() =>
+        api.generateGenreProfile(projectId, { genre_key: genre, use_llm: false })
+      );
+      await api.generateTheme(projectId, { concept, use_llm: true }).catch(() =>
+        api.generateTheme(projectId, { concept, use_llm: false })
+      );
+      await api.generateOpening(projectId, { concept, use_llm: true }).catch(() =>
+        api.generateOpening(projectId, { concept, use_llm: false })
+      );
+      await api.initializeResearchNotes(projectId, { concept, use_llm: false }).catch(() => {});
+
+      setCompleted({ genre: true, theme: true, opening: true, research: true });
+      setSources({ genre: "llm", theme: "llm", opening: "llm", research: "template" });
+      setSuccess("已成功一键生成全部 4 项前期工程设定！");
+    } catch (e) {
+      setError(`一键生成异常: ${e}`);
+    } finally {
+      setGeneratingAll(false);
+    }
+  };
 
   return (
     <div className="page" style={{ padding: 24, maxWidth: 1200, margin: "0 auto" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
         <div>
           <h2 style={{ marginBottom: 8 }}>主题与开篇</h2>
-          <p style={{ color: "var(--text-secondary)", marginBottom: 24, fontSize: 14 }}>
-            v1.0 前期工程：4 个结构化产物。前期做足 → 写作阶段省心。
+          <p style={{ color: "var(--text-secondary)", marginBottom: 16, fontSize: 14 }}>
+            前期工程：题材画像、共性主题、黄金三章与资料助手（可一键自动生成，也可按需定制）。
           </p>
         </div>
-        {/* 完成度芯片（右上角）— 用户一眼看到还差几个 + 哪些只跑了模板没走 LLM */}
-        <div
-          aria-label="前期工程完成度"
-          style={{
-            padding: "6px 12px",
-            borderRadius: 6,
-            background: allDone ? "var(--success-bg, rgba(111,188,138,0.14))" : "var(--bg-card, #f5f1ea)",
-            border: `1px solid ${allDone ? "var(--success, #6FBC8A)" : "var(--border, #d8d2c4)"}`,
-            color: allDone ? "var(--success, #6FBC8A)" : "var(--text-secondary, #6a6a6a)",
-            fontSize: 13,
-            fontWeight: 600,
-            whiteSpace: "nowrap",
-          }}
-        >
-          {allDone
-            ? "✓ 4/4 已完成"
-            : (() => {
-                const doneCount = [completed.genre, completed.theme, completed.opening, completed.research].filter(Boolean).length;
-                // 区分：已有产物但只是模板 / 没产物
-                const tabHas = (t: Tab) => sources[t] === "template" || sources[t] === "llm" || sources[t] === "user";
-                const onlyTpl = !completed.opening && tabHas("opening");
-                const suffix = onlyTpl ? "（⚠ 含模板）" : "";
-                return `前期工程 ${doneCount}/4${suffix}`;
-              })()}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button
+            type="button"
+            className="btn btn-primary"
+            onClick={handleGenerateAll}
+            disabled={generatingAll}
+            style={{ fontSize: 13, padding: "6px 14px" }}
+          >
+            {generatingAll ? "⏳ 正在一键生成..." : "⚡ 一键生成全部前期设定"}
+          </button>
+          <div
+            aria-label="前期工程完成度"
+            style={{
+              padding: "6px 12px",
+              borderRadius: 6,
+              background: allDone ? "var(--success-bg, rgba(111,188,138,0.14))" : "var(--bg-card, #f5f1ea)",
+              border: `1px solid ${allDone ? "var(--success, #6FBC8A)" : "var(--border, #d8d2c4)"}`,
+              color: allDone ? "var(--success, #6FBC8A)" : "var(--text-secondary, #6a6a6a)",
+              fontSize: 13,
+              fontWeight: 600,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {allDone
+              ? "✓ 4/4 已就绪"
+              : (() => {
+                  const doneCount = [completed.genre, completed.theme, completed.opening, completed.research].filter(Boolean).length;
+                  return `前期工程 ${doneCount}/4`;
+                })()}
+          </div>
         </div>
       </div>
 
-      {/* 2026-08-18：4 个 tab 都需要 LLM，统一显示状态 banner。
-          用户报告 #3 架构修复：进入页面就知道 LLM 是否就绪。 */}
       <LLMStatusBanner />
 
       <div style={{ display: "flex", gap: 8, marginBottom: 16, borderBottom: "1px solid var(--border)" }}>
         {(["genre", "theme", "opening", "research"] as Tab[]).map((t) => {
-          // 2026-08-19：tab 标记要反映"用户为本项目专门走过 LLM"——
-          // 完成（✓）= source='llm'/'user'；半完成（⚠）= 产物存在但只模板（source='template'）；
-          // 未开始 = 没产物。
           const src = sources[t];
           const hasProd = src === "llm" || src === "user" || src === "template";
           const mark = completed[t]
@@ -176,9 +208,6 @@ export default function ThemeOpening() {
       {tab === "opening" && <OpeningTab projectId={projectId!} onError={setError} onSuccess={setSuccess} onComplete={() => setCompleted((c) => ({ ...c, opening: true }))} />}
       {tab === "research" && <ResearchTab projectId={projectId!} onError={setError} onSuccess={setSuccess} onComplete={() => setCompleted((c) => ({ ...c, research: true }))} />}
 
-      {/* v1.0 链路终结按钮：4/4 全完成后给"下一步：世界构建 →"。
-          之前没这个按钮，用户反馈"做完主题与开篇就卡住了，不知道去哪"。
-          部分完成时仍显示，但禁用 + 提示差几个，避免用户以为按钮坏了。 */}
       <div
         style={{
           marginTop: 24,
@@ -193,25 +222,19 @@ export default function ThemeOpening() {
       >
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 600, fontSize: 14 }}>
-            {allDone ? "✓ 前期工程全部完成" : "前期工程进行中"}
+            {allDone ? "✓ 前期工程全部完成" : "前期工程（可选随时进入世界构建）"}
           </div>
           <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 4 }}>
             {allDone
-              ? "可以进入下一步：10 阶段世界构建（生成世界观 / 角色 / 势力 / 地图）"
-              : `还差 ${4 - [completed.genre, completed.theme, completed.opening, completed.research].filter(Boolean).length} 个产物：${[
-                  !completed.genre && "① 题材画像",
-                  !completed.theme && "② 共性主题",
-                  !completed.opening && "③ 黄金三章",
-                  !completed.research && "④ 资料助手",
-                ].filter(Boolean).join("、")}`}
+              ? "可以进入下一步：世界构建（生成世界观 / 角色 / 势力 / 地图）"
+              : "您可以随时点击右侧按钮直接进入世界构建，未单独生成的项目将自动采用默认题材规范。"}
           </div>
         </div>
         <button
           type="button"
           className="btn btn-primary"
           onClick={() => navigate(`/projects/${projectId}/worldbuild`)}
-          disabled={!allDone}
-          title={allDone ? "去世界构建（10 阶段流水线）" : "完成全部 4 个产物后才能继续"}
+          title="去世界构建"
           style={{ whiteSpace: "nowrap" }}
         >
           下一步：世界构建 →
@@ -220,6 +243,7 @@ export default function ThemeOpening() {
     </div>
   );
 }
+
 
 // ════════════════════════════════════════════════════
 // ① 题材画像

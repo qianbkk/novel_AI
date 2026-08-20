@@ -139,32 +139,47 @@ def _resolve_project_id_for_novel(novel_id: str) -> str | None:
 
 
 def _setting() -> dict:
-    """读 setting_package.json。mtime 变了自动 invalidate cache（同一进程里
-    planner 跑完后重新读最新值）。
-
-    迭代 #69: 返回 .copy() 而非内部 cache 引用 — 防止调用方意外修改全局
-    缓存（之前 identity 相等测试鼓励了这种行为，违反直觉）。
-    """
+    """读 setting_package.json 及 v1.0 前期设定产物。mtime 变了自动 invalidate cache。"""
     global _setting_cache, _setting_mtime
     if not SETTING_PATH.exists():
-        # 文件不存在 → cache 也不缓存（下次如果文件被创建能立刻读到）
         _setting_cache = None
         _setting_mtime = None
         return {}
     try:
         mtime = SETTING_PATH.stat().st_mtime
     except OSError as e:
-        # 迭代 #70: 之前静默 fallback 到旧 cache —— 在生产环境掩盖真实的
-        # 文件系统问题（权限被改 / 文件被删等）。现在 log.warning 让运维知道。
         _log.warning("_setting: stat(%s) failed (%s); falling back to cache", SETTING_PATH, e)
         return dict(_setting_cache) if _setting_cache is not None else {}
     if _setting_cache is None or _setting_mtime != mtime:
-        # 文件变了 → 重新 load
         with open(SETTING_PATH, encoding="utf-8") as f:
             _setting_cache = json.load(f)
         _setting_mtime = mtime
-    # 迭代 #69: 返回 copy 防止外部修改污染 cache
-    return dict(_setting_cache)
+
+    res = dict(_setting_cache)
+    # 动态装载 v1.0 前期工程产物
+    out_dir = OUTPUT_DIR
+    if "v1_genre_profile" not in res:
+        gp_path = out_dir / "genre_profile.json"
+        if gp_path.is_file():
+            try:
+                res["v1_genre_profile"] = json.loads(gp_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+    if "v1_theme_spine" not in res:
+        ts_path = out_dir / "theme_spine.json"
+        if ts_path.is_file():
+            try:
+                res["v1_theme_spine"] = json.loads(ts_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+    if "v1_macro_spine" not in res:
+        ms_path = out_dir / "macro_spine.json"
+        if ms_path.is_file():
+            try:
+                res["v1_macro_spine"] = json.loads(ms_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+    return res
 
 
 def invalidate_setting_cache() -> None:
@@ -261,39 +276,9 @@ class WriterFailedError(Exception):
 
 
 def _budget_ok(state: OrchestratorState) -> bool:
-    """2026-08-05: 实现 NOVEL_BUDGET_HARD_OVERRIDE env var。
+    """预算检查：已按用户指令禁用预算中断阻断，始终放行。"""
+    return True
 
-    Module-level 缓存避免每章重复读 env（解析仅在 import / 显式 reset 时跑一次）。
-    """
-    global _BUDGET_HARD_EFFECTIVE
-    if _BUDGET_HARD_EFFECTIVE is None:
-        raw = os.environ.get(_BUDGET_HARD_OVERRIDE_ENV, "").strip()
-        if raw:
-            try:
-                val = float(raw)
-                if 0.5 <= val <= 5.0:
-                    _BUDGET_HARD_EFFECTIVE = val
-                    _log.info(
-                        "NOVEL_BUDGET_HARD_OVERRIDE=%.2f 覆盖默认 BUDGET_HARD=%.2f",
-                        val, BUDGET_HARD,
-                    )
-                else:
-                    _log.warning(
-                        "%s=%r 超出 [0.5, 5.0] 范围，忽略，沿用默认 %.2f",
-                        _BUDGET_HARD_OVERRIDE_ENV, raw, BUDGET_HARD,
-                    )
-                    _BUDGET_HARD_EFFECTIVE = BUDGET_HARD
-            except ValueError:
-                _log.warning(
-                    "%s=%r 非浮点，忽略，沿用默认 %.2f",
-                    _BUDGET_HARD_OVERRIDE_ENV, raw, BUDGET_HARD,
-                )
-                _BUDGET_HARD_EFFECTIVE = BUDGET_HARD
-        else:
-            _BUDGET_HARD_EFFECTIVE = BUDGET_HARD
-    used  = state.get("budget_used_usd", 0.0)
-    limit = state.get("budget_limit_usd", 500.0)
-    return used < limit * _BUDGET_HARD_EFFECTIVE
 
 
 _BUDGET_HARD_EFFECTIVE: float | None = None
